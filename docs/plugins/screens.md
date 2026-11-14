@@ -70,16 +70,18 @@ with no params, so its `render` must not need any.
 | column, row | `zk.ui.column(children)`, `zk.ui.row(children)` | |
 | text (title, body, meta, label) | `zk.ui.text(text, { style, lines })` | |
 | card | `zk.ui.card({ title, meta, body, badge })` | |
-| deck (one card, swiped) | `zk.ui.deck({ id, card, empty })` | `swipe` |
+| deck (one card, swiped) | `zk.ui.deck({ id, card, empty })` | `swipe`, `tap` (0.9) |
 | list | `zk.ui.list({ id, rows, empty })` | `select` |
 | search, field | `zk.ui.search({ id })`, `zk.ui.field({ id, lines })` | `change`, `submit` |
 | chips | `zk.ui.chips({ id, chips, selected, select })` | `chips` |
 | button, buttons (3 at most) | `zk.ui.button({ id, title, primary })` | `tap` |
-| divider, space, notice | `zk.ui.divider()`, `zk.ui.space()`, `zk.ui.notice(text)` | |
+| divider, space, notice | `zk.ui.divider()`, `zk.ui.space()`, `zk.ui.notice(text, { id })` | `tap`, with an `id` (0.9) |
 
 Children skip falsy values, so `message && zk.ui.notice(message)` works. A block the user can act
 on needs an `id`, unique on its screen. There are no sizes, colours or images; the app lays the
-blocks out on every Kindle. A screen taller than the display is paged by swipes. Caps: 2,000 blocks (every list row, chip and
+blocks out on every Kindle. A screen taller than the display is paged by swipes. A deck in the
+screen's column takes all the height left (app 0.9.0): every card has the same size, the blocks
+after it sit at the bottom, and a long card pages inside itself. Caps: 2,000 blocks (every list row, chip and
 button counts as one), 256 KB of text, 16 levels deep, at most 6
 children in a row.
 
@@ -88,13 +90,14 @@ children in a row.
 | `kind` | When | Fields |
 |---|---|---|
 | `open` | the screen opens, before the first render | |
-| `tap` | a button | `id` |
+| `tap` | a button; the deck's card, a notice with an `id` (0.9) | `id` |
 | `select` | a list row | `id` (the list), `row` |
 | `swipe` | the deck's card | `id`, `direction` (`"left"` or `"right"`) |
 | `change`, `submit` | a search or field | `id`, `text` (the whole text) |
 | `chips` | a chip tapped | `id`, `chip`, `selected` (the selection it makes) |
 | `result` | a screen this one opened has closed | `from` (its id), `value` (absent after Back) |
 | `back` | the user left this screen | |
+| `reader` | a preview it opened with `zk.reader.open` closed (0.9) | `closed: true` |
 
 Events arrive one at a time, in order; typing not yet sent as `change` is sent
 before any other event, so a **Save** tap sees the note just typed. Chips and fields show what the
