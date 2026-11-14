@@ -160,6 +160,7 @@ struct Doomed {  // work of a stopped call, rejected with LimitError in a cleanu
 struct Ask {
     uint64_t owner = 0;
     std::function<void(bool)> answered;
+    std::function<void(const std::string&)> opened;  // a ReaderOpen's instead: "" or why not
 };
 
 struct PluginRun {
@@ -598,6 +599,7 @@ struct PluginHost::Impl {
             installZotero(p);
             installEntry(p);
             installUi(p);
+            installReader(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -1602,7 +1604,7 @@ struct PluginHost::Impl {
         checkBackgroundRound();
     }
 
-    void answer(uint64_t requestId, bool yes) {
+    void answer(uint64_t requestId, bool yes, const std::string& error = "") {
         for (auto& [id, owned] : loaded) {
             PluginCtx& p = *owned;
             auto it = p.run->asks.find(requestId);
@@ -1610,7 +1612,8 @@ struct PluginHost::Impl {
             Ask ask = std::move(it->second);
             p.run->asks.erase(it);
             if (Call* c = findCall(p, ask.owner); c && c->pauses > 0 && --c->pauses == 0) c->pausedMs += steadyMs() - c->pausedSince;
-            ask.answered(yes);
+            if (ask.opened) ask.opened(error);
+            else if (ask.answered) ask.answered(yes);
             return;
         }
     }
@@ -1776,6 +1779,30 @@ uint64_t askUser(PluginCtx& p, PluginHostEvent confirm, std::function<void(bool)
     p.run->asks.emplace(id, Ask{owner, std::move(answered)});
     post(p, std::move(confirm));
     return id;
+}
+
+uint64_t waitForUi(PluginCtx& p, PluginHostEvent ev, std::function<void(const std::string& error)> done) {
+    auto& h = p.host;
+    const uint64_t owner = p.run->current;
+    Call* c = h.findCall(p, owner);
+    if (!c || c->kind == CallKind::Cleanup) return 0;
+    const uint64_t id = ++h.nextRequest;
+    ev.requestId = id;
+    if (c->pauses++ == 0) c->pausedSince = steadyMs();
+    Ask ask;
+    ask.owner = owner;
+    ask.opened = std::move(done);
+    p.run->asks.emplace(id, std::move(ask));
+    post(p, std::move(ev));
+    return id;
+}
+
+std::string userAnswerCheck(PluginCtx& p, const char* fn, uint64_t* screen) {
+    Call* c = p.host.findCall(p, p.run->current);
+    if (!c || c->kind == CallKind::Cleanup || (c->screen == 0 && !c->action))
+        return std::string(fn) + ": only in answer to the user (from a screen's onEvent or an action's run)";
+    if (screen) *screen = c->screen;
+    return "";
 }
 
 void post(PluginCtx& p, PluginHostEvent ev) {
@@ -2021,6 +2048,28 @@ void PluginHost::wake() {
 }
 
 uint64_t PluginHost::entriesVersion() const { return impl_->version.load(); }
+
+void PluginHost::answerReader(uint64_t requestId, std::string error) {
+    impl_->post([requestId, error = std::move(error)](Impl& h) { h.answer(requestId, false, error); });
+}
+
+HttpResponse PluginHost::previewDownload(const std::string& pluginId, HttpRequest req, size_t maxBytes, int timeoutMs) const {
+    using plugins::FetchError;
+    std::optional<PluginManifest> manifest;
+    std::string webdav;
+    {
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        for (const auto& f : impl_->folders)
+            if (f.dir == pluginId) manifest = f.manifest;
+        webdav = impl_->webdavHost;
+    }
+    if (!manifest) throw FetchError(FetchError::Kind::Refused, "the plugin isn't installed any more");
+    if (!impl_->deps.makeHttp) throw FetchError(FetchError::Kind::Network, "no network here");
+    auto http = impl_->deps.makeHttp();
+    plugins::PluginHttp guard(*http, webdav);
+    plugins::FetchLimits limits{maxBytes, timeoutMs, req.outFile, req.onProgress};
+    return guard.send(*manifest, std::move(req), timeoutMs, std::chrono::steady_clock::now(), std::move(limits));
+}
 
 void PluginHost::answer(uint64_t requestId, bool yes) {
     impl_->post([requestId, yes](Impl& h) { h.answer(requestId, yes); });

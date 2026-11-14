@@ -756,3 +756,37 @@ TEST_CASE("fetch: a wildcard-declared host resolving to a private address is ref
     CHECK(contains(o.message, "intranet.example.org is on your local network"));
     CHECK(contains(o.message, "\"net:intranet.example.org\""));
 }
+
+TEST_CASE("fetch: a preview's download (zk.reader.open) streams to the app's file under the same rules, up to its own cap") {
+    FakeHttp fake;
+    fake.expect("GET", "https://arxiv.org/pdf/1", redirect(301, "https://export.arxiv.org/pdf/1"));
+    fake.expect("GET", "https://export.arxiv.org/pdf/1", FakeHttp::ok("%PDF-1.7"));
+    fake.expect("GET", "https://arxiv.org/pdf/2", redirect(302, "http://arxiv.org/pdf/2"));
+    PluginHttp ph(fake, "");
+    const auto m = manifest({}, {"arxiv.org", "export.arxiv.org"});
+    plugins::FetchLimits big{50u << 20, 300000, "/tmp/zk-preview.part", [](int64_t, int64_t) {}};
+    HttpRequest r = get("https://arxiv.org/pdf/1");
+    r.outFile = "/tmp/plugin-chose-this";  // never the plugin's: only the limits say where
+    const auto resp = ph.send(m, r, 300000, std::chrono::steady_clock::now(), big);
+    REQUIRE(fake.sent.size() == 2);
+    for (const auto& s : fake.sent) {
+        CHECK(s.outFile == "/tmp/zk-preview.part");
+        CHECK(s.maxBodyBytes == (50u << 20));
+        CHECK(static_cast<bool>(s.onProgress));
+    }
+    CHECK(resp.url == "https://export.arxiv.org/pdf/1");
+    // A redirect off https is refused, as for zk.fetch.
+    try {
+        ph.send(m, get("https://arxiv.org/pdf/2"), 300000, std::chrono::steady_clock::now(), big);
+        FAIL("no throw");
+    } catch (const FetchError& e) {
+        CHECK(e.kind == FetchError::Kind::Refused);
+    }
+    // The URL checks without connecting.
+    CHECK_FALSE(plugins::checkFetchUrl(m, "https://arxiv.org/pdf/3", ""));
+    CHECK(plugins::checkFetchUrl(m, "https://example.com/a.pdf", "")->kind == FetchError::Kind::Permission);
+    CHECK(plugins::checkFetchUrl(m, "https://example.com/a.pdf", "")->detail == "net:example.com");
+    CHECK(plugins::checkFetchUrl(m, "http://arxiv.org/pdf/3", "")->kind == FetchError::Kind::Refused);
+    CHECK(plugins::checkFetchUrl(manifest({}, {"dav.example.org"}), "https://dav.example.org/x", "https://dav.example.org/webdav")->kind ==
+          FetchError::Kind::Refused);
+}

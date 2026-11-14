@@ -70,6 +70,9 @@
 #include "plugins/host.h"
 #include "plugins/safe_mode.h"
 #include "screens/plugins.h"
+#include "screens/plugin_screen.h"
+#include "screens/preview_screen.h"
+#include "plugins/plugin_http.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -147,6 +150,24 @@ public:
     void hide() override {}
     Rect bounds() const override { return {}; }
 };
+
+// A previewed document (zk.reader.open) in the reader: not an item, so no item key; a page the
+// plugin had reads as a web snapshot.
+std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry& e, int flashEvery, Lipc* lipc) {
+    ItemRow row;
+    row.title = e.title;
+    row.attachmentKey = "preview:" + e.key;
+    row.badge = e.type == PreviewType::Html ? "WEB" : e.type == PreviewType::Pdf ? "PDF" : "EPUB";
+    return std::make_unique<ReaderScreen>(
+        row, e.file, e.type == PreviewType::Pdf ? DocType::Pdf : DocType::Epub,
+        [] {
+            return std::make_unique<RenderWorker>([](DocType t) {
+                UserError err;
+                return loadEngine(t, kEngineEnv, &err);
+            });
+        },
+        flashEvery, lipc);
+}
 
 int screenshot(const std::string& screen, const std::string& out, const std::string& dbPath) {
     Db db = Db::open(dbPath);
@@ -385,6 +406,8 @@ int main(int argc, char** argv) {
         setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name, scale});
     }
     NullSync nullSync;
+    // Before the app: a preview's reader saves its place into it until the reader closes.
+    PreviewCache previewCache(paths.cacheDir + "/preview", wallMs);
     App app(*display, lib, nullSync, *keyboard);
     // Some plugin is on and running: only then do the screens and the sync worker build events for
     // plugins (kept by the poll hook; read on both threads). Outlives the sync service.
@@ -460,6 +483,23 @@ int main(int argc, char** argv) {
             return plugins && pluginsRunning && !pluginsOff && plugins->backgroundDue();
         });
     pluginEvents.onBackgroundDone([&](uint64_t round) { backgroundRound.done(round); });
+    // zk.reader.open: a document read as a preview, kept in cache/preview, downloaded through the
+    // plugin's own net rules (the app's HTTP stack, on the download screen's thread).
+    pluginEvents.setPreviewOpener([&](App& a, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
+                                      std::function<void()> closed) {
+        PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""), ev.value.value("baseUrl", "")};
+        PreviewScreen::Deps d;
+        d.cache = &previewCache;
+        PluginHost* host = plugins.get();
+        d.download = [host, id = ev.pluginId](HttpRequest req) {
+            if (!host) throw std::runtime_error("Plugins aren't running");
+            return host->previewDownload(id, std::move(req), PreviewCache::kMaxDownloadBytes, 5 * 60 * 1000);
+        };
+        d.makeReader = [&lib, &lipc](const PreviewEntry& e) { return previewReader(e, loadSettings(lib).flashEvery, lipc.get()); };
+        d.answer = std::move(answer);
+        d.closed = std::move(closed);
+        PreviewScreen::show(std::move(doc), std::move(d), a);
+    });
     // The start counts as good after 60 s of running (not at the first screen: plugins start after
     // it); a clean exit counts too. Until then a crash leaves the count for the next start. Only a
     // start with some plugin on was counted; with none on there is nothing to confirm.

@@ -402,8 +402,8 @@ struct AppRig {
     std::unique_ptr<PluginHost> host;
     std::unique_ptr<PluginEvents> events;
 
-    explicit AppRig(const std::string& js) {
-        fp.add("riffle", js, {}, "Feed Riffle");
+    explicit AppRig(const std::string& js, const std::vector<std::string>& perms = {}) {
+        fp.add("riffle", js, perms, "Feed Riffle");
         PluginHostDeps d = fp.deps();
         d.renderBudgetMs = 500;
         d.actionBudgetMs = 1000;
@@ -567,4 +567,43 @@ TEST_CASE("plugin screen: a tap on the deck's card posts {tap, id: the deck}; a 
     r.give(treeEvent(j, 2));
     r.tap(r.centre(r.childRect(5)));
     CHECK(r.link.sent.size() == 2);
+}
+
+TEST_CASE("plugin screen, end to end: zk.reader.open opens over the screen; the promise resolves; Back brings a `reader` event") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.button({ id: "read", title: "Read" })]),
+  async onEvent(e) {
+    if (e.kind === "tap") { await zk.reader.open({ url: "https://arxiv.org/pdf/2401.01234v2", title: "A paper" }); said = "opened"; }
+    if (e.kind === "reader") said = "back from the reader";
+  },
+});
+)JS", {"net:arxiv.org"});
+    struct Shown final : Screen {  // stands in for the reader
+        std::function<void()> closed;
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+        void onClose(Nav&) override { closed(); }
+    };
+    nlohmann::json asked;
+    r.events->setPreviewOpener([&](App& a, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
+                                   std::function<void()> closed) {
+        asked = ev.value;
+        auto s = std::make_unique<Shown>();
+        s->closed = std::move(closed);
+        a.push(std::move(s));
+        answer("");
+    });
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("read");
+    REQUIRE(r.until([&] { return dynamic_cast<const Shown*>(r.app.top()) != nullptr; }));
+    CHECK(asked["url"] == "https://arxiv.org/pdf/2401.01234v2");
+    r.app.pop();  // Back, out of the reader
+    REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
 }

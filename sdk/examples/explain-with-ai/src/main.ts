@@ -43,9 +43,11 @@ interface ErrorReply {
 zk.selectionAction({
   id: "explain",
   title: "Explain",
-  run: async ({ text, item, pageLabel }, again) => {
+  run: async ({ text, item, preview, pageLabel }, again) => {
     // "Save as note": the pop-up's text comes back with the tap, so nothing is asked twice.
     if (again?.action === "note") {
+      // A preview (zk.reader.open) isn't in the library: there is no item to note on.
+      if (!item) return "This isn't in your library yet: keep it first.";
       const where = pageLabel ? ` (p. ${pageLabel})` : "";
       const html = [`<p><b>Explained${where}:</b> ${escapeHtml(passageOf(text))}</p>`, ...paragraphs(again.text)].join("");
       await zk.zotero.addNote(item.key, html);
@@ -58,7 +60,7 @@ zk.selectionAction({
 
     const passage = passageOf(text);
     const prompt = [
-      `I am reading "${item.title}"${item.year ? ` (${item.year})` : ""}.`,
+      item ? `I am reading "${item.title}"${item.year ? ` (${item.year})` : ""}.` : `I am reading "${preview?.title ?? "a document"}".`,
       "Explain this passage briefly and plainly: what it says, and any term or step a reader might miss.",
       language ? `Answer in ${language}.` : "Answer in the language of the passage.",
       "",
@@ -90,7 +92,7 @@ zk.selectionAction({
     const answer = reply.content.find((block) => block.type === "text")?.text?.trim();
     if (!answer) throw new Error("Anthropic: the reply had no text");
     // The pop-up shows `text`; each of `actions` (at most 2) is a button beside Close.
-    return { text: answer, actions: [{ id: "note", title: "Save as note" }] };
+    return { text: answer, actions: item ? [{ id: "note", title: "Save as note" }] : [] };
   },
 });
 

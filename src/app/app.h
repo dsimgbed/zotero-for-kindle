@@ -44,6 +44,7 @@ public:
     // Nav
     void push(std::unique_ptr<Screen>) override;
     void pop() override;
+    void replaceTop(std::unique_ptr<Screen>) override;
     void switchTab(int index) override;
     void damage(Rect, Waveform) override;
     void redrawAll(Waveform) override;

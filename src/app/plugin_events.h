@@ -19,6 +19,8 @@
 //    plugins registered, only while plugins run; asking wakes the host once (plugins load lazily)
 //    so their entries become known. ActionResult/ActionError wait for take(); a rebind answers
 //    the runs still waiting with an error.
+//  - ReaderOpen (zk.reader.open): the preview opener (main) shows it over what shows; when that
+//    reader closes, a ReaderClosed waits for the plugin screen under it, which tells the plugin.
 
 #include <cstdint>
 #include <deque>
@@ -57,6 +59,12 @@ public:
 
     // Whether plugins run (not in safe mode, not stopped for an update's install); set by main.
     void setRunning(bool on) { running_ = on; }
+    // Previews (zk.reader.open, ReaderOpen): main opens the reader (PreviewScreen::show) with these
+    // answers: `answer` settles the plugin's promise ("" opened, else why not); `closed` tells the
+    // plugin's screen the reader closed (a {kind: "reader", closed: true} event). Unset: refused.
+    using PreviewOpener = std::function<void(App&, const PluginHostEvent&, std::function<void(const std::string& error)> answer,
+                                             std::function<void()> closed)>;
+    void setPreviewOpener(PreviewOpener f) { previewOpener_ = std::move(f); }
     // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance.
     // Plugins not running (or no host): the screen shows "<Plugin> can't show this screen right now".
     uint64_t openScreen(App&, const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
@@ -83,6 +91,8 @@ private:
     std::deque<std::string> turnedOff_;  // toasts not shown yet
     int64_t lastToastMs_ = -kToastGapMs;
     std::function<void(uint64_t)> backgroundDone_;
+    PreviewOpener previewOpener_;
+    void openPreview(App&, const PluginHostEvent&);
     bool running_ = true;
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them

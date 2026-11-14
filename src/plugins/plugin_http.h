@@ -56,15 +56,28 @@ struct FetchError : std::runtime_error {
     std::string detail;
 };
 
+// The checks zk.fetch makes on a first URL, without connecting (https, not zotero.org or the WebDAV
+// host, a declared host): nullopt if it may be fetched, else the FetchError a fetch would throw.
+std::optional<FetchError> checkFetchUrl(const PluginManifest&, const std::string& url, const std::string& webdavHost);
+
+// What one request may take, if not zk.fetch's (zk.reader.open's download: 50 MB, minutes), and
+// where its body goes: only the app sets these, never a plugin's request.
+struct FetchLimits {
+    size_t maxBytes = kFetchMaxBytes;
+    int maxMs = kFetchMaxMs;
+    std::string outFile;  // the body streamed here ("" in memory)
+    std::function<void(int64_t done, int64_t total)> onProgress;
+};
+
 class PluginHttp {
 public:
     // webdavHost: the WebDAV server's host name (a URL is accepted too); "" if none.
     PluginHttp(Http& inner, std::string webdavHost);
     // Sends the plugin's request under the rules above, following redirects itself. Uses from `req`
-    // only method, url, headers, body and cancel. Throws FetchError. The response's url is the one
-    // that answered. The time limit counts from `started` (when the plugin asked).
+    // only method, url, headers, body and cancel. Throws FetchError. The response's url is the one that answered. The time limit counts from
+    // `started` (when the plugin asked).
     HttpResponse send(const PluginManifest&, HttpRequest req, int timeoutMs = kFetchMaxMs,
-                      std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now());
+                      std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now(), FetchLimits = {});
     void setWebdavHost(const std::string&);
 
 private:

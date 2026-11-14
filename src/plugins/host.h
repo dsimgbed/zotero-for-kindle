@@ -16,6 +16,7 @@
 #include <nlohmann/json.hpp>
 
 #include "docs/document.h"
+#include "net/http.h"
 #include "plugins/events.h"
 #include "plugins/manifest.h"
 #include "plugins/ui_tree.h"
@@ -99,11 +100,17 @@ struct PluginHostDeps {
 // (run returned nothing: no pop-up). ActionError: `text` "<Plugin> couldn't do that: <message>"
 // (run threw, went over its budget, returned what can't be shown, or the plugin stopped).
 // A run stopped with stopAction() gets neither.
+//
+// Previews (zk.reader.open, 0.9): ReaderOpen: open `value` ({url, title?} or {html, title,
+// baseUrl?}, checked) in the reader as a preview, over `instance` (the plugin's screen; 0: from an
+// action's run); answer with PluginHost::answerReader(requestId) once the reader shows (or it
+// failed or was cancelled). A Withdrawn with that requestId: nobody waits for the answer any more.
+// ReaderClosed is the app's own (never the host's): the preview over `instance` closed.
 struct PluginHostEvent {
     enum class Kind {
         Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
         ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError,
-        ActionResult, ActionError
+        ActionResult, ActionError, ReaderOpen, ReaderClosed
     } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
@@ -202,6 +209,14 @@ public:
     uint64_t entriesVersion() const;
     // The user's answer to a Confirm event.
     void answer(uint64_t requestId, bool yes);
+    // A ReaderOpen's outcome: "" the reader shows the document (zk.reader.open resolves), else why
+    // not ("Cancelled", a download's error): it rejects with that message.
+    void answerReader(uint64_t requestId, std::string error);
+    // zk.reader.open's download of `req.url` (into req.outFile, with req.onProgress and req.cancel)
+    // under the plugin's net rules (as zk.fetch: https, its declared hosts, never zotero.org or the
+    // WebDAV server), on the caller's thread with an Http of its own; at most `maxBytes`, within
+    // `timeoutMs`. Any thread. Throws plugins::FetchError (also when the plugin isn't listed).
+    HttpResponse previewDownload(const std::string& pluginId, HttpRequest req, size_t maxBytes, int timeoutMs) const;
     bool poll(PluginHostEvent&);
     std::vector<PluginStatus> status() const;
     // Turning a plugin on clears its failures; turning it off unloads it. Ignored for an id that

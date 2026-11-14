@@ -318,6 +318,7 @@ Rect ReaderScreen::footerArea() { return {0, H() - kFooterH, W(), kFooterH}; }
 bool ReaderScreen::wantsKeyboard() const { return note_.has_value() || (editor_ && editor_->wantsKeyboard()); }
 
 void ReaderScreen::readLibrary(Nav& nav) {
+    if (preview_) return;  // not the library's: read-only, as setPreview made it
     const auto att = nav.library().attachment(row_.attachmentKey);
     const int64_t lib = att ? att->lib : row_.lib;
     readOnly_ = lib != kMyLibrary && !nav.library().libraryEditable(lib);
@@ -325,7 +326,7 @@ void ReaderScreen::readLibrary(Nav& nav) {
 
 bool ReaderScreen::refuseReadOnly(Nav& nav, bool always) {
     if (!readOnly_) return false;
-    if (always || !readOnlyTold_) nav.toast(std::string(kReadOnlyGroup) + ".");
+    if (always || !readOnlyTold_) nav.toast(preview_ ? "A preview can't be marked: keep it in your library first." : std::string(kReadOnlyGroup) + ".");
     readOnlyTold_ = true;
     return true;
 }
@@ -343,13 +344,13 @@ void ReaderScreen::onShow(Nav& nav) {
     if (const std::string w = nav.library().metaValue(kPenWidthKey); w == "0" || w == "2") penWidth_ = w[0] - '0';
     nav.setSystemInkWidth(inkWidthPx());
     DocPosition start;
-    start.value = nav.library().readingLocation(row_.attachmentKey);
+    start.value = preview_ ? preview_->position : nav.library().readingLocation(row_.attachmentKey);
     // Zotero's reading position: where to open a book never read here, or a question if the
     // computer moved on since this Kindle last agreed with it.
     // Held (nothing sent) until it has been compared with the page the book opens on.
     std::string zoteroStart;
     // A web snapshot's isn't used: Zotero keeps it as a scroll percentage, which doesn't map onto pages.
-    if (auto rp = web_ ? std::nullopt : nav.library().readingPosition(row_.attachmentKey);
+    if (auto rp = web_ || preview_ ? std::nullopt : nav.library().readingPosition(row_.attachmentKey);
         rp && !rp->remote.empty() && (start.value.empty() || rp->local.empty() || rp->remoteNew)) {
         nav.library().holdRemotePosition(row_.attachmentKey);
         if (start.value.empty()) zoteroStart = rp->remote;
@@ -358,7 +359,7 @@ void ReaderScreen::onShow(Nav& nav) {
     }
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start, zoteroStart);
-    marks_ = nav.library().bookmarks(row_.attachmentKey);
+    if (!preview_) marks_ = nav.library().bookmarks(row_.attachmentKey);
     sendBookmarks();
     if (openAt_) {
         turning_ = true;
@@ -414,7 +415,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 pageCount_ = e.pageCount;
                 views_ = std::max(1, e.viewsPerPage);
                 toc_ = e.toc;
-                if (!openedSent_) {  // the book really opened (not again after a re-layout)
+                if (!openedSent_ && !preview_) {  // the book really opened (not again after a re-layout)
                     openedSent_ = true;
                     plugins::bookEvent(nav.plugins(), nav.library(), "bookOpened", row_.key, row_.attachmentKey);
                 }
@@ -509,7 +510,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 position_ = e.position;
                 turning_ = false;
                 layoutPending_ = false;
-                nav.library().saveReading(row_.key, row_.attachmentKey, position_.value, progress_);
+                if (preview_) {
+                    if (preview_->savePosition) preview_->savePosition(position_.value);
+                } else {
+                    nav.library().saveReading(row_.key, row_.attachmentKey, position_.value, progress_);
+                }
                 markPlaces_ = e.bookmarkPlaces;
                 links_ = e.links;
                 if (turned) linkPopup_.reset();  // a pop-up belongs to the page it opened on
@@ -518,7 +523,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     if (!back_.empty() && back_.back().page == page_) back_.pop_back();
                 }
                 // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
-                if (!e.zoteroPosition.empty() && !web_)
+                if (!e.zoteroPosition.empty() && !web_ && !preview_)
                     nav.library().setLocalPosition(row_.attachmentKey,
                                                    page_ / views_ == remotePage_ ? remoteValue_ : e.zoteroPosition);
                 if (!placeAfterFirstPage_.empty()) {
@@ -548,11 +553,11 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     linkId_ = 0;
     commitInk();
     const int target = page_ + delta;
-    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !finishedSent_) {
+    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !finishedSent_ && !preview_) {
         finishedSent_ = true;  // once a reading, however often the last page is swiped on
         plugins::bookEvent(nav.plugins(), nav.library(), "bookFinished", row_.key, row_.attachmentKey);
     }
-    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !endPrompt_ && !nav.library().isRead(row_.key)) {
+    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !endPrompt_ && !preview_ && !nav.library().isRead(row_.key)) {
         endPrompt_ = true;
         nav.damage(endPromptRect(), Waveform::Ui);
     }
@@ -641,7 +646,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     layoutPending_ = true;
     layout_ = l;
     for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
-    saveLayout(nav.library(), row_.key, l);
+    if (!preview_) saveLayout(nav.library(), row_.key, l);  // a preview's lasts while it is open
     worker_->setLayout(l, position_);
 }
 
@@ -722,7 +727,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
-        if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
+        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
             !layoutPending_ && !position_.value.empty())
             return toggleBookmark(nav);
         if (!(question_ && positionBannerRect().contains(g.pos)) && tapLink(g.pos, nav)) return;
@@ -940,7 +945,7 @@ void ReaderScreen::showBar(Nav& nav) {
     const bool more = e && !e->actions("selectionAction").empty();
     // A web snapshot or a read-only group: nothing is highlighted, so no colours and no tag row
     // (Search and More… only); in a group, the first time, a toast says why.
-    if (!web_) refuseReadOnly(nav, false);
+    if (!web_ && !preview_) refuseReadOnly(nav, false);
     bar_ = web_ || readOnly_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
                 : std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
                                                   TagRow(selectionChips(nav), selTags_));
@@ -1019,12 +1024,19 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
                 nav.toast(chosen.pluginName + " isn't available right now.");
                 break;
             }
-            if (!e || !selection_ || !item || !att) break;
-            nlohmann::ordered_json target = {{"text", selection_->text},
-                                             {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib))},
-                                             {"attachment", plugins::attachmentJson(*att)},
-                                             {"pageLabel", selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr)
-                                                                                         : nlohmann::ordered_json(selection_->pageLabel)}};
+            if (!e || !selection_ || (!preview_ && (!item || !att))) break;
+            const auto pageLabel = selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(selection_->pageLabel);
+            nlohmann::ordered_json target;
+            if (preview_) {  // not in the library: no item, no attachment; what it is instead (0.9)
+                target = {{"text", selection_->text}, {"item", nullptr}, {"attachment", nullptr}, {"pageLabel", pageLabel},
+                          {"preview", {{"title", row_.title}, {"url", preview_->url.empty() ? nlohmann::ordered_json(nullptr)
+                                                                                           : nlohmann::ordered_json(preview_->url)}}}};
+            } else {
+                target = {{"text", selection_->text},
+                          {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib))},
+                          {"attachment", plugins::attachmentJson(*att)},
+                          {"pageLabel", pageLabel}};
+            }
             result_ = std::make_unique<PluginResult>(*e, chosen, "selectionAction", std::move(target),
                                                      pageArea());
             bar_->setWorking(true);

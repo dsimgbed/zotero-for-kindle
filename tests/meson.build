@@ -122,6 +122,7 @@ test_sources = files(
   'test_plugin_blocks.cpp',
   'test_plugin_diff.cpp',
   'test_plugin_screens_host.cpp',
+  'test_reader_preview.cpp',
   'test_plugin_screen.cpp',
   'test_plugin_actions.cpp',
   'test_plugin_entries.cpp',

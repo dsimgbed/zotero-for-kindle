@@ -149,6 +149,26 @@ bool PluginEvents::take(uint64_t instance, PluginHostEvent& out) {
     return true;
 }
 
+void PluginEvents::openPreview(App& app, const PluginHostEvent& ev) {
+    const uint64_t id = ev.requestId, instance = ev.instance, bound = rebinds_;
+    auto answer = [this, id, bound](const std::string& error) {
+        if (host_ && rebinds_ == bound) host_->answerReader(id, error);  // the host that asked
+    };
+    // Its screen went meanwhile (Back, another tab): nothing to open it over.
+    if (!previewOpener_ || (instance != 0 && !screens_.count(instance))) {
+        answer("The reader can't open this right now");
+        return;
+    }
+    auto closed = [this, instance, name = ev.pluginName] {
+        if (instance == 0 || !screens_.count(instance)) return;
+        PluginHostEvent c{PluginHostEvent::Kind::ReaderClosed, "", name, "", {}, 0, ""};
+        c.instance = instance;
+        mail_[instance].push_back(std::move(c));  // the screen takes it when it shows again
+    };
+    log(LogLevel::Info, "plugin %s opens a preview", ev.pluginId.c_str());
+    previewOpener_(app, ev, std::move(answer), std::move(closed));
+}
+
 void PluginEvents::poll(App& app) {
     if (!host_) return;
     PluginHostEvent ev;
@@ -204,6 +224,11 @@ void PluginEvents::poll(App& app) {
                 outcomes_[ev.requestId] = std::move(out);
                 break;
             }
+            case PluginHostEvent::Kind::ReaderOpen:
+                openPreview(app, ev);
+                break;
+            case PluginHostEvent::Kind::ReaderClosed:  // the app's own: never from the host
+                break;
             case PluginHostEvent::Kind::ScreenTree:
             case PluginHostEvent::Kind::ScreenError:
             case PluginHostEvent::Kind::ScreenActionError:

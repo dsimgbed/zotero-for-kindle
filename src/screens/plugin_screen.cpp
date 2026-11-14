@@ -132,6 +132,9 @@ void PluginScreen::receive(const PluginHostEvent& ev, Nav& nav) {
             popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, Rect{0, 0, W(), H()});
             nav.damage(popup_->rect(), Waveform::Ui);
             break;
+        case PluginHostEvent::Kind::ReaderClosed:  // a preview it opened (zk.reader.open) closed
+            enqueue({{"kind", "reader"}, {"closed", true}}, nav);
+            break;
         case PluginHostEvent::Kind::ScreenClose:
             closedByPlugin_ = true;
             if (!focus_.focused.empty()) nav.keyboard().hide();
