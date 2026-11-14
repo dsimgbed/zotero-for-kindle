@@ -3,6 +3,8 @@
 //   zotero --plugins-dir DIR       (desktop) use DIR as the plugins folder; plugin logs go to stderr; a changed main.js reloads
 //          [--enable-plugin ID]... (desktop, with --plugins-dir) turn these plugins on in DIR
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
+//          (also reader:KEY[:page][:menus]; preview:FILE[:page][:menus] [--title T]; desktop, dev only:
+//          plugin:ID:SCREEN[:page] with --plugins-dir DIR)
 //                                                  render a screen to a PNG and exit; also library:filter,
 //                                                  collections:group:<id>, settings:groups[:remove:<id>|:off:<id>],
 //                                                  reader:<attachment>[:page][:menus|:annotation:<key>]
@@ -70,9 +72,7 @@
 #include "plugins/host.h"
 #include "plugins/safe_mode.h"
 #include "screens/plugins.h"
-#include "screens/plugin_screen.h"
-#include "screens/preview_screen.h"
-#include "plugins/plugin_http.h"
+#include "app/previews.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -102,6 +102,8 @@ bool envFlag(const char* name) {
 // are also written to stderr, and a changed main.js reloads that plugin (PluginWatcher).
 bool gPluginDevLoop = false;
 std::vector<std::string> gEnablePlugins;  // --enable-plugin <id>, developer mode only
+std::string gShotPluginsDir;              // --screenshot plugin:… (desktop): the --plugins-dir to load from
+std::string gShotTitle;                   // --screenshot preview:… --title T: the previewed document's title
 
 // The plugin host's settings for this run (safe mode decides whether start() is called at all).
 PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
@@ -151,25 +153,7 @@ public:
     Rect bounds() const override { return {}; }
 };
 
-// A previewed document (zk.reader.open) in the reader: not an item, so no item key; a page the
-// plugin had reads as a web snapshot.
-std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry& e, int flashEvery, Lipc* lipc) {
-    ItemRow row;
-    row.title = e.title;
-    row.attachmentKey = "preview:" + e.key;
-    row.badge = e.type == PreviewType::Html ? "WEB" : e.type == PreviewType::Pdf ? "PDF" : "EPUB";
-    return std::make_unique<ReaderScreen>(
-        row, e.file, e.type == PreviewType::Pdf ? DocType::Pdf : DocType::Epub,
-        [] {
-            return std::make_unique<RenderWorker>([](DocType t) {
-                UserError err;
-                return loadEngine(t, kEngineEnv, &err);
-            });
-        },
-        flashEvery, lipc);
-}
-
-int screenshot(const std::string& screen, const std::string& out, const std::string& dbPath) {
+int screenshot(std::string screen, const std::string& out, const std::string& dbPath) {
     Db db = Db::open(dbPath);
     Library lib(db);
     NullSync sync;
@@ -204,27 +188,76 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
             };
         }
     }
-    // reader:<attachmentKey>[:page][:menus] — a downloaded book, as the reader shows it.
+#ifndef ZK_KINDLE
+    // Dev only. plugin:<id>:<screen>[:page] (with --plugins-dir): a plugin's screen as its render
+    // draws it, the plugin loaded by a host of its own over the --db library.
+    if (screen.rfind("plugin:", 0) == 0) {
+        const size_t a = screen.find(':', 7);
+        const std::string id = screen.substr(7, a == std::string::npos ? std::string::npos : a - 7);
+        const size_t b = a == std::string::npos ? a : screen.find(':', a + 1);
+        const std::string screenId = a == std::string::npos ? "main" : screen.substr(a + 1, b == std::string::npos ? b : b - a - 1);
+        if (gShotPluginsDir.empty()) {
+            log(LogLevel::Error, "%s: needs --plugins-dir", screen.c_str());
+            return 2;
+        }
+        return pluginScreenshot(gShotPluginsDir, dbPath, kEngineEnv, appVersion(), id, screenId,
+                                b == std::string::npos ? 0 : std::atoi(screen.c_str() + b + 1), out);
+    }
+#endif
     ReaderScreen* reader = nullptr;
+    // preview:<file>[:page][:menus] (--title T) — a document opened as zk.reader.open's preview,
+    // through a preview cache of its own.
+    std::string previewDir;
+    std::error_code ec_;
+    if (screen.rfind("preview:", 0) == 0) {
+        std::string spec = screen.substr(8), file = spec;
+        const size_t colon = spec.find(':');
+        if (colon != std::string::npos) file = spec.substr(0, colon);
+        previewDir = (std::filesystem::temp_directory_path() / ("zk-preview-shot-" + std::to_string(::getpid()))).string();
+        PreviewCache cache(previewDir, wallMs);
+        const std::string part = cache.partPath("shot");
+        std::error_code ec;
+        std::filesystem::copy_file(file, part, std::filesystem::copy_options::overwrite_existing, ec);
+        std::ifstream in(part, std::ios::binary);
+        std::string head(1024, '\0');
+        in.read(head.data(), 1024);
+        head.resize(static_cast<size_t>(in.gcount()));
+        const PreviewType type = sniffPreviewType("", head);
+        std::string err;
+        auto e = ec ? std::nullopt
+                    : cache.add("shot", part, type, gShotTitle.empty() ? std::filesystem::path(file).stem().string() : gShotTitle, &err);
+        if (!e || type == PreviewType::Unknown) {
+            log(LogLevel::Error, "%s: can't preview it %s", screen.c_str(), err.c_str());
+            return 2;
+        }
+        auto r = previewReader(*e, kEngineEnv, 6, nullptr);
+        r->setPreview({"", "https://arxiv.org/pdf/shot", {}, {}});
+        reader = r.get();
+        s = std::move(r);
+        screen = "reader:" + spec;  // the page and menus are read below
+    }
+    // reader:<attachmentKey>[:page][:menus] — a downloaded book, as the reader shows it.
     int readerPage = -1;
     bool readerMenus = false;
     std::string readerAnnotation;
     if (screen.rfind("reader:", 0) == 0) {
+        const bool preview = reader != nullptr;
         std::vector<std::string> parts;
         for (size_t at = 0, next; at <= screen.size(); at = next + 1) {
             next = screen.find(':', at);
             if (next == std::string::npos) next = screen.size();
             parts.push_back(screen.substr(at, next - at));
         }
-        auto att = lib.attachment(parts.size() > 1 ? parts[1] : "");
+        auto att = preview ? std::nullopt : lib.attachment(parts.size() > 1 ? parts[1] : "");
         auto row = att ? lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key) : std::nullopt;
-        if (!att || att->localPath.empty() || !row) {
+        if (!preview && (!att || att->localPath.empty() || !row)) {
             log(LogLevel::Error, "%s: not a downloaded attachment", screen.c_str());
             return 2;
         }
         if (parts.size() > 2 && !parts[2].empty()) readerPage = std::atoi(parts[2].c_str());
         readerMenus = parts.size() > 3 && parts[3] == "menus";
         if (parts.size() > 4 && parts[3] == "annotation") readerAnnotation = parts[4];  // tapped: its bar
+        if (!preview) {
         auto r = std::make_unique<ReaderScreen>(*row, att->localPath,
                                                 att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, [] {
                                                     return std::make_unique<RenderWorker>([](DocType t) {
@@ -235,6 +268,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
                                                 6);
         reader = r.get();
         s = std::move(r);
+        }
     }
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
@@ -288,6 +322,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         const bool ok = cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS;
         s.reset();
         RenderWorker::waitForAll(3000);
+        if (!previewDir.empty()) std::filesystem::remove_all(previewDir, ec_);
         return ok ? 0 : 1;
     }
     Canvas c(metrics().width, metrics().height);
@@ -352,6 +387,11 @@ int main(int argc, char** argv) {
         std::printf("%zu families in %.0f ms\n", fonts.size(), ms);
         return 0;
     }
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--title")) gShotTitle = argv[i + 1];
+#ifndef ZK_KINDLE
+    if (gPluginDevLoop) gShotPluginsDir = paths.pluginsDir;
+#endif
     if (argc > 3 && !std::strcmp(argv[1], "--screenshot")) {
         std::string db = paths.dbPath;
         if (argc > 5 && !std::strcmp(argv[4], "--db")) db = argv[5];
@@ -485,21 +525,9 @@ int main(int argc, char** argv) {
     pluginEvents.onBackgroundDone([&](uint64_t round) { backgroundRound.done(round); });
     // zk.reader.open: a document read as a preview, kept in cache/preview, downloaded through the
     // plugin's own net rules (the app's HTTP stack, on the download screen's thread).
-    pluginEvents.setPreviewOpener([&](App& a, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
-                                      std::function<void()> closed) {
-        PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""), ev.value.value("baseUrl", "")};
-        PreviewScreen::Deps d;
-        d.cache = &previewCache;
-        PluginHost* host = plugins.get();
-        d.download = [host, id = ev.pluginId](HttpRequest req) {
-            if (!host) throw std::runtime_error("Plugins aren't running");
-            return host->previewDownload(id, std::move(req), PreviewCache::kMaxDownloadBytes, 5 * 60 * 1000);
-        };
-        d.makeReader = [&lib, &lipc](const PreviewEntry& e) { return previewReader(e, loadSettings(lib).flashEvery, lipc.get()); };
-        d.answer = std::move(answer);
-        d.closed = std::move(closed);
-        PreviewScreen::show(std::move(doc), std::move(d), a);
-    });
+    pluginEvents.setPreviewOpener(previewOpener(
+        previewCache, [&] { return plugins && pluginsRunning && !pluginsOff ? plugins.get() : nullptr; },
+        [&lib, &lipc](const PreviewEntry& e) { return previewReader(e, kEngineEnv, loadSettings(lib).flashEvery, lipc.get()); }));
     // The start counts as good after 60 s of running (not at the first screen: plugins start after
     // it); a clean exit counts too. Until then a crash leaves the count for the next start. Only a
     // start with some plugin on was counted; with none on there is nothing to confirm.
