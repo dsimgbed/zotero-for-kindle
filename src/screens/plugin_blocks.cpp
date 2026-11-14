@@ -19,6 +19,9 @@ namespace {
 
 constexpr int kButtonH = 110, kInputH = 100, kChipH = 76, kChipGapX = 18, kChipGapY = 18, kChipPad = 34;
 constexpr int kCardPad = 32, kDividerH = 30, kLabelH = 48, kEmptyDeckH = 300;
+// A deck that fills the screen: at least this tall, else the screen pages as other screens do; a
+// long card's "2 / 3" in its bottom corner.
+constexpr int kMinDeckH = kEmptyDeckH, kCornerW = 160, kCornerH = 44;
 const TextStyle kChipStyle{kSans, 7, 500};
 const TextStyle kCardTitle{kSerif, 10.5, 700};
 const TextStyle kCardMeta{kSans, 7, 400, false, kSecondary};
@@ -488,6 +491,9 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
         case K::Search:
         case K::Field:
         case K::Deck: hit = Hit{b.id, "", b.kind, l.rect}; break;
+        case K::Notice:
+            if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
+            break;
         case K::Buttons:
         case K::List:
         case K::Chips:
@@ -528,6 +534,35 @@ static Laid layOut(const Block& root, Rect area, int page) {
     Laid out;
     out.block = &root;
     out.rect = area;
+
+    // A deck fills the screen: it takes every pixel the other blocks leave, so every card (and the
+    // empty deck) has the same size and nothing around it moves from card to card. A long card
+    // pages inside itself, its page indicator in its bottom corner.
+    int deck = -1, others = gap * std::max(0, n - 1);
+    for (int i = 0; i < n; ++i) {
+        if (kids[i]->kind == K::Deck && deck < 0 && root.kind == K::Column) deck = i;
+        else others += units[i].natural();
+    }
+    if (deck >= 0 && area.h - others >= kMinDeckH) {
+        const int deckH = area.h - others;
+        const Units& u = units[deck];
+        int first = 0, count = static_cast<int>(u.h.size());
+        if (u.breakable() && u.natural() > deckH) {  // the body's lines, a page at a time, above the corner
+            const auto pages = split(u.h, deckH - u.head - u.tail - kCornerH);
+            out.pages = static_cast<int>(pages.size());
+            out.page = std::clamp(page, 0, out.pages - 1);
+            first = pages[out.page].first, count = pages[out.page].second;
+        }
+        int y = area.y;
+        for (int i = 0; i < n; ++i) {
+            const int h = i == deck ? deckH : units[i].natural();
+            const Rect r{area.x, y, area.w, h};
+            out.children.push_back(i == deck ? place(*kids[i], r, first, count) : place(*kids[i], r, 0, static_cast<int>(units[i].h.size())));
+            if (i == deck && out.pages > 1) out.corner = {r.x + r.w - kCardPad - kCornerW, r.y + r.h - kCardPad / 2 - kCornerH, kCornerW, kCornerH};
+            y += h + gap;
+        }
+        return out;
+    }
 
     if (total <= area.h) {  // it all fits
         int y = area.y;
@@ -640,13 +675,19 @@ int64_t textBlockLayouts() { return gTextLayouts; }
 
 Rect pageIndicatorRect(const Laid& root) {
     if (root.pages <= 1) return {};
+    if (!root.corner.empty()) return root.corner;
     return {root.rect.x, root.rect.y + root.rect.h - kPageIndicatorH, root.rect.w, kPageIndicatorH};
 }
 
 void drawTree(cairo_t* cr, const Laid& root, const FocusState& f) {
     fillRect(cr, root.rect, 255);
     for (const auto& c : root.children) drawLaid(cr, c, f);
-    if (root.pages > 1) drawPageIndicator(cr, pageIndicatorRect(root), root.page, root.pages);
+    if (root.pages > 1 && !root.corner.empty()) {  // inside the card: quiet, on the card's white
+        centredText(cr, std::to_string(root.page + 1) + " / " + std::to_string(root.pages), {kSans, 6.5, 400, false, kTertiary},
+                    root.corner, Align::Right);
+    } else if (root.pages > 1) {
+        drawPageIndicator(cr, pageIndicatorRect(root), root.page, root.pages);
+    }
 }
 
 std::optional<Hit> hitTest(const Laid& root, Point p) {

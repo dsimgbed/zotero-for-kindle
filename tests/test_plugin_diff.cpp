@@ -105,3 +105,18 @@ TEST_CASE("plugin diff: a block inserted above redraws the region that moved") {
     CHECK(d[0].rect.y == la.children[1].rect.y);  // the label above is not redrawn
     CHECK(d[0].wave == Waveform::Ui);  // blocks moved, nothing turned
 }
+
+TEST_CASE("plugin diff: a short card after a long one redraws only the deck (the blocks under it stay)") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    std::string body;
+    for (int i = 0; i < 40; ++i) body += "A long abstract that goes on and on about random fields. ";
+    const Block a = tree(with(kDeck, "\"Short.\"", "\"" + body + "\"")), b = tree(with(kDeck, "First card", "Second"));
+    const Laid la = layoutTree(a, blocksArea(), 0), lb = layoutTree(b, blocksArea(), 0);
+    REQUIRE(la.pages > 1);
+    REQUIRE(lb.pages == 1);
+    const auto d = diffTrees(la, lb);
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].rect == la.children[1].rect);  // the card; its page indicator is inside it
+    CHECK(d[0].wave == Waveform::Quality);    // a partial refresh, never a full flash
+}

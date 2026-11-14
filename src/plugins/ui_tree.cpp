@@ -335,8 +335,9 @@ struct Parser {
                 b.gap = gapOf(o, "size", where, Block::Gap::Medium, false);
                 break;
             case K::Notice:
-                onlyFields(o, where, {"text"});
+                onlyFields(o, where, {"text", "id"});
                 b.text = str(o, "text", where, true);
+                if (o.contains("id")) b.id = id(o, where);  // tappable (0.9)
                 break;
             case K::Button: break;  // handled above
         }

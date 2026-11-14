@@ -41,7 +41,7 @@ struct Block {
     enum class Select { None, One, Many };
 
     Kind kind = Kind::Column;
-    std::string id;                // deck, list, search, field, chips, button
+    std::string id;                // deck, list, search, field, chips, button; a notice's (optional)
     std::vector<Block> children;   // column, row; a deck's card (0 or 1); the buttons of `buttons`
     Gap gap = Gap::Small;          // column, row; space (default Medium)
     std::vector<Span> spans;       // text ("\n" breaks a line)

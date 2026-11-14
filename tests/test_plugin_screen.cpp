@@ -548,3 +548,23 @@ zk.screen("deck", { title: "Riffle", main: true,
     r.events->openScreen(r.app, "riffle", "deck");
     REQUIRE(r.until([&] { return r.shown("backs=1"); }));
 }
+
+TEST_CASE("plugin screen: a tap on the deck's card posts {tap, id: the deck}; a notice with an id posts {tap}; one without stays quiet") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Rig r;
+    json j = deckScreen();
+    j["children"][4]["id"] = "kept";
+    j["children"].push_back(json{{"kind", "notice"}, {"text", "A notice without an id"}});
+    r.give(treeEvent(j));
+    r.tap(r.centre(r.childRect(1)));
+    REQUIRE(r.link.sent.size() == 1);
+    CHECK(r.link.sent[0] == json{{"kind", "tap"}, {"id", "cards"}});
+    r.give(treeEvent(j, 1));
+    r.tap(r.centre(r.childRect(4)));
+    REQUIRE(r.link.sent.size() == 2);
+    CHECK(r.link.sent[1] == json{{"kind", "tap"}, {"id", "kept"}});
+    r.give(treeEvent(j, 2));
+    r.tap(r.centre(r.childRect(5)));
+    CHECK(r.link.sent.size() == 2);
+}

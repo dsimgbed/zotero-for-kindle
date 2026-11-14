@@ -259,7 +259,11 @@ void PluginScreen::tapBlocks(Point p, Nav& nav) {
     if (!hit) return;
     switch (hit->kind) {
         case K::Button:
-        case K::Buttons: enqueue({{"kind", "tap"}, {"id", hit->id}}, nav); break;
+        case K::Buttons:
+        case K::Deck:     // the card (0.9): the plugin may open it (zk.reader.open)
+        case K::Notice:  // one with an id (0.9)
+            enqueue({{"kind", "tap"}, {"id", hit->id}}, nav);
+            break;
         case K::List: enqueue({{"kind", "select"}, {"id", hit->id}, {"row", hit->part}}, nav); break;
         case K::Chips: {
             const Laid* l = findLaid(laid_, hit->id);
