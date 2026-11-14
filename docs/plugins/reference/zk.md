@@ -6,6 +6,7 @@
 
 - [files](zk/files.md)
 - [library](zk/library.md)
+- [reader](zk/reader.md)
 - [ui](zk/ui.md)
 - [zotero](zk/zotero.md)
 

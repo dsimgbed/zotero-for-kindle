@@ -243,6 +243,15 @@ void App::pop() {
     showTop();
 }
 
+void App::replaceTop(std::unique_ptr<Screen> s) {
+    auto& stack = stacks_[tab_];
+    if (stack.size() <= 1) return push(std::move(s));  // a tab's root stays
+    auto old = std::move(stack.back());
+    stack.back() = std::move(s);
+    retire(std::move(old));
+    showTop();
+}
+
 void App::switchTab(int index) {
     if (index < 0 || index >= kTabs || stacks_[index].empty()) return;
     if (index == tab_) {

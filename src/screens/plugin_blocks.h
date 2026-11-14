@@ -6,6 +6,12 @@
 // buttons stay put while a long card body or list pages (mode "elastic"). If even that doesn't fit
 // (a tall form on a small Kindle), the whole screen flows page after page instead. Either way the
 // page indicator ("2 / 5") sits at the bottom and nothing is drawn outside the area.
+//
+// A screen whose column holds a deck is laid out around it (0.9): the deck takes all the height the
+// other blocks leave, the blocks after it sit at the bottom, and every card — short, long, or none —
+// has that same size. A long card pages inside itself ("2 / 3" quietly in its bottom corner); the
+// other blocks stay where they are on every page. (A screen too full to leave the deck kMinDeckH
+// pages as above.)
 
 #include <map>
 #include <memory>
@@ -40,6 +46,7 @@ struct Laid {
     std::vector<Part> parts;
     int first = 0, count = 0;    // the units shown: text lines, list rows, chip lines, card body lines
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
+    Rect corner;                 // on the root: a filling deck's page indicator, in the card's corner (else empty)
     std::shared_ptr<const KeptText> text;               // a text block's lines, laid out once
     std::vector<std::shared_ptr<const KeptText>> kept;  // on the root: every text block's, on any page
 };
@@ -70,7 +77,8 @@ struct Hit {
     Rect rect;         // what was hit (the row, the chip, the button)
 };
 
-// The interactive block under `p`: a button, a list row, a chip, a search/field, the deck.
+// The interactive block under `p`: a button, a list row, a chip, a search/field, the deck, a notice
+// with an id.
 std::optional<Hit> hitTest(const Laid& root, Point p);
 
 // The laid block with this id (a search/field to redraw while typing), or nullptr.

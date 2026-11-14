@@ -180,6 +180,14 @@ constexpr int kMaxQuestions = 3;
 uint64_t askUser(PluginCtx&, PluginHostEvent confirm, std::function<void(bool yes)> answered);
 // Any other event for the screen (plugin id and name filled in).
 void post(PluginCtx&, PluginHostEvent);
+// Posts `ev` (a ReaderOpen; its request id is filled in) and pauses the running call's budget
+// until PluginHost::answerReader(); `done` gets "" or the error, on the plugin thread, outside any
+// JS. Dropped (never called) if the call is stopped or the plugin unloaded. 0: not posted (no
+// call, or a stopped call's code).
+uint64_t waitForUi(PluginCtx&, PluginHostEvent ev, std::function<void(const std::string& error)> done);
+// "" if the running call answers the user (a screen's onEvent or an action's run, as zk.ui.open
+// needs; *screen then its screen's instance, 0 for an action), else the Error message, naming `fn`.
+std::string userAnswerCheck(PluginCtx&, const char* fn, uint64_t* screen);
 
 // UTF-8 with every invalid byte replaced by U+FFFD.
 std::string sanitisedUtf8(const char* s, size_t n);
@@ -247,6 +255,8 @@ void installZotero(PluginCtx&);
 // zk.selectionAction, zk.itemAction (bindings_entry.cpp): checked and recorded. Throws
 // std::runtime_error on an internal error.
 void installEntry(PluginCtx&);
+// zk.reader (bindings_reader.cpp, 0.9). Throws std::runtime_error on an internal error.
+void installReader(PluginCtx&);
 // zk.screen and zk.ui (bindings_ui.cpp). Throws std::runtime_error on an internal error.
 void installUi(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes

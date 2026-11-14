@@ -28,6 +28,11 @@ public:
     virtual ~Nav() = default;
     virtual void push(std::unique_ptr<Screen>) = 0;
     virtual void pop() = 0;
+    // The visible screen gives its place to `s` (one redraw, not two).
+    virtual void replaceTop(std::unique_ptr<Screen> s) {
+        pop();
+        push(std::move(s));
+    }
     virtual void switchTab(int index) = 0;
     virtual void damage(Rect, Waveform) = 0;  // ignored unless the caller is the visible screen
     virtual void redrawAll(Waveform) = 0;

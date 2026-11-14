@@ -1069,10 +1069,12 @@ declare namespace zk {
   interface TextSelection {
     /** The selected text. */
     text: string;
-    /** The item being read. */
-    item: Item;
-    /** The file being read. */
-    attachment: Attachment;
+    /** The item being read; `null` in a preview ({@link zk.reader.open}, app 0.9.0). */
+    item: Item | null;
+    /** The file being read; `null` in a preview. */
+    attachment: Attachment | null;
+    /** In a preview (app 0.9.0): what is being read instead of an item. */
+    preview?: { title: string; url: string | null };
     /** The page label where the selection starts, if the document has pages. */
     pageLabel: string | null;
   }
@@ -1208,6 +1210,15 @@ declare namespace zk {
      * card with the reader's page-turn feel when the next render shows another). With no card,
      * shows `empty`.
      *
+     * A deck is the screen's main thing: in a screen's top-level {@link column} it takes all the
+     * height the other blocks leave, and the blocks after it sit at the bottom of the screen. Every
+     * card — short, long, or none — has that same size, so nothing around it moves from card to
+     * card; a long body pages inside the card (up/down swipes, "2 / 3" in its corner). Needs app
+     * 0.9.0 (before, a deck took its card's height).
+     *
+     * Tapping the card sends a `tap` event with the deck's `id` (e.g. to open the paper with
+     * {@link zk.reader.open}). Needs app 0.9.0.
+     *
      * @example
      * zk.ui.deck({ id: "cards", card: top && zk.ui.card({ title: top.title }), empty: "Nothing left to riffle" });
      */
@@ -1290,12 +1301,14 @@ declare namespace zk {
     function space(size?: Size): SpaceBlock;
 
     /**
-     * A quiet one-line message: the outcome of the last step, a hint.
+     * A quiet one-line message: the outcome of the last step, a hint. With an `id`, tapping it
+     * sends a `tap` event with that id (needs app 0.9.0).
      *
      * @example
      * zk.ui.notice("Discarded. 3 cards skipped for later.");
+     * zk.ui.notice("Kept into Probability", { id: "read-kept" }); // tap: read it
      */
-    function notice(text: string): NoticeBlock;
+    function notice(text: string, opts?: { id?: string }): NoticeBlock;
 
     // ── Navigation ──
 
@@ -1517,6 +1530,8 @@ declare namespace zk {
     interface NoticeBlock {
       kind: "notice";
       text: string;
+      /** Makes it tappable: a tap sends a `tap` event with this id. Needs app 0.9.0. */
+      id?: string;
     }
 
     /**
@@ -1526,7 +1541,8 @@ declare namespace zk {
      *
      * - `open` — the screen is opening; first, before its first render ("Loading…" shows until
      *   it returns). For set-up slower than `render`'s 1 s.
-     * - `tap` — a {@link button}, or one of {@link buttons}, by its `id`.
+     * - `tap` — a {@link button}, or one of {@link buttons}, by its `id`; the {@link deck}'s card,
+     *   by the deck's `id`; a {@link notice} with an `id` (the last two need app 0.9.0).
      * - `select` — a {@link list} row: `id` is the list's, `row` the row's.
      * - `swipe` — the {@link deck}'s card, left or right.
      * - `change` / `submit` — a {@link search} or {@link field}: its whole text.
@@ -1535,6 +1551,8 @@ declare namespace zk {
      * - `result` — a screen this one opened has closed: its id and what {@link close} gave
      *   (`undefined` if closed with Back or without a result).
      * - `back` — the user left this screen. It is already closed; nothing is rendered after.
+     * - `reader` — a preview this screen opened with {@link zk.reader.open} closed (`closed:
+     *   true`): the screen shows again as it was. Needs app 0.9.0.
      *
      * @example
      * onEvent: async (e) => {
@@ -1552,7 +1570,44 @@ declare namespace zk {
       | { kind: "submit"; id: string; text: string }
       | { kind: "chips"; id: string; chip: string; selected: string[] }
       | { kind: "result"; from: string; value: Json | undefined }
-      | { kind: "back" };
+      | { kind: "back" }
+      | { kind: "reader"; closed: true };
+  }
+
+  // ───────────────────────────── The reader ─────────────────────────────
+
+  /**
+   * The app's reader, for documents that aren't in the library. Needs app 0.9.0.
+   */
+  namespace reader {
+    /**
+     * Opens a document in the app's reader as a **preview**: nothing is added to the library.
+     *
+     * - `url`: a PDF or EPUB to download (https only, and the plugin needs `net` permission for
+     *   its host, as for {@link zk.fetch}). The type comes from the response's Content-Type, then
+     *   from the file's first bytes; a page that turns out to be HTML opens as `html`. A download
+     *   screen shows the progress with **Cancel**. At most 50 MB.
+     * - `html`: a page the plugin already has (an article it extracted), opened like a saved web
+     *   page. No scripts run; images aren't fetched (`data:` URLs show). `baseUrl` resolves its
+     *   relative links.
+     *
+     * In a preview there is no highlighting, notes or bookmarks: a selection offers Search and
+     * plugin actions (their {@link TextSelection} has `item: null` and `preview`). The top bar says
+     * "Preview". Nothing syncs. The app keeps the last 10 previewed documents (at most 100 MB) with
+     * their reading places, so opening one again is instant.
+     *
+     * Only in answer to the user (a screen's `onEvent`, an action's `run`), like {@link zk.ui.open};
+     * elsewhere, or with a URL that isn't https or whose host isn't declared, it throws. The
+     * promise resolves when the reader shows, and rejects if the download fails or the user
+     * cancels it; waiting doesn't count against the call's time. Back returns to the screen as it
+     * was, and the screen gets a `{ kind: "reader", closed: true }` event.
+     *
+     * @example
+     * if (e.kind === "tap" && e.id === "card") await zk.reader.open({ url: `https://arxiv.org/pdf/${card.arxiv}`, title: card.title });
+     * @example
+     * await zk.reader.open({ html: article, title: card.title, baseUrl: card.link });
+     */
+    function open(doc: { url: string; title?: string } | { html: string; title: string; baseUrl?: string }): Promise<void>;
   }
 
   // ───────────────────────────── Data ─────────────────────────────

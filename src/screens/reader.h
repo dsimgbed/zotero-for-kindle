@@ -109,7 +109,23 @@ public:
     // as a web snapshot, the selection bar offers Search and plugin actions only, and the first try
     // at marking anything (a selection, an area, a note, the pen) says "This group library is
     // read-only". Annotations there, and other members' anywhere, open as a "by Anna" line.
-    bool readOnlyLibrary() const { return readOnly_; }
+    bool readOnlyLibrary() const { return readOnly_ && !preview_; }
+    // A preview (zk.reader.open, 0.9): a document that isn't in the library. Nothing is marked
+    // (no highlights, notes, ink or bookmarks: the selection bar offers Search and plugin actions,
+    // as on a web snapshot), nothing is saved to the library or synced, no plugin hears of it as a
+    // book. Its place comes from and goes to `savePosition` (the preview cache); `closed` runs when
+    // the reader closes. The menus' top bar says "Preview"; Back returns to what opened it.
+    struct PreviewMode {
+        std::string position;  // where to open ("" the start)
+        std::string url;       // where it came from ("" an html document), for plugin actions
+        std::function<void(const std::string& position)> savePosition;
+        std::function<void()> closed;
+    };
+    void setPreview(PreviewMode m) {
+        preview_ = std::move(m);
+        readOnly_ = true;
+    }
+    bool preview() const { return preview_.has_value(); }
     int pageCount() const { return pageCount_; }
     const std::vector<TocEntry>& toc() const { return toc_; }
     const std::string& chapter() const { return chapter_; }
@@ -197,6 +213,7 @@ public:
     void onClose(Nav& nav) override {
         if (result_) result_->stop();
         flushInk(nav);
+        if (preview_ && preview_->closed) std::exchange(preview_->closed, nullptr)();
     }
 
 private:
@@ -235,6 +252,7 @@ private:
     std::string path_;
     DocType type_;
     bool web_ = false;
+    std::optional<PreviewMode> preview_;
     bool readOnly_ = false, readOnlyTold_ = false;  // a read-only group's book; its toast was shown
     // readOnly_: says so (always, or only the first time) and returns true.
     bool refuseReadOnly(Nav&, bool always);

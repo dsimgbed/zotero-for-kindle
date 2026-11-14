@@ -14,6 +14,7 @@ struct Paths {
     std::string appDir;        // the app's folder (updates replace its bin/lib/share); "" = no updates
     std::string launcherPath;  // the library launcher, Zotero.sh
     std::string pluginsDir;    // <pluginsDir>/<id>/plugin.json; outside appDir so updates never touch it
+    std::string cacheDir;      // what can be fetched again: <cacheDir>/preview (zk.reader.open's documents)
     std::string configFile() const { return configDir + "/config.json"; }
 };
 

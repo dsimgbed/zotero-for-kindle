@@ -250,9 +250,20 @@ PluginHttp::PluginHttp(Http& inner, std::string webdavHost) : inner_(inner), web
 
 void PluginHttp::setWebdavHost(const std::string& host) { webdav_ = normalisedHost(host); }
 
-HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeoutMs, Clock::time_point started) {
+std::optional<FetchError> checkFetchUrl(const PluginManifest& m, const std::string& url, const std::string& webdavHost) {
+    try {
+        bool anyOnly = false;
+        check(m, parseUrl(url), url, nullptr, normalisedHost(webdavHost), anyOnly);
+        return std::nullopt;
+    } catch (const FetchError& e) {
+        return e;
+    }
+}
+
+HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeoutMs, Clock::time_point started, FetchLimits limits) {
     using K = FetchError::Kind;
-    timeoutMs = std::clamp(timeoutMs, 1, kFetchMaxMs);
+    timeoutMs = std::clamp(timeoutMs, 1, limits.maxMs);
+    const std::string over = limits.maxBytes == kFetchMaxBytes ? "10 MB" : std::to_string(limits.maxBytes >> 20) + " MB";
     const auto deadline = started + std::chrono::milliseconds(timeoutMs);
     bool anyOnly = false;
     Url u = check(m, parseUrl(in.url), in.url, nullptr, webdav_, anyOnly);
@@ -293,8 +304,10 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
         r.body = body;
         r.followRedirects = false;
         r.timeoutMs = static_cast<int>(left);
-        r.maxBodyBytes = kFetchMaxBytes;
+        r.maxBodyBytes = limits.maxBytes;
         r.cancel = in.cancel;
+        r.outFile = limits.outFile;  // a redirect's own body is written there too, then replaced by the next hop's
+        r.onProgress = limits.onProgress;
         r.noProxy = true;  // the address checked is the peer's
         if (anyOnly) r.allowAddress = [](const sockaddr* a, socklen_t n) { return isPublicAddress(a, n); };
         HttpResponse resp = inner_.send(r);
@@ -304,8 +317,8 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
             throw FetchError(K::Refused, "zk.fetch(\"" + u.shown() + "\"): " + u.host +
                                              " is on your local network; plugins can reach it only if it is declared by its exact name (\"net:" +
                                              u.host + "\") in plugin.json");
-        if (resp.tooLarge || resp.body.size() > kFetchMaxBytes)
-            throw FetchError(K::Limit, "zk.fetch(\"" + first + "\"): the response is over 10 MB", "responseSize");
+        if (resp.tooLarge || resp.body.size() > limits.maxBytes)
+            throw FetchError(K::Limit, "zk.fetch(\"" + first + "\"): the response is over " + over, "responseSize");
         if (resp.curlCode == 28 /* CURLE_OPERATION_TIMEDOUT */ || (resp.curlCode != 0 && Clock::now() >= deadline))
             throw FetchError(K::Limit, "zk.fetch(\"" + first + "\") took longer than " + duration(timeoutMs), "responseTime");
         if (resp.curlCode != 0)

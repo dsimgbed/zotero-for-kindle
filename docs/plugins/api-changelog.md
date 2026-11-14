@@ -6,6 +6,20 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.9.0 (unreleased): previews, and a deck that fills the screen
+
+- `zk.reader.open({ url, title? } | { html, title, baseUrl? })` — opens a document in the reader as a
+  preview, not added to the library; only in answer to the user; a `url` needs https and `net`
+  permission for its host. Resolves when the reader shows; rejects if the download fails or is
+  cancelled. The screen gets `{ kind: "reader", closed: true }` when the reader closes.
+- A `deck` in a screen's top-level column takes all the height left; every card has the same size and
+  the blocks after it sit at the bottom. A long card pages inside the card. A plugin that relied on
+  the blocks under the card following it closely sees them at the bottom now.
+- A tap on a deck's card sends `{ kind: "tap", id: <deck id> }`; `zk.ui.notice(text, { id })` makes a
+  notice tappable (`tap` with its id).
+- `TextSelection.item` and `.attachment` are `null` for a selection in a preview, which carries
+  `preview: { title, url }` instead. A selection action that reads `item` should check it.
+
 ## 0.8.0 (unreleased): group libraries
 
 - `zk.library.libraries()` — My Library and the group libraries that sync: `{ id, name, editable, items }`

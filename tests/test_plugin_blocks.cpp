@@ -327,3 +327,87 @@ TEST_CASE("plugin blocks fix: kept text draws exactly as text laid out for the c
     CHECK(grayOf(want3) == grayOf(got3));
     CHECK(KeptText(text, st, box.w).tops() == lineTops(text, st, box.w));
 }
+
+// ---- 0.9: a deck fills the screen ----------------------------------------------------------------
+
+namespace {
+
+std::string longBody(int chars) {
+    std::string body;
+    while (static_cast<int>(body.size()) < chars) body += std::string(kSummary) + "\n\n";
+    return body;
+}
+
+json withoutDeckCard(json j) {
+    j["children"][1] = json::parse(R"({"kind":"deck","id":"card","empty":"Nothing left to riffle"})");
+    return j;
+}
+
+int bottomOf(const Laid& l) { return l.rect.y + l.rect.h; }
+
+}  // namespace
+
+TEST_CASE("plugin blocks: a deck takes the height left; a short card, a long card and no card have the same size") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const Rect area = blocksArea();
+        const Block shortCard = tree(deckScreen("A short summary.")), noBody = tree(deckScreen(""));
+        const Block longCard = tree(deckScreen(longBody(6000))), none = tree(withoutDeckCard(deckScreen()));
+        const Laid s = layoutTree(shortCard, area, 0), n = layoutTree(noBody, area, 0);
+        const Laid l = layoutTree(longCard, area, 0), e = layoutTree(none, area, 0);
+        for (const Laid* x : {&s, &n, &l, &e}) REQUIRE(x->children.size() == 7);
+        // The deck reaches down to the blocks after it, which sit at the bottom of the area.
+        CHECK(bottomOf(s.children.back()) == area.y + area.h);
+        CHECK(s.children[1].rect.h > area.h / 3);
+        for (const Laid* x : {&n, &l, &e}) {
+            CHECK(x->children[1].rect == s.children[1].rect);
+            for (size_t i = 0; i < 7; ++i) CHECK(x->children[i].rect == s.children[i].rect);  // nothing moves
+            CHECK(x->children[4].parts == s.children[4].parts);  // the buttons never move
+        }
+        CHECK(s.pages == 1);
+        CHECK(l.pages > 1);
+        CHECK(pageIndicatorRect(s).empty());
+        // The page indicator sits in the card's bottom corner, not under the blocks.
+        const Rect corner = pageIndicatorRect(l);
+        CHECK(!corner.empty());
+        CHECK(l.children[1].rect.contains(corner.center()));
+        CHECK(corner.x > l.children[1].rect.x + l.children[1].rect.w / 2);
+        checkFits(longCard);
+        checkFits(shortCard);
+        checkFits(none);
+    }
+}
+
+TEST_CASE("plugin blocks: a long card pages inside the card; every page keeps every block in place") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Rect area = blocksArea();
+    const Block t = tree(deckScreen(longBody(8000)));
+    const Laid first = layoutTree(t, area, 0);
+    REQUIRE(first.pages > 2);
+    int shown = 0;
+    for (int p = 0; p < first.pages; ++p) {
+        const Laid l = layoutTree(t, area, p);
+        REQUIRE(l.children.size() == 7);
+        for (size_t i = 0; i < 7; ++i) CHECK(l.children[i].rect == first.children[i].rect);
+        CHECK(l.children[1].first == shown);  // the card's lines, page after page
+        shown += l.children[1].count;
+        CHECK(hitTest(l, l.children[1].rect.center())->kind == K::Deck);
+    }
+    const Laid alone = layoutTree(t.children[1], {0, 0, area.w, 1 << 28}, 0);
+    CHECK(shown == alone.children[0].count);
+}
+
+TEST_CASE("plugin blocks: screens without a deck are laid out as before") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = tree(json::parse(R"({"kind":"column","children":[
+      {"kind":"card","title":"A card alone","body":"Short."},
+      {"kind":"button","id":"b","title":"OK"}]})"));
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    REQUIRE(l.children.size() == 2);
+    CHECK(l.children[0].rect.h < blocksArea().h / 3);  // a card takes its own height
+    CHECK(bottomOf(l.children[1]) < blocksArea().y + blocksArea().h / 2);
+}

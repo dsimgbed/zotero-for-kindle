@@ -3,8 +3,9 @@ var MAX_PASSAGE = 4e3;
 zk.selectionAction({
   id: "explain",
   title: "Explain",
-  run: async ({ text, item, pageLabel }, again) => {
+  run: async ({ text, item, preview, pageLabel }, again) => {
     if (again?.action === "note") {
+      if (!item) return "This isn't in your library yet: keep it first.";
       const where = pageLabel ? ` (p. ${pageLabel})` : "";
       const html = [`<p><b>Explained${where}:</b> ${escapeHtml(passageOf(text))}</p>`, ...paragraphs(again.text)].join("");
       await zk.zotero.addNote(item.key, html);
@@ -14,7 +15,7 @@ zk.selectionAction({
     if (!apiKey) throw new Error('Add your Anthropic API key to settings.json: { "apiKey": "sk-ant-\u2026" }');
     const passage = passageOf(text);
     const prompt = [
-      `I am reading "${item.title}"${item.year ? ` (${item.year})` : ""}.`,
+      item ? `I am reading "${item.title}"${item.year ? ` (${item.year})` : ""}.` : `I am reading "${preview?.title ?? "a document"}".`,
       "Explain this passage briefly and plainly: what it says, and any term or step a reader might miss.",
       language ? `Answer in ${language}.` : "Answer in the language of the passage.",
       "",
@@ -40,7 +41,7 @@ zk.selectionAction({
     const reply = await res.json();
     const answer = reply.content.find((block) => block.type === "text")?.text?.trim();
     if (!answer) throw new Error("Anthropic: the reply had no text");
-    return { text: answer, actions: [{ id: "note", title: "Save as note" }] };
+    return { text: answer, actions: item ? [{ id: "note", title: "Save as note" }] : [] };
   }
 });
 function passageOf(text) {

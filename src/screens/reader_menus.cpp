@@ -56,7 +56,17 @@ Rect ReaderMenus::buttonRect(int i, int count) {
     const int w = (W() - 2 * inset + gap) / count;
     return {inset + i * w, H() - kPanelH + 200, w - gap, 140};
 }
-int ReaderMenus::buttonCount() const { return reader_.type() == DocType::Pdf ? 7 : 5; }
+int ReaderMenus::buttonCount() const { return static_cast<int>(buttonKinds().size()); }
+std::vector<int> ReaderMenus::buttonKinds() const {
+    if (reader_.preview()) return {0, 2, 3};  // nothing to note or sync: Contents, Display, Light
+    return reader_.type() == DocType::Pdf ? std::vector<int>{0, 1, 2, 3, 4, 5, 6} : std::vector<int>{0, 1, 2, 3, 4};
+}
+Rect ReaderMenus::cell(int kind) const {
+    const auto kinds = buttonKinds();
+    for (size_t i = 0; i < kinds.size(); ++i)
+        if (kinds[i] == kind) return buttonRect(static_cast<int>(i), static_cast<int>(kinds.size()));
+    return {};
+}
 Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kLightH}; }
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
@@ -480,7 +490,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (picker_) return onPickerTap(g.pos, nav);  // over everything: a tap outside only closes it
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
-        nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
+        if (!reader_.preview()) nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
         nav.pop();
         return;
     }
@@ -488,15 +498,14 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         nav.push(std::make_unique<BookSearchScreen>(reader_));
         return;
     }
-    const int n = buttonCount();
-    if (contentsIconRect().contains(g.pos) || buttonRect(0, n).contains(g.pos)) return openContents(nav);
-    if (n == 7 && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
-    if (n == 7 && addNoteRect().contains(g.pos)) return reader_.addNote(nav);    // closes us
-    if (buttonRect(1, n).contains(g.pos)) return openNotes(nav);
+    if (contentsIconRect().contains(g.pos) || cell(0).contains(g.pos)) return openContents(nav);
+    if (cell(5).contains(g.pos)) return reader_.markArea(nav);  // closes us
+    if (cell(6).contains(g.pos)) return reader_.addNote(nav);    // closes us
+    if (cell(1).contains(g.pos)) return openNotes(nav);
     // Opening or closing Display or Light moves the frame between their cells: both are redrawn
     // with the panel, or the frame would show only at the next repaint of the row (a Sync tap).
-    const auto frames = [&] { nav.damage(buttonRect(2, n).united(buttonRect(3, n)), Waveform::Ui); };
-    if (buttonRect(2, n).contains(g.pos)) {
+    const auto frames = [&] { nav.damage(cell(2).united(cell(3)), Waveform::Ui); };
+    if (cell(2).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
         if (lightOpen_) nav.damage(lightPanelRect(), Waveform::Quality);
         lightOpen_ = false;
@@ -505,7 +514,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (displayOpen_ && onDisplayTap(g.pos, nav)) return;
-    if (buttonRect(3, n).contains(g.pos)) {
+    if (cell(3).contains(g.pos)) {
         lightOpen_ = !lightOpen_;
         if (displayOpen_) nav.damage(displayPanelRect(), Waveform::Quality);
         displayOpen_ = false;
@@ -517,7 +526,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         frames();
         return;
     }
-    if (buttonRect(4, n).contains(g.pos)) {
+    if (cell(4).contains(g.pos)) {
         syncing_ = true;
         nav.sync().openBook(reader_.row().key, reader_.row().attachmentKey);
         nav.damage(panelRect(), Waveform::Ui);
@@ -548,9 +557,21 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_line_to(cr, kMargin, 74);
     cairo_line_to(cr, kMargin + 22, 96);
     cairo_stroke(cr);
-    centredText(cr, "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
-    centredText(cr, reader_.row().title.empty() ? "Untitled" : reader_.row().title, {kSerif, 9, 700},
-                {320, 30, W() - 320 - 260, 90});
+    centredText(cr, reader_.preview() ? "Back" : "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
+    const std::string title = reader_.row().title.empty() ? "Untitled" : reader_.row().title;
+    if (reader_.preview()) {  // the title, and a quiet "Preview" badge: it isn't in the library
+        const Rect room{320, 30, W() - 320 - 260, 90};
+        const TextStyle badge{kSans, 6, 700};
+        const int bw = measureText("Preview", badge, room.w, 1).width + 36;
+        const int tw = std::min(room.w - bw - 20, measureText(title, {kSerif, 9, 700}, room.w, 1).width);
+        const int x = room.x + (room.w - tw - 20 - bw) / 2;
+        centredText(cr, title, {kSerif, 9, 700}, {x, room.y, tw, room.h}, Align::Left);
+        const Rect b{x + tw + 20, room.y + (room.h - 50) / 2, bw, 50};
+        fillRect(cr, b, 235);
+        centredText(cr, "Preview", badge, {b.x + 18, b.y, b.w - 36, b.h});
+    } else {
+        centredText(cr, title, {kSerif, 9, 700}, {320, 30, W() - 320 - 260, 90});
+    }
     const Rect sr = searchRect();
     searchIcon(cr, sr.x + sr.w / 2.0 - 4, sr.y + sr.h / 2.0 - 4, kInk);
     const Rect ci = contentsIconRect();
@@ -587,12 +608,14 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_fill(cr);
     using Icon = void (*)(cairo_t*, double, double, uint8_t);
     const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon, stickyNoteIcon};
-    const int n = buttonCount();
-    for (int i = 0; i < n; ++i) {
+    const auto kinds = buttonKinds();
+    const int n = static_cast<int>(kinds.size());
+    for (int slot = 0; slot < n; ++slot) {
+        const int i = kinds[static_cast<size_t>(slot)];
         std::string label = kButtons[i];
         if (i == 1) label = notesLabel();
         if (i == 4 && syncing_) label = "Syncing…";
-        const Rect r = buttonRect(i, n);
+        const Rect r = buttonRect(slot, n);
         if ((i == 3 && lightOpen_) || (i == 2 && displayOpen_)) {  // open: outlined, as a chosen tab
             gray(cr, kInk);
             cairo_set_line_width(cr, 3);
