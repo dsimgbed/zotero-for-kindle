@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 // What the plugin host tells the screen thread, routed each loop iteration (App::setPollHook):
 //  - Confirm: the app's own confirmation over whatever shows (App::confirm); the answer goes back
 //    to the host, once.
@@ -98,11 +99,13 @@ private:
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
     void pushScreen(App&, uint64_t instance, const std::string& pluginName, const std::string& title);
     App* app_ = nullptr;
-    bool woken_ = false;
+    // The entries version at the last wake(): sleeping plugins are woken again only after something
+    // changed (one turned on, one failed to load), so a plugin that can't load isn't asked forever.
+    std::optional<uint64_t> wokenAt_;
     uint64_t rebinds_ = 0;
     std::map<uint64_t, std::string> runs_;            // actions running: run → plugin name
     std::map<uint64_t, ActionOutcome> outcomes_;      // come, not taken yet
-    std::vector<PluginStatus> running();              // enabled, loaded plugins (wakes the host once)
+    std::vector<PluginStatus> running();              // enabled, loaded plugins (wakes sleeping ones)
 };
 
 }  // namespace zk

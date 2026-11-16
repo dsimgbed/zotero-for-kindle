@@ -391,7 +391,6 @@ struct PluginHost::Impl {
     }
 
     void setLoaded(const std::string& id, bool on) {
-        ++version;
         {
             std::lock_guard<std::mutex> lock(mu);
             entryList.erase(id);  // a fresh load registers again
@@ -401,6 +400,10 @@ struct PluginHost::Impl {
                 withTask.erase(id);
             }
         }
+        // After the change, never before: a screen that reads the new version in between would
+        // see the old list and, the version being current, never look again (the Home screen's
+        // Plugins icon went missing that way).
+        ++version;
         wakeUi();  // screens showing plugins look at the version
     }
 
@@ -1853,22 +1856,22 @@ bool hasEntry(PluginCtx& p, const std::string& kind, const std::string& id) {
 void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, const std::string& title, js::Value fn) {
     PluginEntry info{kind, id, title};
     p.run->entries.push_back({info, std::move(fn), {}});
-    ++p.host.version;
     {
         std::lock_guard<std::mutex> lock(p.host.mu);
         p.host.entryList[p.manifest.id].push_back(std::move(info));
     }
+    ++p.host.version;  // after the list changed (see setLoaded)
     wakeUi();  // screens showing plugins' entries look at the version
 }
 
 void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent) {
     PluginEntry info{"screen", id, title, main};
     p.run->entries.push_back({info, std::move(render), std::move(onEvent)});
-    ++p.host.version;
     {
         std::lock_guard<std::mutex> lock(p.host.mu);
         p.host.entryList[p.manifest.id].push_back(std::move(info));
     }
+    ++p.host.version;  // after the list changed (see setLoaded)
     wakeUi();  // screens showing plugins' entries look at the version
 }
 

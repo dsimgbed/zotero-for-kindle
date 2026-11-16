@@ -26,7 +26,7 @@ void PluginEvents::rebind(PluginHost* host, App& app) {
     for (const auto& [run, name] : runs_) outcomes_[run] = ActionOutcome{true, false, name + " couldn't do that: it stopped", {}};
     runs_.clear();
     host_ = host;
-    woken_ = false;
+    wokenAt_.reset();
     ++rebinds_;
 }
 
@@ -39,8 +39,11 @@ std::vector<PluginStatus> PluginEvents::running() {
         if (!s.loaded) asleep = true;
         else out.push_back(std::move(s));
     }
-    if (asleep && !woken_) {
-        woken_ = true;
+    // An enabled plugin that isn't loaded (not yet, or turned on again later) loads on the host's
+    // next activation: ask for one, once per change of the entries, or it would stay unloaded (and
+    // its Plugins icon hidden) until a sync or a background run happened to wake the host.
+    if (asleep && wokenAt_ != host_->entriesVersion()) {
+        wokenAt_ = host_->entriesVersion();
         host_->wake();
     }
     return out;

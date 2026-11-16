@@ -554,3 +554,21 @@ zk.setBadge("3 new");
     host.stop();
     app.closeAll();
 }
+
+TEST_CASE("plugin entries: a plugin turned off and on again wakes again, so Home's Plugins icon comes back") {
+    // Before: PluginEvents woke the host once per host. A plugin turned on later (lazy loading on
+    // the Kindle) stayed unloaded, its main screen unlisted, until a sync or background run.
+    FakePlugins fp;
+    fp.add("riffle", R"JS(zk.screen("deck", { title: "Riffle", main: true, render: () => zk.ui.text("deck") });)JS", {},
+           "Feed Riffle");
+    PluginHost host(fp.deps());  // lazy, as on the Kindle
+    host.setEnabled("riffle", true);
+    host.start();
+    PluginEvents events(&host);
+    REQUIRE(eventually([&] { return events.mainScreens().size() == 1; }));  // the first ask woke it
+    host.setEnabled("riffle", false);
+    REQUIRE(eventually([&] { return events.mainScreens().empty(); }));
+    host.setEnabled("riffle", true);
+    CHECK(eventually([&] { return events.mainScreens().size() == 1; }));  // woken again
+    host.stop();
+}
