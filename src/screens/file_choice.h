@@ -17,7 +17,8 @@ public:
     // choose: the item's row for the file tapped (exactFile), after this sheet has closed.
     using Choose = std::function<void(const ItemRow&, Nav&)>;
     // under: the screen it shows over (drawn beneath it); may be null.
-    FileChoiceScreen(ItemRow row, std::vector<FileChoice> files, Screen* under, Choose choose);
+    // cancel: called when the sheet is dismissed without a file chosen.
+    FileChoiceScreen(ItemRow row, std::vector<FileChoice> files, Screen* under, Choose choose, std::function<void()> cancel = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     bool showsTabBar() const override { return under_ ? under_->showsTabBar() : true; }
@@ -33,6 +34,7 @@ private:
     std::vector<FileChoice> files_;
     Screen* under_;
     Choose choose_;
+    std::function<void()> cancel_;
 };
 
 }  // namespace zk

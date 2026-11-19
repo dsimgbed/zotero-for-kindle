@@ -20,8 +20,9 @@ const TextStyle kSheetTitle{kSans, 11, 700}, kName{kSerif, 9.5, 700}, kMeta{kSan
 
 }  // namespace
 
-FileChoiceScreen::FileChoiceScreen(ItemRow row, std::vector<FileChoice> files, Screen* under, Choose choose)
-    : row_(std::move(row)), files_(std::move(files)), under_(under), choose_(std::move(choose)) {}
+FileChoiceScreen::FileChoiceScreen(ItemRow row, std::vector<FileChoice> files, Screen* under, Choose choose,
+                                   std::function<void()> cancel)
+    : row_(std::move(row)), files_(std::move(files)), under_(under), choose_(std::move(choose)), cancel_(std::move(cancel)) {}
 
 Rect FileChoiceScreen::area() const {
     return {0, 0, metrics().width, metrics().height - (showsTabBar() ? kTabBarH : 0)};
@@ -78,7 +79,12 @@ void FileChoiceScreen::draw(Canvas& canvas) {
 
 void FileChoiceScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
-    if (!sheetRect().contains(g.pos)) return nav.pop();
+    if (!sheetRect().contains(g.pos)) {
+        const auto cancel = cancel_;  // this screen goes with the pop
+        nav.pop();
+        if (cancel) cancel();
+        return;
+    }
     const auto rects = fileRects();
     for (size_t i = 0; i < rects.size(); ++i) {
         if (!rects[i].contains(g.pos)) continue;

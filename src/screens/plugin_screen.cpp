@@ -103,8 +103,8 @@ void PluginScreen::relayout(Nav& nav) {
 void PluginScreen::onShow(Nav& nav) {
     relayout(nav);  // the rows of items blocks are read afresh (what was read, finished or downloaded meanwhile)
     const bool asked = link_.takeItemOpened(instance_);  // zk.library.open
-    if (openedItem_ || asked) {
-        openedItem_ = false;
+    if (*openedItem_ || asked) {
+        *openedItem_ = false;
         enqueue({{"kind", "reader"}, {"closed", true}}, nav);
     }
 }
@@ -113,8 +113,9 @@ Rect PluginScreen::sheetArea() { return {0, 0, W(), H()}; }
 
 void PluginScreen::openItem(const ItemRow& row) {
     if (!tap_.open) return;
-    openedItem_ = true;
-    tap_.open(row);
+    tap_.open(row, [shown = openedItem_](const std::string& error) {
+        if (error.empty()) *shown = true;
+    });
 }
 
 void PluginScreen::sheetGesture(const Gesture& g, Nav& nav) {

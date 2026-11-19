@@ -622,12 +622,16 @@ struct ItemsRig {
     FakeLink link;
     std::unique_ptr<LibraryItemSource> source;
     std::vector<ItemRow> opened;
+    std::string outcome = "";  // what the open reports: "" the reader showed
     std::unique_ptr<PluginScreen> screen;
     ItemsRig() {
         fillFixtureLibrary(lib, 8);
         source = std::make_unique<LibraryItemSource>(lib, nullptr, [] { return int64_t{0}; });
         screen = std::make_unique<PluginScreen>(link, 1, "Feed Riffle", "Riffle", source.get(),
-                                                ItemTap{[this](const ItemRow& r) { opened.push_back(r); }});
+                                                ItemTap{[this](const ItemRow& r, std::function<void(const std::string&)> done) {
+                                                    opened.push_back(r);
+                                                    if (done) done(outcome);
+                                                }});
         nav.visible = screen.get();
         screen->onShow(nav);
         link.mail.push_back(treeEvent(json::parse(R"({"kind":"column","children":[
@@ -666,6 +670,17 @@ TEST_CASE("plugin screen items: once an item was opened, showing again tells the
     r.screen->onTick(r.nav);
     REQUIRE(r.link.sent.size() == 1);
     CHECK(r.link.sent[0] == json{{"kind", "reader"}, {"closed", true}});
+}
+
+TEST_CASE("plugin screen items: an open that failed or was cancelled sends no reader event when the screen shows again") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.outcome = "Cancelled";
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    r.screen->onShow(r.nav);
+    r.screen->onTick(r.nav);
+    CHECK(r.link.sent.empty());
 }
 
 TEST_CASE("plugin screen items: a long-press shows the item sheet; Close hides it; Open opens through ItemTap") {
@@ -727,7 +742,7 @@ zk.screen("deck", {
     ItemRef asked;
     std::optional<std::string> file;
     r.events->setItemOpener([&](App& a, const ItemRef& ref, std::optional<std::string> attachment,
-                                std::function<void(const std::string&)> answer, std::function<void()>) {
+                                std::function<void(const std::string&)> answer) {
         if (ref.key == "GONE") return answer("Item not found");
         asked = ref;
         file = attachment;

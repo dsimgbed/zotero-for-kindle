@@ -55,7 +55,8 @@ public:
 // What the app does with an item of an `items` block (no event goes to the plugin): `open` is the
 // app's own way of opening an item (tap; Open in the long-press sheet; Open in the item's details).
 struct ItemTap {
-    std::function<void(const ItemRow&)> open;
+    // `done` hears "" once the reader shows, else why not (see OpenFlow::open); may be empty.
+    std::function<void(const ItemRow&, std::function<void(const std::string&)> done)> open;
 };
 
 class PluginScreen final : public Screen {
@@ -129,7 +130,9 @@ private:
     ItemSource* items_;
     ItemTap tap_;
     std::optional<ItemSheet> sheet_;
-    bool openedItem_ = false;  // an item was opened from here: when the screen shows again, the reader closed
+    // An item opened from here has shown its reader (set when the open reports ""): when the screen
+    // shows again, the reader closed. Shared: the report may come after the screen is gone.
+    std::shared_ptr<bool> openedItem_ = std::make_shared<bool>(false);
 };
 
 }  // namespace zk

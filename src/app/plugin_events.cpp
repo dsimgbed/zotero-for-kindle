@@ -189,14 +189,8 @@ void PluginEvents::openItem(App& app, const PluginHostEvent& ev) {
         answer("The reader can't open this right now");
         return;
     }
-    auto closed = [this, instance, name = ev.pluginName] {
-        if (instance == 0 || !screens_.count(instance)) return;
-        PluginHostEvent c{PluginHostEvent::Kind::ReaderClosed, "", name, "", {}, 0, ""};
-        c.instance = instance;
-        mail_[instance].push_back(std::move(c));
-    };
     log(LogLevel::Info, "plugin %s opens item %s", ev.pluginId.c_str(), ref.key.c_str());
-    itemOpener_(app, ref, std::move(attachment), std::move(answer), std::move(closed));
+    itemOpener_(app, ref, std::move(attachment), std::move(answer));
 }
 
 void PluginEvents::poll(App& app) {

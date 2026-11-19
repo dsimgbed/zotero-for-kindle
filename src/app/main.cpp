@@ -625,19 +625,21 @@ int main(int argc, char** argv) {
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     // `items` blocks on plugin screens read the library as the app's own lists do; a tap opens the item.
     LibraryItemSource pluginItems(lib, flow.statusFn(), wallMs);
-    pluginEvents.setItemUi(&pluginItems, ItemTap{openItem});
+    pluginEvents.setItemUi(&pluginItems, ItemTap{[&flow, &app](const ItemRow& r, std::function<void(const std::string&)> done) {
+                               flow.open(r, app, std::nullopt, std::move(done));
+                           }});
     // zk.library.open: the same rule as an items block (the key, in that library if one is given), the
-    // file asked for if any. OpenFlow reports no completion, so the promise resolves as the open starts
-    // (a download then runs in the item's row).
+    // file asked for if any (a file the item hasn't: not found). The promise follows OpenFlow's outcome.
     pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
-                                             std::function<void(const std::string&)> answer, std::function<void()>) {
+                                             std::function<void(const std::string&)> answer) {
         auto row = lib.rowFor(ref.key);
         if (row && ref.library && row->lib != *ref.library) row.reset();
+        if (row && attachment) {
+            row = lib.rowFor(ref.key, *attachment);
+            if (row && !row->exactFile) row.reset();
+        }
         if (!row) return answer("Item not found");
-        if (attachment)
-            if (auto file = lib.rowFor(ref.key, *attachment)) row = std::move(file);
-        flow.open(*row, a);
-        answer("");
+        flow.open(*row, a, std::nullopt, std::move(answer));
     });
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto pushUpdateScreen = [&](Nav& nav) {

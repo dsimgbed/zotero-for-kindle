@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "screens/screen.h"
 
@@ -18,11 +19,17 @@ class OpenFlow {
 public:
     explicit OpenFlow(std::function<int64_t()> wallMs) : wallMs_(std::move(wallMs)) {}
 
-    void open(const ItemRow&, Nav&, std::optional<AnnotationRecord> at = std::nullopt);  // at: show this highlight
+    // `done` (optional) hears the outcome, once: "" when the reader (or the Book screen) shows,
+    // else why not ("Cancelled": the user left before the file came, backed out of "Open which
+    // file?", or the flow was reset; the failed download's message; "No EPUB, PDF or saved web page…").
+    // A failed download stays in the row for a retry; a retry's own `done` is what hears the next
+    // outcome. Opening what is already downloading joins that download: both hear its outcome.
+    using Done = std::function<void(const std::string& error)>;
+    void open(const ItemRow&, Nav&, std::optional<AnnotationRecord> at = std::nullopt, Done done = {});  // at: show this highlight
     void onSyncEvent(const SyncEvent&, Nav&);  // from App::setEventHook
     // By the file downloading, or by the row's file of an item whose other file is.
     std::string statusFor(const std::string& attachmentKey) const;
-    void reset() { pending_.clear(); }
+    void reset();
     // Opens a downloaded book in the reader; returns nullptr when it can't (then the Book screen).
     using ReaderFactory = std::function<std::unique_ptr<Screen>(const ItemRow&, Nav&)>;
     void setReaderFactory(ReaderFactory f) { readerFactory_ = std::move(f); }  // a new sync service: forget downloads the old one had
@@ -38,8 +45,9 @@ private:
         bool running = false;
         std::optional<AnnotationRecord> at;
         std::string listKey;  // the attachment key of the row it was tapped on
+        std::vector<Done> done;  // who waits for the outcome
     };
-    void start(const ItemRow&, Nav&, std::optional<AnnotationRecord> at, const std::string& listKey);
+    void start(const ItemRow&, Nav&, std::optional<AnnotationRecord> at, const std::string& listKey, Done done);
     void openNow(const ItemRow&, Nav&, const std::optional<AnnotationRecord>& at = std::nullopt);
 
     std::function<int64_t()> wallMs_;

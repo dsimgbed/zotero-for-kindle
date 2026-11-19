@@ -70,10 +70,10 @@ public:
     void setPreviewOpener(PreviewOpener f) { previewOpener_ = std::move(f); }
     // Library items (zk.library.open, ItemOpen): main resolves the ref and opens it the app's way
     // (OpenFlow). `answer` settles the plugin's promise ("" opened, else why not: "Item not found",
-    // "Cancelled", a download's error); `closed` tells the asking screen the reader closed (as for a
-    // preview). Unset: refused.
+    // "Cancelled", a download's error), "" once the reader shows; the asking screen is then told when
+    // it shows again that the reader closed. Unset: refused.
     using ItemOpener = std::function<void(App&, const ItemRef&, std::optional<std::string> attachment,
-                                          std::function<void(const std::string& error)> answer, std::function<void()> closed)>;
+                                          std::function<void(const std::string& error)> answer)>;
     void setItemOpener(ItemOpener f) { itemOpener_ = std::move(f); }
     // What plugin screens made from now on show `items` blocks with (see PluginScreen); `items`
     // outlives them.
