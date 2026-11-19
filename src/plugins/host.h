@@ -127,10 +127,11 @@ struct PluginHostEvent {
 };
 
 // What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen.
-// kind: "selectionAction", "itemAction" or "screen"; `main`: a screen listed in the launcher.
+// kind: "selectionAction", "itemAction" or "screen"; `main`: a screen listed in the launcher;
+// `home`: a screen that can be Home's body (Settings → Home).
 struct PluginEntry {
     std::string kind, id, title;
-    bool main = false;
+    bool main = false, home = false;
 };
 
 struct PluginStatus {
@@ -197,6 +198,11 @@ public:
     // The user left the screen (Back, or it went with its tab): it is closed now; the plugin gets
     // a `back` event, and the screen below a `result` event.
     void closeScreen(uint64_t instance);
+    // Runs an open screen's render again, with no event (Home's body when Home shows, after a sync):
+    // a ScreenTree follows (or a ScreenError), as after an event: the render budget, its time free.
+    // While the screen's onEvent or render runs, once that has ended (one render for any number of
+    // asks). Ignored for a screen closed or failed.
+    void rerender(uint64_t instance);
     // Runs a plugin's action (kind "selectionAction" or "itemAction") on `target` (zk.d.ts's
     // TextSelection or Item); `again` ({action, text}: a pop-up button) or null. User-caused, with
     // deps.actionBudgetMs (waiting for the user's confirmation is free). Returns its number at

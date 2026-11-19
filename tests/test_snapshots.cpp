@@ -641,6 +641,7 @@ TEST_CASE("snapshots: the Text bar offers a plugin's selection actions under Mor
             return {{"explain", "Explainer", "explain", "Explain"}};
         }
         std::vector<PluginLaunch> mainScreens() override { return {}; }
+        std::vector<PluginLaunch> homeScreens() override { return {}; }
         bool anyBadge() override { return false; }
         uint64_t version() override { return 1; }
         uint64_t run(const PluginAction&, const std::string&, nlohmann::ordered_json, nlohmann::json) override { return 1; }

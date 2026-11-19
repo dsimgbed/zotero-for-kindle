@@ -444,3 +444,50 @@ zk.screen("s", {
     CHECK(Host::firstText(*t) == "n=2 u=1");
     CHECK_FALSE(h.next(Kind::ScreenTree, s, 300));
 }
+
+TEST_CASE("screens host: `home` marks a screen for Home's body; anything but true/false throws") {
+    Host h(R"JS(
+zk.screen("desk", { title: "Reading Desk", home: true, render: () => zk.ui.text("desk") });
+zk.screen("all", { title: "All pins", home: false, render: () => zk.ui.text("all") });
+try { zk.screen("bad", { title: "Bad", home: "x", render: () => 1 }); console.log("ACCEPTED"); } catch (e) { console.log(`${e.name}: ${e.message}`); }
+)JS");
+    h.host->dispatch({"syncFinished", {}, false});
+    h.host->waitIdle(3000);
+    const std::string log = h.log();
+    CAPTURE(log);
+    CHECK(log.find("ACCEPTED") == std::string::npos);
+    CHECK(log.find("TypeError: zk.screen: `home` must be true or false") != std::string::npos);
+    const auto all = h.host->status();
+    const auto st = statusOf(all, "p");
+    REQUIRE(st->entries.size() == 2);
+    CHECK(st->entries[0].home);
+    CHECK_FALSE(st->entries[0].main);
+    CHECK_FALSE(st->entries[1].home);
+}
+
+TEST_CASE("screens host: rerender runs render again with no event; a new tree follows; closed or failed: nothing") {
+    Host h(R"JS(
+let n = 0, events = 0;
+zk.screen("s", { title: "S", render: () => zk.ui.text(`n=${++n} events=${events}`), onEvent() { events++; } });
+zk.screen("f", { title: "F", render: () => { throw new Error("nope"); } });
+)JS");
+    const uint64_t s = h.host->openScreen("p", "s");
+    auto t = h.next(Kind::ScreenTree, s);
+    REQUIRE(t);
+    CHECK(Host::firstText(*t) == "n=1 events=1");  // the open event
+    h.host->rerender(s);
+    t = h.next(Kind::ScreenTree, s);
+    REQUIRE(t);
+    CHECK(Host::firstText(*t) == "n=2 events=1");  // no event reached onEvent
+    CHECK(t->requestId == 0);                       // it answers no event of the app's
+    h.host->closeScreen(s);
+    h.host->rerender(s);
+    CHECK_FALSE(h.next(Kind::ScreenTree, s, 300));
+    const uint64_t f = h.host->openScreen("p", "f");
+    REQUIRE(h.next(Kind::ScreenError, f));
+    const int failures = h.failures();
+    h.host->rerender(f);
+    CHECK_FALSE(h.next(Kind::ScreenTree, f, 300));
+    CHECK_FALSE(h.next(Kind::ScreenError, f, 100));
+    CHECK(h.failures() == failures);
+}

@@ -761,3 +761,83 @@ zk.screen("deck", {
     r.app.pop();  // out of the reader
     REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
 }
+
+// PluginBody on its own, as Home's body uses it: no header, laid out in the owner's Rect.
+TEST_CASE("plugin body: laid out in the Rect it is given; taps queue as on a screen; Working… at the Rect's top") {
+    ScopedMetrics m(kPw5);
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    const Rect area{40, 500, metrics().width - 80, 700};
+    PluginBody body(link, 1, "Feed Riffle", "Desk", [&](Nav&) { return area; }, TreeUse::HomeBody);
+    body.onShow(nav);
+    CHECK(body.state() == PluginBody::State::Loading);
+    CHECK_FALSE(body.laid());
+    link.mail.push_back(treeEvent(deckScreen()));
+    body.onTick(nav);
+    REQUIRE(body.state() == PluginBody::State::Shown);
+    REQUIRE(body.laid());
+    for (const Laid& c : body.laid()->children) CHECK(inside(area, c.rect));
+    const Laid buttons = body.laid()->children.at(3);
+    const Rect keep = buttons.parts.at(2).rect;
+    body.onGesture(tapAt({keep.x + keep.w / 2, keep.y + keep.h / 2}), nav);
+    REQUIRE(link.sent.size() == 1);
+    CHECK(link.sent[0] == json{{"kind", "tap"}, {"id", "keep"}});
+    nav.damages.clear();
+    nav.now += PluginBody::kWorkingMs;
+    body.onTick(nav);
+    CHECK(body.working());
+    REQUIRE(nav.damages.size() == 1);
+    CHECK(nav.damages[0].rect == PluginBody::workingRect(area));
+    CHECK(PluginBody::workingRect(area).y == area.y + 4);
+    CHECK(PluginScreen::workingRect() == PluginBody::workingRect(blocksArea()));  // where a screen's always was
+    body.onClose(nav);
+    CHECK(link.leftScreens == std::vector<uint64_t>{1});
+}
+
+TEST_CASE("plugin body: for Home (TreeUse::HomeBody) a tree with a search or field fails it, no keyboard; a screen's takes it") {
+    ScopedMetrics m(kPw5);
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    PluginBody home(link, 1, "Feed Riffle", "Desk", [](Nav&) { return blocksArea(); }, TreeUse::HomeBody);
+    link.mail.push_back(treeEvent(formScreen()));  // a focused search
+    home.onTick(nav);
+    CHECK(home.state() == PluginBody::State::Failed);
+    CHECK(home.errorText() == "Feed Riffle can't show this screen right now");
+    CHECK_FALSE(home.wantsKeyboard());
+    CHECK_FALSE(nav.keyboardFake.shown);
+    link.mail.push_back(treeEvent(deckScreen()));  // nothing more is shown once failed
+    home.onTick(nav);
+    CHECK(home.state() == PluginBody::State::Failed);
+
+    PluginBody screen(link, 2, "Feed Riffle", "Form", [](Nav&) { return blocksArea(); });
+    link.mail.push_back(treeEvent(formScreen()));
+    screen.onTick(nav);
+    CHECK(screen.state() == PluginBody::State::Shown);
+    CHECK(screen.wantsKeyboard());
+}
+
+TEST_CASE("plugin body: the plugin closing its screen stops the body and tells its owner") {
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    PluginBody body(link, 1, "Feed Riffle", "Desk", [](Nav&) { return blocksArea(); }, TreeUse::HomeBody);
+    int closes = 0;
+    body.onPluginClose([&](Nav&) { ++closes; });
+    link.mail.push_back(treeEvent(deckScreen()));
+    PluginHostEvent close{Kind::ScreenClose, "riffle", "Feed Riffle", "", {}, 0, ""};
+    close.instance = 1;
+    link.mail.push_back(close);
+    link.mail.push_back(treeEvent(deckScreen()));
+    body.onTick(nav);
+    CHECK(closes == 1);
+    CHECK(body.closedByPlugin());
+    CHECK(link.mail.size() == 1);  // nothing more taken
+    CHECK(nav.pops == 0);          // the owner decides
+    body.onClose(nav);
+    CHECK(link.leftScreens.empty());  // the plugin closed it: no `left`
+}

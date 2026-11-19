@@ -21,7 +21,7 @@ struct PluginAction {
     std::string pluginId, pluginName, id, title;
 };
 
-struct PluginLaunch {  // a plugin's main screen, for the launcher
+struct PluginLaunch {  // a plugin's main screen, for the launcher; or a home screen, for Settings → Home
     std::string pluginId, pluginName, screenId, title, badge;
 };
 
@@ -39,6 +39,8 @@ public:
     // kind "selectionAction" or "itemAction": every enabled, running plugin's, in plugin order.
     virtual std::vector<PluginAction> actions(const std::string& kind) = 0;
     virtual std::vector<PluginLaunch> mainScreens() = 0;
+    // The screens that can be Home's body (zk.screen's `home`), in plugin order.
+    virtual std::vector<PluginLaunch> homeScreens() = 0;
     virtual bool anyBadge() = 0;
     // Changes whenever what the three above return may have changed (cheap: for onTick).
     virtual uint64_t version() = 0;

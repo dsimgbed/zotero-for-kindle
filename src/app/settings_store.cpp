@@ -13,13 +13,15 @@ AppSettings loadSettings(Library& lib) {
     if (j.contains("flashEvery") && j["flashEvery"].is_number_integer()) s.flashEvery = j["flashEvery"].get<int>();
     if (j.contains("landscapeReading") && j["landscapeReading"].is_boolean()) s.landscapeReading = j["landscapeReading"].get<bool>();
     if (j.contains("twoColumns") && j["twoColumns"].is_number_integer()) s.twoColumns = j["twoColumns"].get<int>();
+    if (j.contains("homeScreen") && j["homeScreen"].is_string()) s.homeScreen = j["homeScreen"].get<std::string>();
     return s;
 }
 
 void saveSettings(Library& lib, const AppSettings& s) {
     lib.setMetaValue("settings",
                      nlohmann::json{{"syncIntervalMinutes", s.syncIntervalMinutes}, {"flashEvery", s.flashEvery},
-                                    {"landscapeReading", s.landscapeReading}, {"twoColumns", s.twoColumns}}
+                                    {"landscapeReading", s.landscapeReading}, {"twoColumns", s.twoColumns},
+                                    {"homeScreen", s.homeScreen}}
                          .dump());
 }
 

@@ -222,7 +222,8 @@ bool checkEntryId(JSContext*, JSValueConst v, const char* fn, const std::string&
 
 // ---- Screens (bindings_ui.cpp; the host keeps the open screens) ------------------------------
 
-void addScreen(PluginCtx&, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent);
+void addScreen(PluginCtx&, const std::string& id, const std::string& title, bool main, bool home, js::Value render,
+               js::Value onEvent);
 // zk.ui.open / zk.ui.close: "" when recorded (they take effect when the running call ends), else
 // the message of the Error to throw. params / result: nullopt for undefined.
 std::string uiOpen(PluginCtx&, const std::string& screenId, std::optional<nlohmann::json> params);

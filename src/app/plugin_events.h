@@ -93,6 +93,7 @@ public:
     void attach(App& app) { app_ = &app; }
     std::vector<PluginAction> actions(const std::string& kind) override;
     std::vector<PluginLaunch> mainScreens() override;
+    std::vector<PluginLaunch> homeScreens() override;
     bool anyBadge() override;
     uint64_t version() override;
     uint64_t run(const PluginAction&, const std::string& kind, nlohmann::ordered_json target, nlohmann::json again = nullptr) override;

@@ -1,9 +1,11 @@
 #pragma once
 // Settings (spec §7.7): account, WebDAV, the read tag, sync interval, "Keep all highlights
-// offline", downloaded files, full refresh, plugins, about. With group libraries (or a key that
+// offline", downloaded files, full refresh, plugins, Home (only when some running plugin has a
+// home screen, or one was chosen: settings_home.h), about. With group libraries (or a key that
 // can't read them), the account row also names where files come from, and WebDAV's place is the
 // Group libraries row: a summary and "›", opening the list of groups with a switch each.
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -45,6 +47,9 @@ public:
     Rect flashPlusRect() const;
     Rect updateRect() const;
     Rect pluginsRect() const;  // the whole Plugins row: opens the list
+    bool homeRow() const { return homeRow_; }
+    Rect homeRect() const;  // the whole Home row (empty without it): opens Settings → Home
+    std::string homeLine() const { return homeLine_; }  // "Built-in", "Reading Desk — Desk", "Desk — not available"
     bool groupsRow() const { return groupsRow_; }
     Rect groupsRect() const;  // the whole Group libraries row (in WebDAV's place): opens the list
     std::string groupsLine() const { return groupsLine_; }  // "2 on · 1 no longer available"
@@ -61,6 +66,7 @@ public:
 
 private:
     void load(Library&);
+    void loadHome(Nav&);
     Config config_;
     std::function<void(Nav&)> changeAccount_;
     Updater* updater_ = nullptr;
@@ -80,6 +86,9 @@ private:
     int keptCount_ = 0;  // collections kept downloaded (keptCountFor)
     bool groupsRow_ = false;
     std::string groupsLine_;
+    bool homeRow_ = false;
+    std::string homeLine_;
+    std::optional<uint64_t> homeVersion_;  // the plugin entries' version when the Home row was read
 };
 
 }  // namespace zk

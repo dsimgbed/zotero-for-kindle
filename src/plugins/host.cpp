@@ -1387,6 +1387,16 @@ struct PluginHost::Impl {
         applyTurnOffs();
     }
 
+    void rerender(uint64_t instance) {
+        PluginCtx* p = withScreen(instance);
+        PluginRun::OpenScreen* sc = p ? screenOf(*p, instance) : nullptr;
+        if (!sc || sc->closed || sc->failed) return;
+        sc->refreshDue = sc->refreshByUser = true;  // as a user-caused zk.ui.refresh: at once, its time free
+        sc->refreshAtMs = 0;
+        pumpScreen(*p, instance);
+        applyTurnOffs();
+    }
+
     // zk.ui.refresh: the plugin's showing screen (the last opened that is still open) renders again.
     // From a user-caused call at once; otherwise (a timer, say) at most once every quietRefreshMs,
     // the refreshes asked for meanwhile merged into one.
@@ -1864,8 +1874,9 @@ void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, cons
     wakeUi();  // screens showing plugins' entries look at the version
 }
 
-void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent) {
-    PluginEntry info{"screen", id, title, main};
+void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, bool home, js::Value render,
+               js::Value onEvent) {
+    PluginEntry info{"screen", id, title, main, home};
     p.run->entries.push_back({info, std::move(render), std::move(onEvent)});
     {
         std::lock_guard<std::mutex> lock(p.host.mu);
@@ -2031,6 +2042,10 @@ void PluginHost::screenEvent(uint64_t instance, nlohmann::json event) {
 
 void PluginHost::closeScreen(uint64_t instance) {
     impl_->post([instance](Impl& h) { h.closeScreen(instance); });
+}
+
+void PluginHost::rerender(uint64_t instance) {
+    impl_->post([instance](Impl& h) { h.rerender(instance); });
 }
 
 uint64_t PluginHost::runAction(const std::string& pluginId, const std::string& kind, const std::string& actionId,

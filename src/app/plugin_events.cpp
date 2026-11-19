@@ -65,6 +65,14 @@ std::vector<PluginLaunch> PluginEvents::mainScreens() {
     return out;
 }
 
+std::vector<PluginLaunch> PluginEvents::homeScreens() {
+    std::vector<PluginLaunch> out;
+    for (const auto& s : running())
+        for (const auto& e : s.entries)
+            if (e.kind == "screen" && e.home) out.push_back({s.folder.dir, s.folder.manifest->name, e.id, e.title, s.badge});
+    return out;
+}
+
 bool PluginEvents::anyBadge() {
     for (const auto& s : running())
         if (!s.badge.empty()) return true;
