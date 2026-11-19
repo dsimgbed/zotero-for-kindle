@@ -13,6 +13,8 @@ type-checks them against the API, so they can't go stale.
 - [A deck of cards](#a-deck-of-cards)
 - [A form](#a-form)
 - [A list with search](#a-list-with-search)
+- [Items drawn by the app](#items-drawn-by-the-app)
+- [Your own Home](#your-own-home)
 
 ## Export highlights
 
@@ -344,6 +346,77 @@ zk.screen("collections", {
       picked = null;
     } else if (e.kind === "change") query = e.text;
     else if (e.kind === "select") picked = e.row;
+  },
+});
+```
+
+## Items drawn by the app
+
+An `items` block shows library items, each with its title, authors and reading progress, from their
+keys alone. The app opens one on a tap and shows its menu on a long-press, so the plugin hears
+neither; it only hears `{ kind: "reader", closed: true }` once the reader of an item opened that way
+is closed. For your own button, `zk.library.open` does the same in answer to the user. An `items`
+block is repainted when the progress of one of its items changes.
+
+<!-- recipe: sdk/recipes/show-items.ts -->
+```ts
+// Show items with their reading progress, and open one from your own button.
+// plugin.json: "permissions": ["library:read"], "minApp": "0.10.0"
+
+let keys: string[] = [];
+let message = "";
+
+zk.screen("unread", {
+  title: "Unread",
+  main: true,
+  render: async () => {
+    keys = [];
+    for await (const item of zk.library.items({ read: false, limit: 5 })) keys.push(item.key);
+    return zk.ui.column([
+      // A tap on a row opens the item and a long-press shows its menu; the plugin hears neither.
+      zk.ui.items({ id: "unread", style: "row", items: keys, empty: "Everything is read" }),
+      keys.length > 0 && zk.ui.button({ id: "first", title: "Open the first", primary: true }),
+      message && zk.ui.notice(message),
+    ]);
+  },
+  onEvent: async (e) => {
+    if (e.kind === "open") message = "";
+    else if (e.kind === "tap" && e.id === "first" && keys[0]) {
+      // Only in answer to the user. Resolves when the reader shows, rejects if it can't open.
+      try {
+        await zk.library.open(keys[0]);
+      } catch (err) {
+        message = `Couldn't open it: ${err instanceof Error ? err.message : err}`;
+      }
+    } else if (e.kind === "reader") message = "Welcome back";
+  },
+});
+```
+
+## Your own Home
+
+A screen with `home: true` is offered in **Settings → Home**. Once the user picks it, it is the body
+of the app's Home: the app keeps the title, icons, search field, banners and tab bar. See
+[Home](concepts.md#home-written-by-a-plugin). The example plugin
+[Reading Desk](../../sdk/examples/reading-desk/src/main.ts) is a fuller one: Continue, pinned items
+and an inbox.
+
+<!-- recipe: sdk/recipes/home.ts -->
+```ts
+// Your own Home: the three items you opened last, as cards. Choose it in Settings → Home.
+// plugin.json: "permissions": ["library:read"], "minApp": "0.10.0"
+
+zk.screen("home", {
+  title: "Reading now",
+  home: true, // offered in Settings → Home; render takes no params
+  render: async () => {
+    const keys: string[] = [];
+    // Most recently opened first; stop as soon as there are enough.
+    for await (const item of zk.library.items({ opened: true, limit: 3 })) keys.push(item.key);
+    // The app draws the items, keeps their progress current and opens them on a tap.
+    return zk.ui.column([
+      zk.ui.items({ id: "recent", style: "card", items: keys, empty: "Nothing opened yet" }),
+    ]);
   },
 });
 ```
