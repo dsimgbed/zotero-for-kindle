@@ -6,6 +6,23 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.10.0 (unreleased): a Home of your own
+
+- `zk.screen(id, { home: true, … })` offers a screen as the body of the app's Home; the user picks it
+  in Settings → Home. The app keeps Home's frame (title, icons, search, banners, tab bar); the body
+  may hold every block except `search` and `field`. Home falls back to the built-in body, silently,
+  when the plugin is off, gone or slow (no first tree within 1 s) or the screen fails.
+- `zk.ui.items({ id, style: "card" | "row", items, empty? })` — library items drawn by the app, with
+  their reading progress, repainted when that changes. A tap opens the item, a long-press shows its
+  menu; neither reaches the plugin. `ItemRef` is a key or `{ key, library?, label? }`.
+- `zk.library.open(item, { attachment? })` — opens an item in the reader; only in answer to the
+  user; permission `library:read`. Resolves when the reader shows; rejects if the item is gone, the
+  download fails or is cancelled.
+- `Item.progress` (0…1 on this Kindle, `null` never opened), `.openedAt`, `.addedAt`, `.format`;
+  `zk.library.items({ opened: true })` (most recent first) and `{ read }`.
+- The `reader` event is also sent when an item opened from an `items` block or `zk.library.open`
+  closes.
+
 ## 0.9.0 (unreleased): previews, and a deck that fills the screen
 
 - `zk.reader.open({ url, title? } | { html, title, baseUrl? })` — opens a document in the reader as a

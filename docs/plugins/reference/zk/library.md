@@ -17,6 +17,7 @@ Everything comes back as plain objects; nothing is live.
 - [items](library/items.md)
 - [libraries](library/libraries.md)
 - [notes](library/notes.md)
+- [open](library/open.md)
 - [recentAnnotations](library/recentAnnotations.md)
 - [search](library/search.md)
 - [tags](library/tags.md)

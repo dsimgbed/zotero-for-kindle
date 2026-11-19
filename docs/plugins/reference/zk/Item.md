@@ -10,6 +10,7 @@ empty are `null`; lists are empty arrays.
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="abstract"></a> `abstract` | `string` \| `null` | - |
+| <a id="addedat"></a> `addedAt` | `string` | When it was added to Zotero (its `dateAdded`, ISO 8601). Needs app 0.10.0. |
 | <a id="arxiv"></a> `arxiv` | `string` \| `null` | The arXiv id, without a version suffix (`"2401.01234"`). |
 | <a id="citationkey"></a> `citationKey` | `string` \| `null` | The citation key: Zotero's own `citationKey` field when it has one, else the `Citation Key:` line Better BibTeX writes into *Extra*. |
 | <a id="collections"></a> `collections` | `string`[] | Keys of the collections it is in. |
@@ -17,10 +18,13 @@ empty are `null`; lists are empty arrays.
 | <a id="date"></a> `date` | `string` \| `null` | The date as entered in Zotero (free-form, e.g. `"2024-01-03"` or `"March 2019"`). |
 | <a id="doi"></a> `doi` | `string` \| `null` | The DOI, without a `https://doi.org/` prefix. |
 | <a id="extra"></a> `extra` | `string` \| `null` | Zotero's *Extra* field. |
+| <a id="format"></a> `format` | `"EPUB"` \| `"PDF"` \| `"WEB"` \| `null` | The format of the attachment the app opens: `null` if it has none it can read. Needs app 0.10.0. |
 | <a id="isbn"></a> `isbn` | `string` \| `null` | - |
 | <a id="key"></a> `key` | `string` | Zotero's key, e.g. `"ABCD2345"`. |
 | <a id="libraryid"></a> `libraryId` | `number` | Its library: 0 My Library, else the Zotero group's id. Needs app 0.8.0. |
 | <a id="libraryname"></a> `libraryName` | `string` | Its library's name: `"My Library"` or the group's name. Needs app 0.8.0. |
+| <a id="openedat"></a> `openedAt` | `string` \| `null` | When the user last opened it on this Kindle (ISO 8601), `null` if never. Needs app 0.10.0. |
+| <a id="progress"></a> `progress` | `number` \| `null` | How far the user has read on this Kindle, 0…1 (the furthest place reached in the item's attachment); `null` if it was never opened here. Not synced, and not the read mark (`read`). Needs app 0.10.0. |
 | <a id="publication"></a> `publication` | `string` \| `null` | Journal, book, proceedings or website title. |
 | <a id="read"></a> `read` | `boolean` | Whether it is marked read. |
 | <a id="tags"></a> `tags` | `string`[] | Tag names. |

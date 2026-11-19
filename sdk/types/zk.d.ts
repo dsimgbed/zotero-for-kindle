@@ -630,6 +630,27 @@ declare namespace zk {
      * const words = text.split(/\s+/).length;
      */
     function fullText(attachmentKey: string): Promise<string>;
+
+    /**
+     * Opens an item in the app's reader, as if the user had tapped it in the library: its
+     * attachment (the one named by `options.attachment`, else the one the app would open) opens at
+     * the reading place saved on this Kindle, downloading first if needed. Back returns to the
+     * screen as it was, and the screen gets a `{ kind: "reader", closed: true }` event.
+     *
+     * Only in answer to the user (a screen's `onEvent`, an action's `run`), like
+     * {@link zk.reader.open}; from a background task or a timer it throws, and nothing opens. The
+     * promise resolves when the reader shows, and rejects with the reason when it can't: the item
+     * is gone or unreadable (`"Item not found"`), the download failed, or the user cancelled it
+     * (`"Cancelled"`). An unknown key never opens anything.
+     *
+     * **Permission**: `library:read`. Needs app 0.10.0.
+     *
+     * @example
+     * if (e.kind === "tap" && e.id === "continue") await zk.library.open(lastKey);
+     * @example
+     * await zk.library.open({ key: item.key, library: item.libraryId }, { attachment: pdf.key });
+     */
+    function open(item: string | { key: string; library?: number }, options?: { attachment?: string }): Promise<void>;
   }
 
   /** Filters for {@link zk.library.items}. They combine: an item must match all that are given. */
@@ -642,6 +663,19 @@ declare namespace zk {
     library?: number;
     /** Stop after this many items. */
     limit?: number;
+    /**
+     * `true`: only items opened on this Kindle, the most recently opened first (the order of the
+     * app's Recent list). Needs app 0.10.0.
+     *
+     * @example
+     * for await (const item of zk.library.items({ opened: true, limit: 5 })) console.log(item.title, item.progress);
+     */
+    opened?: true;
+    /**
+     * Only items marked read (`true`) or not marked read (`false`): the read mark, never
+     * progress. Needs app 0.10.0.
+     */
+    read?: boolean;
   }
 
   // ───────────────────────────── Changing the library ─────────────────────────────
@@ -1138,6 +1172,34 @@ declare namespace zk {
   interface ScreenSpec<P = undefined> {
     /** Shown in the header (with the plugin's name), and in the launcher for a main screen. Short. */
     title: string;
+    /**
+     * Offer this screen as the body of the app's Home (Settings → Home lists it as
+     * "<title> — <plugin name>"; the user picks one). Default `false`. Needs app 0.10.0.
+     *
+     * The app keeps Home's frame: the title and sync line, the Plugins, settings, sync and close
+     * icons, the search field, the error, safe-mode and update banners, and the tab bar. The screen
+     * draws only the body between the search field and the banners/tab bar, and its `render` takes
+     * no params. The body may hold every block except {@link zk.ui.search} and {@link zk.ui.field};
+     * a tree with one is invalid for Home.
+     *
+     * Home falls back to the app's built-in body, with no message, when plugins are off (safe mode,
+     * stopped for an install), the chosen plugin is disabled, removed or incompatible or has no such
+     * screen, no tree has been drawn yet and the first one doesn't arrive within 1 s (the last tree
+     * is kept and drawn first on the next start), or `render`/`onEvent` fails. The next time Home
+     * shows, the plugin is tried again. A periodic sync that changes nothing repaints nothing.
+     *
+     * @example
+     * zk.screen("home", {
+     *   title: "Reading now",
+     *   home: true,
+     *   render: async () => {
+     *     const keys: string[] = [];
+     *     for await (const i of zk.library.items({ opened: true, limit: 3 })) keys.push(i.key);
+     *     return zk.ui.column([zk.ui.items({ id: "recent", style: "card", items: keys, empty: "Nothing opened yet" })]);
+     *   },
+     * });
+     */
+    home?: boolean;
     /** List this screen in the Plugins launcher (opened there with no params). Default `false`. */
     main?: boolean;
     /**
@@ -1223,6 +1285,26 @@ declare namespace zk {
      * zk.ui.deck({ id: "cards", card: top && zk.ui.card({ title: top.title }), empty: "Nothing left to riffle" });
      */
     function deck(deck: Omit<DeckBlock, "kind">): DeckBlock;
+
+    /**
+     * Library items drawn by the app: a `card` (title, authors, progress) or a `row` per item,
+     * paged like the app's lists. The app resolves the keys itself, so the rows always show the
+     * item's current title and reading progress, and repaints just this block when they change.
+     * Items that are missing, in a switched-off group or unreadable are skipped silently; if all
+     * are, `empty` shows (none: the block draws nothing).
+     *
+     * **Taps and long-presses never reach the plugin**: a tap opens the item in the reader (the
+     * screen then gets a `{ kind: "reader", closed: true }` event when it closes), a long-press
+     * shows the library's own item menu. Use {@link zk.library.open} to open one in answer to
+     * your own button. Reading the items needs `library:read`. Needs app 0.10.0.
+     *
+     * @example
+     * zk.ui.items({ id: "recent", style: "row", items: keys, empty: "Nothing opened yet" });
+     * @example
+     * // an item from a group library, with its own label
+     * zk.ui.items({ id: "pick", style: "card", items: [{ key: "ABCD2345", library: 12, label: "Up next" }] });
+     */
+    function items(items: Omit<ItemsBlock, "kind">): ItemsBlock;
 
     /**
      * Rows the user picks from, paged like the app's lists; tapping a row sends a `select`
@@ -1355,6 +1437,7 @@ declare namespace zk {
       | TextBlock
       | CardBlock
       | DeckBlock
+      | ItemsBlock
       | ListBlock
       | SearchBlock
       | FieldBlock
@@ -1428,6 +1511,26 @@ declare namespace zk {
       /** The card on top; `null` (or absent) when there is none. */
       card?: CardBlock | null;
       /** Shown when there is no card. */
+      empty?: string;
+    }
+
+    /** An item for an {@link items} block: its key, or the key with its library and a label. */
+    type ItemRef = string | {
+      key: string;
+      /** 0 My Library (the default), else a group's id ({@link zk.library.libraries}). */
+      library?: number;
+      /** A short line shown with the item (e.g. "Up next"). */
+      label?: string;
+    };
+
+    /** See {@link items}. */
+    interface ItemsBlock {
+      kind: "items";
+      id: string;
+      /** `"card"`: a large entry per item; `"row"`: a compact line per item. */
+      style: "card" | "row";
+      items: ItemRef[];
+      /** Shown when none of the items can be read. */
       empty?: string;
     }
 
@@ -1552,7 +1655,8 @@ declare namespace zk {
      *   (`undefined` if closed with Back or without a result).
      * - `back` — the user left this screen. It is already closed; nothing is rendered after.
      * - `reader` — a preview this screen opened with {@link zk.reader.open} closed (`closed:
-     *   true`): the screen shows again as it was. Needs app 0.9.0.
+     *   true`): the screen shows again as it was. Needs app 0.9.0. Also sent (app 0.10.0) when an
+     *   item opened from an {@link items} block or with {@link zk.library.open} closes.
      *
      * @example
      * onEvent: async (e) => {
@@ -1644,6 +1748,18 @@ declare namespace zk {
     collections: string[];
     /** Whether it is marked read. */
     read: boolean;
+    /**
+     * How far the user has read on this Kindle, 0…1 (the furthest place reached in the item's
+     * attachment); `null` if it was never opened here. Not synced, and not the read mark
+     * (`read`). Needs app 0.10.0.
+     */
+    progress: number | null;
+    /** When the user last opened it on this Kindle (ISO 8601), `null` if never. Needs app 0.10.0. */
+    openedAt: string | null;
+    /** When it was added to Zotero (its `dateAdded`, ISO 8601). Needs app 0.10.0. */
+    addedAt: string;
+    /** The format of the attachment the app opens: `null` if it has none it can read. Needs app 0.10.0. */
+    format: "EPUB" | "PDF" | "WEB" | null;
     /** Zotero's *Extra* field. */
     extra: string | null;
     /**
