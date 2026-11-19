@@ -14,17 +14,24 @@
 //   any other event), `submit` on Enter (a multi-line field gets a new line). The blocks are laid
 //   out above the keyboard, on the page that holds the focused input.
 // - Each new tree redraws only the top-level blocks that changed (diffTrees picks the waveforms).
+// - Items (the `items` block): a tap opens the item the app's way (ItemTap::open), nothing goes to
+//   the plugin; a long-press shows the item sheet over the screen (Changed: the blocks are laid
+//   out again, the rows read afresh). When the screen shows again after an item was opened (by a
+//   tap, or by the plugin's zk.library.open), `{kind: "reader", closed: true}` goes to the plugin.
 // - Back always works: the screen closes at once and the plugin hears `back` afterwards.
 
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
 #include "plugins/host.h"
+#include "screens/item_sheet.h"
 #include "screens/plugin_blocks.h"
 #include "screens/plugin_result.h"
 #include "screens/screen.h"
@@ -40,6 +47,15 @@ public:
     virtual void left(uint64_t instance) = 0;
     // The next ScreenTree/ScreenError/ScreenActionError/ScreenClose for this screen, if any.
     virtual bool take(uint64_t instance, PluginHostEvent& out) = 0;
+    // Whether an item this screen's plugin opened (zk.library.open) has been opened since the last
+    // call; the screen tells the plugin when it shows again (the reader closed).
+    virtual bool takeItemOpened(uint64_t) { return false; }
+};
+
+// What the app does with an item of an `items` block (no event goes to the plugin): `open` is the
+// app's own way of opening an item (tap; Open in the long-press sheet; Open in the item's details).
+struct ItemTap {
+    std::function<void(const ItemRow&)> open;
 };
 
 class PluginScreen final : public Screen {
@@ -48,7 +64,9 @@ public:
     static constexpr int64_t kWorkingMs = 1000;  // waiting → "Working…"
     enum class State { Loading, Shown, Failed };
 
-    PluginScreen(ScreenLink&, uint64_t instance, std::string pluginName, std::string title);
+    // `items` resolves the refs of items blocks (null: they draw nothing); it outlives the screen.
+    PluginScreen(ScreenLink&, uint64_t instance, std::string pluginName, std::string title, ItemSource* items = nullptr,
+                 ItemTap tap = {});
 
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
@@ -69,6 +87,7 @@ public:
     const Laid* laid() const { return tree_ ? &laid_ : nullptr; }
     const FocusState& focus() const { return focus_; }
     const PluginResult* errorPopup() const { return popup_.get(); }
+    const ItemSheet* sheet() const { return sheet_ ? &*sheet_ : nullptr; }  // a long-press on an item
     Rect area(Nav&) const;  // where the blocks go (above the keyboard)
     static Rect workingRect();
     static Rect backButtonRect();  // the error state's Back button
@@ -85,6 +104,9 @@ private:
     void leave(Nav&);
     void tapBlocks(Point, Nav&);
     int nameReserve() const;
+    void openItem(const ItemRow&);
+    void sheetGesture(const Gesture&, Nav&);
+    static Rect sheetArea();
 
     ScreenLink& link_;
     const uint64_t instance_;
@@ -104,6 +126,10 @@ private:
     bool working_ = false;
     bool closedByPlugin_ = false, left_ = false;
     std::unique_ptr<PluginResult> popup_;  // an onEvent error
+    ItemSource* items_;
+    ItemTap tap_;
+    std::optional<ItemSheet> sheet_;
+    bool openedItem_ = false;  // an item was opened from here: when the screen shows again, the reader closed
 };
 
 }  // namespace zk

@@ -91,6 +91,7 @@ const Op kOps[] = {
     {"recent", Permission::AnnotationsRead, "zk.library.recentAnnotations()"},
     {"notes", Permission::NotesRead, "zk.library.notes()"},
     {"fullText", Permission::FulltextRead, "zk.library.fullText()"},
+    {"open", Permission::LibraryRead, "zk.library.open()"},
 };
 
 const Op* opNamed(const std::string& name) {
@@ -439,6 +440,30 @@ JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv)
     return promise;
 }
 
+// n.open(json): zk.library.open (0.10), the item opened in the reader in answer to the user. The screen
+// thread resolves the item and opens it (ItemOpen, see host.h) and answers with PluginHost::answerReader.
+JSValue openNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    PluginCtx& p = ctxOf(c);
+    std::string raw;
+    if (!arg(c, argc, argv, 0, raw)) return JS_EXCEPTION;
+    uint64_t screen = 0;
+    if (const std::string err = userAnswerCheck(p, "zk.library.open", &screen); !err.empty())
+        return JS_ThrowPlainError(c, "%s", err.c_str());
+    auto value = nlohmann::json::parse(raw, nullptr, false);
+    JSValue promise = JS_UNDEFINED;
+    auto work = startWork(p, &promise);
+    if (work->cancelled()) return promise;  // already rejected (the call was stopped)
+    PluginHostEvent ev{PluginHostEvent::Kind::ItemOpen, "", "", "", {}, 0, ""};
+    ev.instance = screen;
+    ev.value = std::move(value);
+    const uint64_t id = waitForUi(p, std::move(ev), [work](const std::string& error) {
+        if (error.empty()) work->finish([](JSContext*) { return JS_UNDEFINED; });
+        else work->reject(error);
+    });
+    if (id == 0) work->reject("zk.library.open: the call was stopped");
+    return promise;
+}
+
 // ---- What plugins see ---------------------------------------------------------------------
 
 const char kLibraryJs[] = R"JS((function (n) {
@@ -529,6 +554,22 @@ const library = {
                  since === null ? undefined : (a) => Date.parse(a.modified) < since);
   },
   async notes(itemKey) { n.need("notes"); return n.call("notes", key(itemKey, "notes")); },
+  open(item, options) {
+    n.need("open");
+    const ref = typeof item === "string" ? { key: item } : item;
+    if (ref === null || typeof ref !== "object" || typeof ref.key !== "string")
+      throw new TypeError("zk.library.open: pass an item's key, or { key, library? }");
+    if (ref.library !== undefined && !(Number.isInteger(ref.library) && ref.library >= 0))
+      throw new TypeError("zk.library.open: library must be a library's id (0 for My Library)");
+    if (options !== undefined && (options === null || typeof options !== "object"))
+      throw new TypeError("zk.library.open: the options must be an object");
+    const at = options === undefined ? undefined : options.attachment;
+    if (at !== undefined && typeof at !== "string") throw new TypeError("zk.library.open: attachment must be a key");
+    const v = { key: ref.key };
+    if (ref.library !== undefined) v.library = ref.library;
+    if (at !== undefined) v.attachment = at;
+    return n.open(JSON.stringify(v));
+  },
   async fullText(attachmentKey) { n.need("fullText"); return n.fullText(key(attachmentKey, "fullText")); },
 };
 return library;
@@ -548,6 +589,7 @@ void installLibrary(PluginCtx& p) {
     defineFunction<needNative>(c, natives.raw(), "need", 1);
     defineFunction<callNative>(c, natives.raw(), "call", 6);
     defineFunction<fullTextNative>(c, natives.raw(), "fullText", 1);
+    defineFunction<openNative>(c, natives.raw(), "open", 1);
 
     const char* name = "<zk library>";
     js::Value fn(c, JS_Eval(c, kLibraryJs, sizeof kLibraryJs - 1, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_STRICT));

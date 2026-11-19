@@ -106,11 +106,15 @@ struct PluginHostDeps {
 // action's run); answer with PluginHost::answerReader(requestId) once the reader shows (or it
 // failed or was cancelled). A Withdrawn with that requestId: nobody waits for the answer any more.
 // ReaderClosed is the app's own (never the host's): the preview over `instance` closed.
+// ItemOpen (zk.library.open, 0.10): open the library item `value` ({key, library?, attachment?}) in the
+// reader, `instance` the screen it was asked from (0: an action's run); answered with answerReader as
+// ReaderOpen is ("" once it shows, else "Item not found", "Cancelled", the download's error); a
+// Withdrawn with that requestId: nobody waits.
 struct PluginHostEvent {
     enum class Kind {
         Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
         ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError,
-        ActionResult, ActionError, ReaderOpen, ReaderClosed
+        ActionResult, ActionError, ReaderOpen, ReaderClosed, ItemOpen
     } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;

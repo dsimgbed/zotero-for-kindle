@@ -46,6 +46,7 @@
 #include "screens/home.h"
 #include "screens/library.h"
 #include "screens/notes.h"
+#include "screens/item_source.h"
 #include "screens/open_flow.h"
 #include "screens/reader.h"
 #include "docs/engine_factory.h"
@@ -622,6 +623,22 @@ int main(int argc, char** argv) {
             loadSettings(lib).flashEvery, lipc.get());
     });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
+    // `items` blocks on plugin screens read the library as the app's own lists do; a tap opens the item.
+    LibraryItemSource pluginItems(lib, flow.statusFn(), wallMs);
+    pluginEvents.setItemUi(&pluginItems, ItemTap{openItem});
+    // zk.library.open: the same rule as an items block (the key, in that library if one is given), the
+    // file asked for if any. OpenFlow reports no completion, so the promise resolves as the open starts
+    // (a download then runs in the item's row).
+    pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
+                                             std::function<void(const std::string&)> answer, std::function<void()>) {
+        auto row = lib.rowFor(ref.key);
+        if (row && ref.library && row->lib != *ref.library) row.reset();
+        if (!row) return answer("Item not found");
+        if (attachment)
+            if (auto file = lib.rowFor(ref.key, *attachment)) row = std::move(file);
+        flow.open(*row, a);
+        answer("");
+    });
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto pushUpdateScreen = [&](Nav& nav) {
         nav.push(std::make_unique<UpdateScreen>(

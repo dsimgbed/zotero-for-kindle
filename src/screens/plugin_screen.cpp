@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "screens/item_details.h"
 #include "screens/plugin_diff.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -63,8 +64,10 @@ void popCodePoint(std::string& s) {
 
 }  // namespace
 
-PluginScreen::PluginScreen(ScreenLink& link, uint64_t instance, std::string pluginName, std::string title)
-    : link_(link), instance_(instance), pluginName_(std::move(pluginName)), title_(std::move(title)) {}
+PluginScreen::PluginScreen(ScreenLink& link, uint64_t instance, std::string pluginName, std::string title, ItemSource* items,
+                           ItemTap tap)
+    : link_(link), instance_(instance), pluginName_(std::move(pluginName)), title_(std::move(title)), items_(items),
+      tap_(std::move(tap)) {}
 
 Rect PluginScreen::area(Nav& nav) const {
     Rect a = blocksArea();
@@ -84,11 +87,11 @@ int PluginScreen::nameReserve() const {
 void PluginScreen::relayout(Nav& nav) {
     if (!tree_) return;
     const Rect a = area(nav);
-    laid_ = layoutTree(*tree_, a, page_);
+    laid_ = layoutTree(*tree_, a, page_, items_);
     page_ = laid_.page;
     if (focus_.focused.empty() || findLaid(laid_, focus_.focused)) return;
     for (int p = 0; p < laid_.pages; ++p) {  // the page that holds the focused input
-        Laid l = layoutTree(*tree_, a, p);
+        Laid l = layoutTree(*tree_, a, p, items_);
         if (findLaid(l, focus_.focused)) {
             laid_ = std::move(l);
             page_ = p;
@@ -97,7 +100,51 @@ void PluginScreen::relayout(Nav& nav) {
     }
 }
 
-void PluginScreen::onShow(Nav& nav) { relayout(nav); }
+void PluginScreen::onShow(Nav& nav) {
+    relayout(nav);  // the rows of items blocks are read afresh (what was read, finished or downloaded meanwhile)
+    const bool asked = link_.takeItemOpened(instance_);  // zk.library.open
+    if (openedItem_ || asked) {
+        openedItem_ = false;
+        enqueue({{"kind", "reader"}, {"closed", true}}, nav);
+    }
+}
+
+Rect PluginScreen::sheetArea() { return {0, 0, W(), H()}; }
+
+void PluginScreen::openItem(const ItemRow& row) {
+    if (!tap_.open) return;
+    openedItem_ = true;
+    tap_.open(row);
+}
+
+void PluginScreen::sheetGesture(const Gesture& g, Nav& nav) {
+    const Rect area = sheetArea();
+    switch (sheet_->onGesture(g, area, nav)) {
+        case ItemSheet::Action::Close:
+            sheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::Open: {
+            const ItemRow row = sheet_->row();
+            sheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            openItem(row);
+            break;
+        }
+        case ItemSheet::Action::Changed:  // marked read or unread, or the file removed: the rows are read again
+            relayout(nav);
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::More: {
+            const ItemRow row = sheet_->row();
+            sheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            nav.push(std::make_unique<ItemDetailsScreen>(row, [this](const ItemRow& r) { openItem(r); }));
+            break;
+        }
+        case ItemSheet::Action::None: break;
+    }
+}
 
 void PluginScreen::setFocus(const std::string& id, Nav& nav) {
     if (id == focus_.focused) return;
@@ -249,7 +296,7 @@ void PluginScreen::turnPage(int delta, Nav& nav) {
     if (np == page_) return;
     const Laid before = std::move(laid_);
     page_ = np;
-    laid_ = layoutTree(*tree_, area(nav), page_);
+    laid_ = layoutTree(*tree_, area(nav), page_, items_);
     if (!focus_.focused.empty() && !findLaid(laid_, focus_.focused)) {
         setFocus("", nav);  // its input went off the page: the keyboard goes
         return;
@@ -286,6 +333,9 @@ void PluginScreen::tapBlocks(Point p, Nav& nav) {
             enqueue({{"kind", "chips"}, {"id", hit->id}, {"chip", hit->part}, {"selected", sel}}, nav);
             break;
         }
+        case K::Items:
+            if (hit->item) openItem(*hit->item);
+            break;
         case K::Search:
         case K::Field: setFocus(hit->id, nav); break;
         default: break;
@@ -293,6 +343,10 @@ void PluginScreen::tapBlocks(Point p, Nav& nav) {
 }
 
 void PluginScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (sheet_) {  // the sheet takes every gesture until it is closed
+        sheetGesture(g, nav);
+        return;
+    }
     if (g.type == GestureType::Tap && headerBackRect().contains(g.pos)) {
         leave(nav);
         return;
@@ -306,7 +360,14 @@ void PluginScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (state_ != State::Shown) return;
-    if (g.type == GestureType::Tap) {
+    if (g.type == GestureType::LongPress) {
+        const auto hit = hitTest(laid_, g.pos);
+        if (hit && hit->kind == K::Items && hit->item)
+            if (auto d = nav.library().details(hit->item->key)) {
+                sheet_.emplace(*hit->item, std::move(*d));
+                nav.damage(sheetArea(), Waveform::Ui);
+            }
+    } else if (g.type == GestureType::Tap) {
         tapBlocks(g.pos, nav);
     } else if (g.type == GestureType::Swipe) {
         const auto hit = hitTest(laid_, g.start);
@@ -363,7 +424,8 @@ void PluginScreen::draw(Canvas& canvas) {
             drawButton(cr, backButtonRect(), "Back", false);
             break;
         case State::Shown:
-            drawTree(cr, laid_, focus_);
+            drawTree(cr, laid_, focus_, items_);
+            if (sheet_) sheet_->draw(cr, sheetArea());
             if (working_) drawToast(cr, workingRect(), "Working…");
             break;
     }

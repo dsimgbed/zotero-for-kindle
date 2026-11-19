@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <chrono>
+#include <deque>
 #include <filesystem>
+#include <thread>
 
 #include "fake_plugins.h"
 #include "plugins/host.h"
@@ -734,4 +737,143 @@ TEST_CASE("library: findByIdentifier stays fast on a large library (the index is
     host.dispatch(kRun);
     REQUIRE(host.waitIdle(25000));
     CHECK(contains(env.fp.log("a"), R"(OUT ["found",800,true])"));
+}
+
+// ---- zk.library.open (0.10) ----------------------------------------------------------------------
+
+namespace {
+
+// A screen whose tap opens items; `said` shows how the last call went. A syncFinished handler tries too.
+const char* kOpenScreen = R"JS(
+let said = "nothing";
+const tryOpen = (item, options) => {
+  try {
+    zk.library.open(item, options).then(() => { said = "opened"; zk.ui.refresh(); }, (e) => { said = "rejected: " + e.message; zk.ui.refresh(); });
+    return "asked";
+  } catch (e) { return e.name + ": " + e.message; }
+};
+zk.screen("main", {
+  title: "Open",
+  render: () => zk.ui.column([zk.ui.text(said)]),
+  onEvent: (e) => {
+    if (e.kind === "tap" && e.id === "key") said = tryOpen("ABCD2345");
+    if (e.kind === "tap" && e.id === "ref") said = tryOpen({ key: "ABCD2345", library: 7 }, { attachment: "FILE0001" });
+    if (e.kind === "tap" && e.id === "bad") said = tryOpen({ library: 7 });
+    if (e.kind === "reader") said = "reader closed: " + e.closed;
+  },
+});
+zk.on("syncFinished", () => {
+  said = "handler: " + tryOpen("ABCD2345");
+  setTimeout(() => { said += " | timer: " + tryOpen("ABCD2345"); }, 20);
+});
+)JS";
+
+struct OpenHost {
+    FakePlugins fp;
+    std::unique_ptr<PluginHost> host;
+    std::deque<PluginHostEvent> got;
+    explicit OpenHost(const std::vector<std::string>& perms = {"library:read"}) {
+        fp.add("p", kOpenScreen, perms);
+        host = std::make_unique<PluginHost>(fp.deps());
+        host->setEnabled("p", true);
+        host->start();
+    }
+    ~OpenHost() { host->stop(); }
+    std::optional<PluginHostEvent> next(PluginHostEvent::Kind kind, int ms = 3000) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        for (;;) {
+            PluginHostEvent ev;
+            while (host->poll(ev)) got.push_back(std::move(ev));
+            for (auto it = got.begin(); it != got.end(); ++it)
+                if (it->kind == kind) {
+                    PluginHostEvent out = std::move(*it);
+                    got.erase(it);
+                    return out;
+                }
+            if (std::chrono::steady_clock::now() >= end) return std::nullopt;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    std::string nextText() {
+        auto ev = next(PluginHostEvent::Kind::ScreenTree);
+        REQUIRE(ev);
+        const Block& b = ev->tree->kind == Block::Kind::Column ? ev->tree->children.at(0) : *ev->tree;
+        return plainText(b);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("library open: a key from onEvent asks the screen to open it; resolves on the answer, the wait is free") {
+    OpenHost h;
+    const uint64_t s = h.host->openScreen("p", "main");
+    h.nextText();
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "key"}});
+    auto open = h.next(PluginHostEvent::Kind::ItemOpen);
+    REQUIRE(open);
+    CHECK(open->instance == s);
+    CHECK(open->value == nlohmann::json{{"key", "ABCD2345"}});
+    CHECK(h.nextText() == "asked");
+    h.host->answerReader(open->requestId, "");
+    CHECK(h.nextText() == "opened");
+}
+
+TEST_CASE("library open: { key, library } and the attachment option reach the screen thread") {
+    OpenHost h;
+    const uint64_t s = h.host->openScreen("p", "main");
+    h.nextText();
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "ref"}});
+    auto open = h.next(PluginHostEvent::Kind::ItemOpen);
+    REQUIRE(open);
+    CHECK(open->value == nlohmann::json{{"key", "ABCD2345"}, {"library", 7}, {"attachment", "FILE0001"}});
+}
+
+TEST_CASE("library open: an unknown item or a cancelled open rejects with the reason") {
+    OpenHost h;
+    const uint64_t s = h.host->openScreen("p", "main");
+    h.nextText();
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "key"}});
+    auto open = h.next(PluginHostEvent::Kind::ItemOpen);
+    REQUIRE(open);
+    h.nextText();
+    h.host->answerReader(open->requestId, "Item not found");
+    CHECK(h.nextText() == "rejected: Item not found");
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "key"}});
+    open = h.next(PluginHostEvent::Kind::ItemOpen);
+    REQUIRE(open);
+    h.nextText();
+    h.host->answerReader(open->requestId, "Cancelled");
+    CHECK(h.nextText() == "rejected: Cancelled");
+}
+
+TEST_CASE("library open: a bad shape throws and opens nothing; without library:read it is a permission error") {
+    {
+        OpenHost h;
+        const uint64_t s = h.host->openScreen("p", "main");
+        h.nextText();
+        h.host->screenEvent(s, {{"kind", "tap"}, {"id", "bad"}});
+        CHECK(h.nextText() == "TypeError: zk.library.open: pass an item's key, or { key, library? }");
+        CHECK_FALSE(h.next(PluginHostEvent::Kind::ItemOpen, 100));
+    }
+    {
+        OpenHost h({});
+        const uint64_t s = h.host->openScreen("p", "main");
+        h.nextText();
+        h.host->screenEvent(s, {{"kind", "tap"}, {"id", "key"}});
+        CHECK(h.nextText().find("PermissionError") == 0);
+        CHECK_FALSE(h.next(PluginHostEvent::Kind::ItemOpen, 100));
+    }
+}
+
+TEST_CASE("library open [review focus]: from a handler or a timer it throws: only in answer to the user") {
+    OpenHost h;
+    const uint64_t s = h.host->openScreen("p", "main");
+    h.nextText();
+    h.host->dispatch(PluginEvent{"syncFinished", nlohmann::json::object(), false});
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    h.host->screenEvent(s, {{"kind", "noop"}});
+    const std::string said = h.nextText();
+    CHECK(said.find("handler: Error: zk.library.open: only in answer to the user") == 0);
+    CHECK(said.find(" | timer: Error: zk.library.open: only in answer to the user") != std::string::npos);
+    CHECK_FALSE(h.next(PluginHostEvent::Kind::ItemOpen, 100));
 }

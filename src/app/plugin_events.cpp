@@ -107,7 +107,7 @@ void PluginEvents::openScreen(const std::string& pluginId, const std::string& sc
 
 void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginName, const std::string& title) {
     screens_[instance] = pluginName;
-    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title));
+    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title, items_, itemTap_));
 }
 
 uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
@@ -140,6 +140,7 @@ void PluginEvents::send(uint64_t instance, nlohmann::json event) {
 void PluginEvents::left(uint64_t instance) {
     screens_.erase(instance);
     mail_.erase(instance);
+    itemOpened_.erase(instance);
     if (host_) host_->closeScreen(instance);
 }
 
@@ -170,6 +171,32 @@ void PluginEvents::openPreview(App& app, const PluginHostEvent& ev) {
     };
     log(LogLevel::Info, "plugin %s opens a preview", ev.pluginId.c_str());
     previewOpener_(app, ev, std::move(answer), std::move(closed));
+}
+
+void PluginEvents::openItem(App& app, const PluginHostEvent& ev) {
+    const uint64_t id = ev.requestId, instance = ev.instance, bound = rebinds_;
+    auto answer = [this, id, instance, bound](const std::string& error) {
+        if (!host_ || rebinds_ != bound) return;  // the host that asked
+        if (error.empty() && instance != 0 && screens_.count(instance)) itemOpened_.insert(instance);
+        host_->answerReader(id, error);
+    };
+    ItemRef ref;
+    ref.key = ev.value.value("key", "");
+    if (ev.value.contains("library") && ev.value["library"].is_number_integer()) ref.library = ev.value["library"].get<int64_t>();
+    std::optional<std::string> attachment;
+    if (ev.value.contains("attachment") && ev.value["attachment"].is_string()) attachment = ev.value["attachment"].get<std::string>();
+    if (!itemOpener_ || ref.key.empty() || (instance != 0 && !screens_.count(instance))) {
+        answer("The reader can't open this right now");
+        return;
+    }
+    auto closed = [this, instance, name = ev.pluginName] {
+        if (instance == 0 || !screens_.count(instance)) return;
+        PluginHostEvent c{PluginHostEvent::Kind::ReaderClosed, "", name, "", {}, 0, ""};
+        c.instance = instance;
+        mail_[instance].push_back(std::move(c));
+    };
+    log(LogLevel::Info, "plugin %s opens item %s", ev.pluginId.c_str(), ref.key.c_str());
+    itemOpener_(app, ref, std::move(attachment), std::move(answer), std::move(closed));
 }
 
 void PluginEvents::poll(App& app) {
@@ -229,6 +256,9 @@ void PluginEvents::poll(App& app) {
             }
             case PluginHostEvent::Kind::ReaderOpen:
                 openPreview(app, ev);
+                break;
+            case PluginHostEvent::Kind::ItemOpen:
+                openItem(app, ev);
                 break;
             case PluginHostEvent::Kind::ReaderClosed:  // the app's own: never from the host
                 break;

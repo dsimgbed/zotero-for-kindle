@@ -607,3 +607,142 @@ zk.screen("deck", {
     r.app.pop();  // Back, out of the reader
     REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
 }
+
+// ---- Items (the `items` block): taps open the item the app's way, long-press shows the sheet -------
+
+#include "screens/item_source.h"
+#include "fixture_library.h"
+
+namespace {
+
+struct ItemsRig {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    std::unique_ptr<LibraryItemSource> source;
+    std::vector<ItemRow> opened;
+    std::unique_ptr<PluginScreen> screen;
+    ItemsRig() {
+        fillFixtureLibrary(lib, 8);
+        source = std::make_unique<LibraryItemSource>(lib, nullptr, [] { return int64_t{0}; });
+        screen = std::make_unique<PluginScreen>(link, 1, "Feed Riffle", "Riffle", source.get(),
+                                                ItemTap{[this](const ItemRow& r) { opened.push_back(r); }});
+        nav.visible = screen.get();
+        screen->onShow(nav);
+        link.mail.push_back(treeEvent(json::parse(R"({"kind":"column","children":[
+          {"kind":"items","id":"recent","style":"row","items":["IT000000","GONE","IT000003"]}]})"), 0));
+        screen->onTick(nav);
+    }
+    Point first() {
+        const Laid* l = findLaid(*screen->laid(), "recent");
+        REQUIRE(l);
+        REQUIRE(l->parts.size() == 2);
+        return {l->parts[0].rect.x + 20, l->parts[0].rect.y + l->parts[0].rect.h / 2};
+    }
+};
+
+}  // namespace
+
+TEST_CASE("plugin screen items: a tap on a row opens that item through ItemTap and tells the plugin nothing") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    REQUIRE(r.opened.size() == 1);
+    CHECK(r.opened[0].key == "IT000000");
+    CHECK(r.link.sent.empty());
+}
+
+TEST_CASE("plugin screen items: once an item was opened, showing again tells the plugin the reader closed") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onShow(r.nav);
+    r.screen->onTick(r.nav);
+    CHECK(r.link.sent.empty());  // nothing opened yet
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    r.screen->onShow(r.nav);  // the reader closed
+    r.screen->onTick(r.nav);
+    REQUIRE(r.link.sent.size() == 1);
+    CHECK(r.link.sent[0] == json{{"kind", "reader"}, {"closed", true}});
+}
+
+TEST_CASE("plugin screen items: a long-press shows the item sheet; Close hides it; Open opens through ItemTap") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    CHECK(r.screen->sheet()->row().key == "IT000000");
+    CHECK(r.link.sent.empty());
+    const Rect area{0, 0, metrics().width, metrics().height};
+    r.screen->onGesture(tapAt({metrics().width / 2, 20}), r.nav);  // above the sheet
+    CHECK_FALSE(r.screen->sheet());
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    const Rect open = r.screen->sheet()->openRect(area);
+    r.screen->onGesture(tapAt({open.x + open.w / 2, open.y + open.h / 2}), r.nav);
+    CHECK_FALSE(r.screen->sheet());
+    REQUIRE(r.opened.size() == 1);
+    CHECK(r.opened[0].key == "IT000000");
+}
+
+TEST_CASE("plugin screen items: Mark as read in the sheet reads the rows again, with no call to the plugin") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    REQUIRE_FALSE(r.screen->laid()->children.at(0).items.at(0).read);
+    const Rect area{0, 0, metrics().width, metrics().height};
+    const Rect read = r.screen->sheet()->readRect(area);
+    r.screen->onGesture(tapAt({read.x + read.w / 2, read.y + read.h / 2}), r.nav);
+    CHECK(r.screen->laid()->children.at(0).items.at(0).read);
+    CHECK(r.link.sent.empty());
+}
+
+TEST_CASE("plugin screen, end to end: zk.library.open opens through the item opener; unknown → \"Item not found\"; Back brings a `reader` event") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.button({ id: "read", title: "Read" }), zk.ui.button({ id: "lost", title: "Lost" })]),
+  async onEvent(e) {
+    if (e.kind === "tap") {
+      try { await zk.library.open(e.id === "read" ? { key: "BOOK0001", library: 0 } : "GONE", { attachment: "FILE0001" }); said = "opened"; }
+      catch (err) { said = "rejected: " + err.message; }
+    }
+    if (e.kind === "reader") said = "back from the reader";
+  },
+});
+)JS", {"library:read"});
+    struct Shown final : Screen {
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+    };
+    ItemRef asked;
+    std::optional<std::string> file;
+    r.events->setItemOpener([&](App& a, const ItemRef& ref, std::optional<std::string> attachment,
+                                std::function<void(const std::string&)> answer, std::function<void()>) {
+        if (ref.key == "GONE") return answer("Item not found");
+        asked = ref;
+        file = attachment;
+        a.push(std::make_unique<Shown>());
+        answer("");
+    });
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("lost");
+    REQUIRE(r.until([&] { return r.shown("rejected: Item not found"); }));
+    r.tapButton("read");
+    REQUIRE(r.until([&] { return dynamic_cast<const Shown*>(r.app.top()) != nullptr; }));
+    CHECK(asked.key == "BOOK0001");
+    CHECK(asked.library == 0);
+    CHECK(file == "FILE0001");
+    r.app.pop();  // out of the reader
+    REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
+}
