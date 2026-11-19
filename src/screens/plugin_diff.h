@@ -16,8 +16,8 @@ struct Damage {
 };
 
 // Unchanged blocks: no damage. Text changed (a text or a notice) → Fast; a deck's card changed
-// or a block turned its page → Quality; anything else (buttons, chips, a list's rows, a block
-// added, removed or moved) → Ui. A changed block's old and new rects are redrawn; damage
+// or a block turned its page → Quality (an items block of cards too); anything else (buttons, chips, a list's rows, a block
+// added, removed or moved) → Ui. An items block also changes when the rows its refs resolved to do. A changed block's old and new rects are redrawn; damage
 // overlapping or a block gap apart is merged (the stronger waveform wins).
 std::vector<Damage> diffTrees(const Laid& before, const Laid& after);
 

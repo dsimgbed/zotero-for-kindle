@@ -37,10 +37,11 @@ bool fonts() {
 
 struct FakeLink : ScreenLink {
     std::vector<json> sent;
-    std::vector<uint64_t> leftScreens;
+    std::vector<uint64_t> leftScreens, rerendered;
     std::deque<PluginHostEvent> mail;
     void send(uint64_t, json e) override { sent.push_back(std::move(e)); }
     void left(uint64_t instance) override { leftScreens.push_back(instance); }
+    void rerender(uint64_t instance) override { rerendered.push_back(instance); }
     bool take(uint64_t, PluginHostEvent& out) override {
         if (mail.empty()) return false;
         out = std::move(mail.front());
@@ -606,4 +607,244 @@ zk.screen("deck", {
     CHECK(asked["url"] == "https://arxiv.org/pdf/2401.01234v2");
     r.app.pop();  // Back, out of the reader
     REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
+}
+
+// ---- Items (the `items` block): taps open the item the app's way, long-press shows the sheet -------
+
+#include "screens/item_source.h"
+#include "fixture_library.h"
+
+namespace {
+
+struct ItemsRig {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    std::unique_ptr<LibraryItemSource> source;
+    std::vector<ItemRow> opened;
+    std::string outcome = "";  // what the open reports: "" the reader showed
+    std::unique_ptr<PluginScreen> screen;
+    ItemsRig() {
+        fillFixtureLibrary(lib, 8);
+        source = std::make_unique<LibraryItemSource>(lib, nullptr, [] { return int64_t{0}; });
+        screen = std::make_unique<PluginScreen>(link, 1, "Feed Riffle", "Riffle", source.get(),
+                                                ItemTap{[this](const ItemRow& r, std::function<void(const std::string&)> done) {
+                                                    opened.push_back(r);
+                                                    if (done) done(outcome);
+                                                }});
+        nav.visible = screen.get();
+        screen->onShow(nav);
+        link.mail.push_back(treeEvent(json::parse(R"({"kind":"column","children":[
+          {"kind":"items","id":"recent","style":"row","items":["IT000000","GONE","IT000003"]}]})"), 0));
+        screen->onTick(nav);
+    }
+    Point first() {
+        const Laid* l = findLaid(*screen->laid(), "recent");
+        REQUIRE(l);
+        REQUIRE(l->parts.size() == 2);
+        return {l->parts[0].rect.x + 20, l->parts[0].rect.y + l->parts[0].rect.h / 2};
+    }
+};
+
+}  // namespace
+
+TEST_CASE("plugin screen items: a tap on a row opens that item through ItemTap and tells the plugin nothing") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    REQUIRE(r.opened.size() == 1);
+    CHECK(r.opened[0].key == "IT000000");
+    CHECK(r.link.sent.empty());
+}
+
+TEST_CASE("plugin screen items: once an item was opened, showing again tells the plugin the reader closed") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onShow(r.nav);
+    r.screen->onTick(r.nav);
+    CHECK(r.link.sent.empty());  // nothing opened yet
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    r.screen->onShow(r.nav);  // the reader closed
+    r.screen->onTick(r.nav);
+    REQUIRE(r.link.sent.size() == 1);
+    CHECK(r.link.sent[0] == json{{"kind", "reader"}, {"closed", true}});
+}
+
+TEST_CASE("plugin screen items: an open that failed or was cancelled sends no reader event when the screen shows again") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.outcome = "Cancelled";
+    r.screen->onGesture(tapAt(r.first()), r.nav);
+    r.screen->onShow(r.nav);
+    r.screen->onTick(r.nav);
+    CHECK(r.link.sent.empty());
+}
+
+TEST_CASE("plugin screen items: a long-press shows the item sheet; Close hides it; Open opens through ItemTap") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    CHECK(r.screen->sheet()->row().key == "IT000000");
+    CHECK(r.link.sent.empty());
+    const Rect area{0, 0, metrics().width, metrics().height};
+    r.screen->onGesture(tapAt({metrics().width / 2, 20}), r.nav);  // above the sheet
+    CHECK_FALSE(r.screen->sheet());
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    const Rect open = r.screen->sheet()->openRect(area);
+    r.screen->onGesture(tapAt({open.x + open.w / 2, open.y + open.h / 2}), r.nav);
+    CHECK_FALSE(r.screen->sheet());
+    REQUIRE(r.opened.size() == 1);
+    CHECK(r.opened[0].key == "IT000000");
+}
+
+TEST_CASE("plugin screen items: Mark as read in the sheet reads the rows again, with no call to the plugin") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.screen->onGesture(Gesture{GestureType::LongPress, r.first(), r.first()}, r.nav);
+    REQUIRE(r.screen->sheet());
+    REQUIRE_FALSE(r.screen->laid()->children.at(0).items.at(0).read);
+    const Rect area{0, 0, metrics().width, metrics().height};
+    const Rect read = r.screen->sheet()->readRect(area);
+    r.screen->onGesture(tapAt({read.x + read.w / 2, read.y + read.h / 2}), r.nav);
+    CHECK(r.screen->laid()->children.at(0).items.at(0).read);
+    CHECK(r.link.sent.empty());
+    CHECK(r.link.rerendered == std::vector<uint64_t>{1});  // the plugin renders again (the item may leave its list)
+}
+
+TEST_CASE("plugin screen, end to end: zk.library.open opens through the item opener; unknown → \"Item not found\"; Back brings a `reader` event") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.button({ id: "read", title: "Read" }), zk.ui.button({ id: "lost", title: "Lost" })]),
+  async onEvent(e) {
+    if (e.kind === "tap") {
+      try { await zk.library.open(e.id === "read" ? { key: "BOOK0001", library: 0 } : "GONE", { attachment: "FILE0001" }); said = "opened"; }
+      catch (err) { said = "rejected: " + err.message; }
+    }
+    if (e.kind === "reader") said = "back from the reader";
+  },
+});
+)JS", {"library:read"});
+    struct Shown final : Screen {
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+    };
+    ItemRef asked;
+    std::optional<std::string> file;
+    r.events->setItemOpener([&](App& a, const ItemRef& ref, std::optional<std::string> attachment,
+                                std::function<void(const std::string&)> answer) {
+        if (ref.key == "GONE") return answer("Item not found");
+        asked = ref;
+        file = attachment;
+        a.push(std::make_unique<Shown>());
+        answer("");
+    });
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("lost");
+    REQUIRE(r.until([&] { return r.shown("rejected: Item not found"); }));
+    r.tapButton("read");
+    REQUIRE(r.until([&] { return dynamic_cast<const Shown*>(r.app.top()) != nullptr; }));
+    CHECK(asked.key == "BOOK0001");
+    CHECK(asked.library == 0);
+    CHECK(file == "FILE0001");
+    r.app.pop();  // out of the reader
+    REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
+}
+
+// PluginBody on its own, as Home's body uses it: no header, laid out in the owner's Rect.
+TEST_CASE("plugin body: laid out in the Rect it is given; taps queue as on a screen; Working… at the Rect's top") {
+    ScopedMetrics m(kPw5);
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    const Rect area{40, 500, metrics().width - 80, 700};
+    PluginBody body(link, 1, "Feed Riffle", "Desk", [&](Nav&) { return area; }, TreeUse::HomeBody);
+    body.onShow(nav);
+    CHECK(body.state() == PluginBody::State::Loading);
+    CHECK_FALSE(body.laid());
+    link.mail.push_back(treeEvent(deckScreen()));
+    body.onTick(nav);
+    REQUIRE(body.state() == PluginBody::State::Shown);
+    REQUIRE(body.laid());
+    for (const Laid& c : body.laid()->children) CHECK(inside(area, c.rect));
+    const Laid buttons = body.laid()->children.at(3);
+    const Rect keep = buttons.parts.at(2).rect;
+    body.onGesture(tapAt({keep.x + keep.w / 2, keep.y + keep.h / 2}), nav);
+    REQUIRE(link.sent.size() == 1);
+    CHECK(link.sent[0] == json{{"kind", "tap"}, {"id", "keep"}});
+    nav.damages.clear();
+    nav.now += PluginBody::kWorkingMs;
+    body.onTick(nav);
+    CHECK(body.working());
+    REQUIRE(nav.damages.size() == 1);
+    CHECK(nav.damages[0].rect == PluginBody::workingRect(area));
+    CHECK(PluginBody::workingRect(area).y == area.y + 4);
+    CHECK(PluginScreen::workingRect() == PluginBody::workingRect(blocksArea()));  // where a screen's always was
+    body.onClose(nav);
+    CHECK(link.leftScreens == std::vector<uint64_t>{1});
+}
+
+TEST_CASE("plugin body: for Home (TreeUse::HomeBody) a tree with a search or field fails it, no keyboard; a screen's takes it") {
+    ScopedMetrics m(kPw5);
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    PluginBody home(link, 1, "Feed Riffle", "Desk", [](Nav&) { return blocksArea(); }, TreeUse::HomeBody);
+    link.mail.push_back(treeEvent(formScreen()));  // a focused search
+    home.onTick(nav);
+    CHECK(home.state() == PluginBody::State::Failed);
+    CHECK(home.errorText() == "Feed Riffle can't show this screen right now");
+    CHECK_FALSE(home.wantsKeyboard());
+    CHECK_FALSE(nav.keyboardFake.shown);
+    link.mail.push_back(treeEvent(deckScreen()));  // nothing more is shown once failed
+    home.onTick(nav);
+    CHECK(home.state() == PluginBody::State::Failed);
+
+    PluginBody screen(link, 2, "Feed Riffle", "Form", [](Nav&) { return blocksArea(); });
+    link.mail.push_back(treeEvent(formScreen()));
+    screen.onTick(nav);
+    CHECK(screen.state() == PluginBody::State::Shown);
+    CHECK(screen.wantsKeyboard());
+}
+
+TEST_CASE("plugin body: the plugin closing its screen stops the body and tells its owner") {
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    FakeLink link;
+    PluginBody body(link, 1, "Feed Riffle", "Desk", [](Nav&) { return blocksArea(); }, TreeUse::HomeBody);
+    int closes = 0;
+    body.onPluginClose([&](Nav&) { ++closes; });
+    link.mail.push_back(treeEvent(deckScreen()));
+    PluginHostEvent close{Kind::ScreenClose, "riffle", "Feed Riffle", "", {}, 0, ""};
+    close.instance = 1;
+    link.mail.push_back(close);
+    link.mail.push_back(treeEvent(deckScreen()));
+    body.onTick(nav);
+    CHECK(closes == 1);
+    CHECK(body.closedByPlugin());
+    CHECK(link.mail.size() == 1);  // nothing more taken
+    CHECK(nav.pops == 0);          // the owner decides
+    const Rect keep = body.laid()->children.at(3).parts.at(2).rect;
+    body.onGesture(tapAt({keep.x + keep.w / 2, keep.y + keep.h / 2}), nav);  // Home keeps showing it meanwhile
+    body.onShow(nav);
+    body.onTick(nav);
+    CHECK(link.sent.empty());  // nothing goes to a screen the plugin closed
+    body.onClose(nav);
+    CHECK(link.leftScreens.empty());  // the plugin closed it: no `left`
 }

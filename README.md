@@ -74,7 +74,8 @@ from *Settings → Check for updates* on the Kindle.
 
 A plugin can add an action to the reader's selection bar or to an item's page, open screens of its own (drawn by the
 app, in its own style), and run in the background after a sync. Get one from *Settings → Plugins → Get plugins*, or
-copy its folder into `zotero/plugins/` over USB.
+copy its folder into `zotero/plugins/` over USB. A plugin can also fill the body of Home (*Settings → Home*), drawing
+your items with their reading progress; the app keeps the frame and falls back to its own body if the plugin fails.
 
 They're kept on a short leash:
 

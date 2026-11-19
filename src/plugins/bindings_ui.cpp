@@ -40,9 +40,10 @@ JSValue jsScreen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!checkEntryId(c, argc > 0 ? argv[0] : JS_UNDEFINED, "zk.screen", "screen", &id)) return JS_EXCEPTION;
     JSValueConst spec = argc > 1 ? argv[1] : JS_UNDEFINED;
     if (!JS_IsObject(spec) || JS_IsFunction(c, spec))
-        return JS_ThrowTypeError(c, "zk.screen: expected zk.screen(id, { title, render, onEvent?, main? })");
+        return JS_ThrowTypeError(c, "zk.screen: expected zk.screen(id, { title, render, onEvent?, main?, home? })");
     js::Value titleV(c, JS_GetPropertyStr(c, spec, "title")), renderV(c, JS_GetPropertyStr(c, spec, "render")),
-        eventV(c, JS_GetPropertyStr(c, spec, "onEvent")), mainV(c, JS_GetPropertyStr(c, spec, "main"));
+        eventV(c, JS_GetPropertyStr(c, spec, "onEvent")), mainV(c, JS_GetPropertyStr(c, spec, "main")),
+        homeV(c, JS_GetPropertyStr(c, spec, "home"));
     std::string title;
     if (!JS_IsString(titleV.raw()) || (title = oneLine(text(c, titleV.raw()))).empty() || characters(title) > kTitleChars)
         return JS_ThrowTypeError(c, "zk.screen: `title` must be a non-empty string (at most %zu characters)", kTitleChars);
@@ -51,7 +52,9 @@ JSValue jsScreen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(c, "zk.screen: `onEvent` must be a function");
     if (!JS_IsUndefined(mainV.raw()) && !JS_IsBool(mainV.raw()))
         return JS_ThrowTypeError(c, "zk.screen: `main` must be true or false");
-    addScreen(ctxOf(c), id, title, JS_ToBool(c, mainV.raw()) == 1, renderV, eventV);
+    if (!JS_IsUndefined(homeV.raw()) && !JS_IsBool(homeV.raw()))
+        return JS_ThrowTypeError(c, "zk.screen: `home` must be true or false");
+    addScreen(ctxOf(c), id, title, JS_ToBool(c, mainV.raw()) == 1, JS_ToBool(c, homeV.raw()) == 1, renderV, eventV);
     return JS_UNDEFINED;
 }
 
@@ -86,6 +89,7 @@ zk.ui = Object.freeze({
   text: (text, opts) => ({ kind: "text", text, ...opts }),
   card: (card) => ({ kind: "card", ...card }),
   deck: (deck) => ({ kind: "deck", ...deck }),
+  items: (items) => ({ kind: "items", ...items }),
   list: (list) => ({ kind: "list", ...list }),
   search: (search) => ({ kind: "search", ...search }),
   field: (field) => ({ kind: "field", ...field }),

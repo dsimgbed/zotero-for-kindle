@@ -210,3 +210,92 @@ TEST_CASE("open flow: with a reader available, a downloaded book opens in it") {
     REQUIRE(rig.nav.pushed.size() == 1);
     CHECK(dynamic_cast<Marker*>(rig.nav.pushed[0].get()));
 }
+
+// ---- zk.library.open's outcome (OpenFlow's `done`) ----
+
+#include "screens/file_choice.h"
+
+TEST_CASE("open flow done: a local file reports \"\" once, as the reader shows") {
+    Rig rig;
+    rig.lib.setFileState(rig.row(0).attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    ItemRow r = *rig.lib.rowFor(rig.row(0).key, rig.row(0).attachmentKey);
+    std::vector<std::string> told;
+    REQUIRE(r.fileState == AttachmentRecord::State::Local);
+    rig.flow.open(r, rig.nav, std::nullopt, [&](const std::string& e) { told.push_back(e); });
+    CHECK(told == std::vector<std::string>{""});
+    CHECK_FALSE(rig.nav.pushed.empty());
+}
+
+TEST_CASE("open flow done: a finished download reports \"\"; a failed one its message; leaving first, \"Cancelled\"") {
+    Rig rig;
+    const ItemRow r = rig.row(1);
+    std::vector<std::string> told;
+    auto done = [&](const std::string& e) { told.push_back(e); };
+    rig.flow.open(r, rig.nav, std::nullopt, done);
+    rig.flow.open(r, rig.nav, std::nullopt, done);  // joins the download
+    CHECK(told.empty());
+    SyncEvent bad = rig.download(SyncEvent::Kind::DownloadFinished, r);
+    bad.error = UserError{};
+    bad.error->message = "Couldn't download the book";
+    rig.flow.onSyncEvent(bad, rig.nav);
+    CHECK(told == std::vector<std::string>{"Couldn't download the book", "Couldn't download the book"});
+    told.clear();
+    rig.flow.open(r, rig.nav, std::nullopt, done);  // a retry hears its own outcome
+    rig.nav.visible = nullptr;                      // the user left
+    rig.flow.onSyncEvent(rig.download(SyncEvent::Kind::DownloadFinished, r), rig.nav);
+    CHECK(told == std::vector<std::string>{"Cancelled"});
+    told.clear();
+    rig.nav.visible = rig.screen.get();
+    rig.flow.open(r, rig.nav, std::nullopt, done);
+    rig.flow.onSyncEvent(rig.download(SyncEvent::Kind::DownloadFinished, r), rig.nav);
+    CHECK(told == std::vector<std::string>{""});
+}
+
+TEST_CASE("open flow done: a reset cancels the waiting open") {
+    Rig rig;
+    const ItemRow r = rig.row(1);
+    std::vector<std::string> told;
+    rig.flow.open(r, rig.nav, std::nullopt, [&](const std::string& e) { told.push_back(e); });
+    rig.flow.reset();
+    CHECK(told == std::vector<std::string>{"Cancelled"});
+}
+
+TEST_CASE("open flow done: no file says why; backing out of \"Open which file?\" is \"Cancelled\"") {
+    if (!fonts()) return;
+    Rig rig;
+    std::vector<std::string> told;
+    auto done = [&](const std::string& e) { told.push_back(e); };
+    ItemRow none = rig.row(0);
+    none.attachmentKey.clear();
+    rig.flow.open(none, rig.nav, std::nullopt, done);
+    REQUIRE(told.size() == 1);
+    CHECK(told[0].find("No EPUB, PDF or saved web page") == 0);
+    told.clear();
+    // an item with two readable files asks which
+    ItemRow two = rig.row(0);
+    AttachmentRecord a;
+    a.key = "SECONDPD";
+    a.parentKey = two.key;
+    a.contentType = "application/pdf";
+    a.filename = "second.pdf";
+    a.linkMode = "imported_file";
+    rig.lib.upsertAttachment(a);
+    two = *rig.lib.rowFor(two.key);
+    REQUIRE(two.files > 1);
+    rig.flow.open(two, rig.nav, std::nullopt, done);
+    REQUIRE_FALSE(rig.nav.pushed.empty());
+    auto* choice = dynamic_cast<FileChoiceScreen*>(rig.nav.pushed.back().get());
+    REQUIRE(choice);
+    rig.nav.visible = choice;
+    choice->onGesture(tapAt({metrics().width / 2, 5}), rig.nav);  // above the sheet
+    CHECK(told == std::vector<std::string>{"Cancelled"});
+}
+
+TEST_CASE("library rowFor: a file the item doesn't have leaves the row not exactFile (zk.library.open rejects it)") {
+    Rig rig;
+    const ItemRow r = rig.row(0);
+    auto base = rig.lib.rowFor(r.key, "NOSUCHFILE");
+    REQUIRE(base);
+    CHECK_FALSE(base->exactFile);
+    CHECK(rig.lib.rowFor(r.key, r.attachmentKey)->exactFile);
+}

@@ -127,7 +127,7 @@ void itemMarked(PluginSink& sink, Library& lib, const std::string& itemKey, bool
     auto it = lib.item(itemKey);
     if (!it) return;
     sink.emit(kindle(read ? "itemMarkedRead" : "itemMarkedUnread",
-                     json{{"origin", "kindle"}, {"items", json::array({itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib))})}}));
+                     json{{"origin", "kindle"}, {"items", json::array({itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib), lib.readingInfo(itemKey))})}}));
 }
 
 void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::string& itemKey, const std::string& attachmentKey) {
@@ -135,7 +135,7 @@ void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::str
     auto it = lib.item(itemKey);
     auto att = lib.attachment(attachmentKey);
     if (!it || !att) return;
-    sink.emit(kindle(event, json{{"origin", "kindle"}, {"item", itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib))}, {"attachment", attachmentJson(*att)}}));
+    sink.emit(kindle(event, json{{"origin", "kindle"}, {"item", itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib), lib.readingInfo(itemKey))}, {"attachment", attachmentJson(*att)}}));
 }
 
 std::vector<std::string> KeySet::ordered() const {
@@ -200,7 +200,7 @@ std::vector<PluginEvent> pulledEvents(Library& lib, const Pulled& p) {
         return json{{"key", r.key}, {"attachmentKey", r.attachmentKey}, {"itemKey", r.itemKey}};
     });
     auto item = [&](const std::string& key) -> std::optional<json> {
-        if (auto it = lib.item(key)) return itemJson(*it, lib.isRead(key), nameOf(it->lib));
+        if (auto it = lib.item(key)) return itemJson(*it, lib.isRead(key), nameOf(it->lib), lib.readingInfo(key));
         return std::nullopt;
     };
     batched(out, "itemMarkedRead", "items", p.markedRead.ordered(), item);

@@ -25,6 +25,7 @@
 #include "app/app.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
+#include "app/home_tree.h"
 #include "app/lifecycle.h"
 #include "app/plugin_background.h"
 #include "app/plugin_events.h"
@@ -46,6 +47,7 @@
 #include "screens/home.h"
 #include "screens/library.h"
 #include "screens/notes.h"
+#include "screens/item_source.h"
 #include "screens/open_flow.h"
 #include "screens/reader.h"
 #include "docs/engine_factory.h"
@@ -622,6 +624,29 @@ int main(int argc, char** argv) {
             loadSettings(lib).flashEvery, lipc.get());
     });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
+    // `items` blocks on plugin screens read the library as the app's own lists do; a tap opens the item.
+    LibraryItemSource pluginItems(lib, flow.statusFn(), wallMs);
+    const ItemTap itemTap{[&flow, &app](const ItemRow& r, std::function<void(const std::string&)> done) {
+        flow.open(r, app, std::nullopt, std::move(done));
+    }};
+    pluginEvents.setItemUi(&pluginItems, itemTap);
+    // Home's body written by a plugin (Settings → Home): its last tree is kept, so the first frame of
+    // the next start shows it (plugins load after the first screen).
+    HomeTreeStore homeTrees(paths.stateDir + "/home-tree.json");
+    PluginHome pluginHome(pluginEvents, homeTrees, [&lib] { return loadSettings(lib).homeScreen; }, &pluginItems, itemTap);
+    // zk.library.open: the same rule as an items block (the key, in that library if one is given), the
+    // file asked for if any (a file the item hasn't: not found). The promise follows OpenFlow's outcome.
+    pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
+                                             std::function<void(const std::string&)> answer) {
+        auto row = lib.rowFor(ref.key);
+        if (row && ref.library && row->lib != *ref.library) row.reset();
+        if (row && attachment) {
+            row = lib.rowFor(ref.key, *attachment);
+            if (row && !row->exactFile) row.reset();
+        }
+        if (!row) return answer("Item not found");
+        flow.open(*row, a, std::nullopt, std::move(answer));
+    });
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto pushUpdateScreen = [&](Nav& nav) {
         nav.push(std::make_unique<UpdateScreen>(
@@ -697,6 +722,7 @@ int main(int argc, char** argv) {
         home.dismissUpdate = [&] { updateNotice.dismiss(lib); };
         home.openItem = openItem;
         home.status = flow.statusFn();
+        home.body = [&pluginHome]() -> HomeBodyLink* { return &pluginHome; };
         return std::make_unique<HomeScreen>(status, home, wallMs);
     };
     makeSetup = [&](const Config& initial, bool imported, bool canGoBack) -> std::unique_ptr<Screen> {

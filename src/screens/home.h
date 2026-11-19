@@ -1,6 +1,14 @@
 #pragma once
 // Home (mockup C, "Hybrid"): title with sync status, search field, Continue reading card,
 // Recent items; an error banner above the tab bar when the last sync failed.
+//
+// A plugin may write the body (Settings → Home; HomeActions::body): the frame stays the app's
+// (header, icons, search, banners, tab bar) and the plugin's blocks go in bodyRect(), where the
+// card and Recent were. The built-in body is kept ready and shows, with no message, whenever the
+// plugin's doesn't: while the body waits for its first tree (no kept tree), and after it failed,
+// was closed by the plugin, or had no tree within kFirstTreeMs; the next show tries the plugin
+// again. A sync that changed nothing repaints nothing; one that changed an item repaints only
+// the blocks showing it.
 
 #include <functional>
 #include <optional>
@@ -11,6 +19,25 @@
 #include "screens/sync_status.h"
 
 namespace zk {
+
+class PluginBody;
+
+// Home's body written by a plugin (main implements it over the plugin host: app/home_tree.h).
+class HomeBodyLink {
+public:
+    virtual ~HomeBodyLink() = default;
+    // The plugin's body (null: the built-in one). Owned by the link; it lives until drop().
+    virtual PluginBody* body() = 0;
+    // Home shows: the chosen screen opens if it has no body (its kept tree shown at once, if any),
+    // else renders again. `area`: where the blocks go; `window`: what the item sheet and the error
+    // pop-up cover. Both are asked again at each use, so the latest Home's are used.
+    virtual void shown(Nav&, std::function<Rect(Nav&)> area, std::function<Rect()> window) = 0;
+    // A sync changed the library: the body renders again.
+    virtual void synced() = 0;
+    // Home gives up on the body (it failed, the plugin closed it, no tree in time): it goes, and
+    // Home shows its built-in body until the next shown().
+    virtual void drop(Nav&) = 0;
+};
 
 struct HomeActions {
     std::function<void()> openSearch;
@@ -26,6 +53,8 @@ struct HomeActions {
     // the user opens Settings → Plugins (here or by hand). A tap on the notice calls openPlugins.
     std::function<bool()> safeModeNotice;
     std::function<void()> openPlugins;
+    // Home's body written by a plugin; unset or null: the built-in body only.
+    std::function<HomeBodyLink*()> body;
 };
 
 class HomeScreen final : public Screen {
@@ -37,6 +66,13 @@ public:
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
     void onTick(Nav&) override;
+
+    // With no kept tree, how long the plugin's body may take to its first tree before Home gives up on it.
+    static constexpr int64_t kFirstTreeMs = 1000;
+    // Where a plugin's body goes: under the search field, above the banner (when one shows) or the tab bar.
+    Rect bodyRect() const;
+    bool showsPluginBody() const;  // the plugin's blocks show (else the built-in card and Recent)
+    const PluginBody* pluginBody() const { return body(); }
 
     static Rect syncIndicatorRect();
     static Rect settingsRect();
@@ -81,6 +117,7 @@ private:
     };
     Header header() const;
     Content content() const;
+    void pluginSyncEvent(const SyncEvent&, PluginBody&, bool headerChanged, const Content& shown, Nav&);
     Rect bannerRect() const;
     bool bannerShown() const {
         return status_.hasError() || safeModeBannerText().has_value() || updateBannerText().has_value();
@@ -105,6 +142,13 @@ private:
     uint64_t pluginsVersion_ = 0;
     bool pluginUpdates_ = false;  // the catalog has updates waiting: the dot too
     bool readPlugins(Nav&);  // true if the icon changed
+    // The plugin's body: asked of the link each time (it may have dropped it).
+    PluginBody* body() const;
+    HomeBodyLink* link_ = nullptr;  // from HomeActions::body at the last show
+    int64_t waitingSinceMs_ = 0;    // the body has had no tree since then
+    void tickBody(Nav&);            // takes its answers; gives up on it when it can't show
+    void fallBack(Nav&);
+    Rect bodyRegion() const;        // what a change of the body repaints (the card and rows region)
 };
 
 }  // namespace zk

@@ -73,9 +73,12 @@ with no params, so its `render` must not need any.
 | deck (one card, swiped) | `zk.ui.deck({ id, card, empty })` | `swipe`, `tap` (0.9) |
 | list | `zk.ui.list({ id, rows, empty })` | `select` |
 | search, field | `zk.ui.search({ id })`, `zk.ui.field({ id, lines })` | `change`, `submit` |
+| items (0.10) | `zk.ui.items({ id, style, items, empty })` | nothing: the app opens taps itself; `reader` closed |
 | chips | `zk.ui.chips({ id, chips, selected, select })` | `chips` |
 | button, buttons (3 at most) | `zk.ui.button({ id, title, primary })` | `tap` |
 | divider, space, notice | `zk.ui.divider()`, `zk.ui.space()`, `zk.ui.notice(text, { id })` | `tap`, with an `id` (0.9) |
+
+A screen with `home: true` can be the body of Home; see [Home, written by a plugin](concepts.md#home-written-by-a-plugin).
 
 Children skip falsy values, so `message && zk.ui.notice(message)` works. A block the user can act
 on needs an `id`, unique on its screen. There are no sizes, colours or images; the app lays the

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <ctime>
 
 namespace zk::plugins {
 
@@ -228,7 +230,19 @@ std::string doiOf(const ItemRecord& r) { return identifiersOf(r).doi; }
 std::string arxivIdOf(const ItemRecord& r) { return identifiersOf(r).arxiv; }
 std::string citationKeyOf(const ItemRecord& r) { return identifiersOf(r).citationKey; }
 
-nlohmann::ordered_json itemJson(const ItemRecord& r, bool read, const std::string& libraryName) {
+namespace {
+std::string isoOf(int64_t ms) {
+    const std::time_t t = static_cast<std::time_t>(ms / 1000);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+                  tm.tm_min, tm.tm_sec, static_cast<int>(ms % 1000));
+    return buf;
+}
+}  // namespace
+
+nlohmann::ordered_json itemJson(const ItemRecord& r, bool read, const std::string& libraryName, const ReadingInfo& reading) {
     using json = nlohmann::ordered_json;
     const nlohmann::json d = parseData(r);
     const Identifiers id = identifiersOf(r);
@@ -264,6 +278,11 @@ nlohmann::ordered_json itemJson(const ItemRecord& r, bool read, const std::strin
     j["citationKey"] = orNull(id.citationKey);
     j["libraryId"] = r.lib;
     j["libraryName"] = libraryName;
+    const bool opened = reading.openedMs > 0 && reading.progress >= 0;
+    j["progress"] = opened ? json(reading.progress) : json(nullptr);
+    j["openedAt"] = opened ? json(isoOf(reading.openedMs)) : json(nullptr);
+    j["addedAt"] = r.dateAdded;
+    j["format"] = orNull(reading.format);
     return j;
 }
 

@@ -207,7 +207,7 @@ void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
             auto item = nav.library().item(row_.key);
             if (!e || !item) return;
             result_ = std::make_unique<PluginResult>(*e, actions_[i], "itemAction",
-                                                     plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib)), Rect{0, 0, W(), H()});
+                                                     plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib), nav.library().readingInfo(row_.key)), Rect{0, 0, W(), H()});
             running_ = static_cast<int>(i);
             nav.damage(actionRects_[i], Waveform::Ui);
             return;

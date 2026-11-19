@@ -9,6 +9,7 @@ type Block =
   | TextBlock
   | CardBlock
   | DeckBlock
+  | ItemsBlock
   | ListBlock
   | SearchBlock
   | FieldBlock

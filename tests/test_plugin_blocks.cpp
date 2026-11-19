@@ -8,6 +8,7 @@
 #include <set>
 
 #include "golden.h"
+#include "screens/item_source.h"
 #include "screens/plugin_blocks.h"
 #include "ui/canvas.h"
 #include "ui/metrics.h"
@@ -107,14 +108,14 @@ bool inside(Rect r, Rect area) { return r.empty() || (r.x >= area.x && r.y >= ar
 
 // Nothing outside the area, in the layout or in pixels, on any page; and every unit of every
 // top-level block shown on some page.
-void checkFits(const Block& root) {
+void checkFits(const Block& root, ItemSource* src = nullptr) {
     const Rect area = blocksArea();
-    const Laid first = layoutTree(root, area, 0);
+    const Laid first = layoutTree(root, area, 0, src);
     std::map<const Block*, std::set<int>> shown;
     std::set<const Block*> seen;
     Canvas c(metrics().width, metrics().height);
     for (int p = 0; p < first.pages; ++p) {
-        const Laid l = layoutTree(root, area, p);
+        const Laid l = layoutTree(root, area, p, src);
         CHECK(l.page == p);
         CHECK(l.pages == first.pages);
         std::vector<Rect> rects;
@@ -128,7 +129,7 @@ void checkFits(const Block& root) {
             for (int u = k.first; u < k.first + k.count; ++u) shown[k.block].insert(u);
         }
         fillRect(c.cr(), {0, 0, c.width(), c.height()}, 128);
-        drawTree(c.cr(), l, {});
+        drawTree(c.cr(), l, {}, src);
         const auto g = grayOf(c);
         size_t outside = 0;
         for (int y = 0; y < c.height(); ++y)
@@ -140,11 +141,52 @@ void checkFits(const Block& root) {
     for (const auto& k : root.children) {
         CHECK(seen.count(&k));
         // count the units the block has: the most any page showed when laid alone, tall
-        const Laid alone = layoutTree(k, {0, 0, area.w, 1 << 28}, 0);
+        const Laid alone = layoutTree(k, {0, 0, area.w, 1 << 28}, 0, src);
         REQUIRE(alone.children.size() == 1);
         const int units = alone.children[0].count;
         CHECK(static_cast<int>(shown[&k].size()) == units);
     }
+}
+
+// Items by key from a table, as the library has them; keys not in it (deleted, a switched-off group) are skipped.
+struct FakeItems : ItemSource {
+    std::map<std::string, ItemRow> rows;
+    std::map<std::string, std::string> download;
+    int resolved = 0;
+    std::optional<ItemRow> row(const ItemRef& r) override {
+        ++resolved;
+        auto it = rows.find(r.key);
+        if (it == rows.end() || (r.library && it->second.lib != *r.library)) return std::nullopt;
+        return it->second;
+    }
+    std::string cardMeta(const ItemRow& r) override {
+        return r.progress > 0 ? std::to_string(static_cast<int>(r.progress * 100 + 0.5)) + "% · 3 highlights · opened today" : "new";
+    }
+    std::string status(const std::string& a) override { return download.count(a) ? download[a] : ""; }
+    ItemRow& add(const std::string& key, const std::string& title, double progress = -1, const std::string& badge = "EPUB") {
+        ItemRow& r = rows[key];
+        r.key = key, r.title = title, r.byline = "Adler · 2024", r.badge = badge, r.attachmentKey = "A" + key;
+        r.fileState = AttachmentRecord::State::Local, r.progress = progress, r.itemType = "book", r.files = 1;
+        return r;
+    }
+};
+
+json itemsScreen() {
+    return json::parse(R"({"kind":"column","children":[
+      {"kind":"text","text":"Reading","style":"title"},
+      {"kind":"items","id":"now","style":"card","items":[{"key":"B1","label":"BOOK · CONTINUE"}]},
+      {"kind":"text","text":"Recent","style":"label"},
+      {"kind":"items","id":"recent","style":"row","items":["P1","GONE","P2",{"key":"P3","library":12}]},
+      {"kind":"items","id":"none","style":"row","items":["GONE","ALSO"],"empty":"Nothing opened yet"}
+    ]})");
+}
+
+void fillItems(FakeItems& f) {
+    f.add("B1", "The Brothers Karamazov", 0.42);
+    f.add("P1", "Gaussian random fields on compact Riemannian manifolds", 0.13, "PDF");
+    f.add("P2", "Physics-informed neural networks for the Hamilton–Jacobi–Bellman equation", -1, "PDF");
+    ItemRow& p3 = f.add("P3", "A group paper", 1.0, "PDF");
+    p3.lib = 12, p3.read = true;
 }
 
 }  // namespace
@@ -170,6 +212,118 @@ TEST_CASE("plugin blocks: goldens on PW5 — every block, the deck, the filing s
     std::string longBody;
     for (int i = 0; i < 40; ++i) longBody += std::string(kSummary) + (i % 3 == 2 ? "\n\n" : " ");
     shot(tree(deckScreen(longBody)), "Feed Riffle", "tests/golden/plugin-blocks-deck-page2.png", 1);
+}
+
+TEST_CASE("plugin blocks: goldens on PW5 — items as a card and rows, and the empty text") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items;
+    fillItems(items);
+    items.download["AP2"] = "Downloading 42%";
+    const auto shot = [&](const json& j, const char* path) {
+        const Block t = tree(j);
+        fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+        drawHeader(c.cr(), "Reading Desk", true);
+        drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
+        checkGolden(c, path);
+    };
+    shot(itemsScreen(), "tests/golden/plugin-items-card-rows.png");
+    shot(json::parse(R"({"kind":"column","children":[
+      {"kind":"text","text":"Pinned","style":"title"},
+      {"kind":"items","id":"pins","style":"card","items":["GONE"],"empty":"Nothing pinned yet. Long-press an item to pin it."}]})"),
+         "tests/golden/plugin-items-empty.png");
+}
+
+TEST_CASE("plugin items: unknown and switched-off keys are skipped; no source draws nothing") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items;
+    fillItems(items);
+    const Block t = tree(itemsScreen());
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    REQUIRE(l.children.size() == 5);
+    const Laid& recent = l.children[3];
+    REQUIRE(recent.items.size() == 3);  // GONE skipped
+    CHECK(recent.items[0].key == "P1");
+    CHECK(recent.items[1].key == "P2");
+    CHECK(recent.items[2].key == "P3");
+    CHECK(recent.count == 3);
+    CHECK(l.children[1].items.size() == 1);
+    CHECK(l.children[1].itemLabels[0] == "BOOK · CONTINUE");
+    CHECK(l.children[4].items.empty());
+    CHECK(l.children[4].rect.h == 112);  // its `empty` text
+    // a ref naming the wrong library is skipped too
+    FakeItems other;
+    fillItems(other);
+    other.rows["P3"].lib = 0;
+    CHECK(layoutTree(t, blocksArea(), 0, &other).children[3].items.size() == 2);
+    // each block resolved once per layout
+    items.resolved = 0;
+    layoutTree(t, blocksArea(), 0, &items);
+    CHECK(items.resolved == 1 + 4 + 2);
+    // no source: nothing takes room, nothing is drawn
+    const Laid bare = layoutTree(t, blocksArea(), 0);
+    for (int i : {1, 3, 4}) {
+        CHECK(bare.children[i].rect.h == 0);
+        CHECK(bare.children[i].parts.empty());
+    }
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawTree(c.cr(), bare, {});
+}
+
+TEST_CASE("plugin items: 300 refs page, nothing outside the area, on KT4") {
+    if (!fonts()) return;
+    for (const char* style : {"row", "card"}) {
+        ScopedMetrics m(kKt4);
+        FakeItems items;
+        json refs = json::array();
+        for (int i = 0; i < 300; ++i) {
+            const std::string k = "K" + std::to_string(i);
+            items.add(k, "Item number " + std::to_string(i) + " with a title long enough to wrap onto a second line in the row", i / 300.0);
+            refs.push_back(i % 7 == 3 ? json("MISSING" + std::to_string(i)) : json(k));
+        }
+        json j = json::parse(R"({"kind":"column","children":[{"kind":"items","id":"all","style":"row","items":[]},
+          {"kind":"button","id":"more","title":"More"}]})");
+        j["children"][0]["items"] = refs;
+        j["children"][0]["style"] = style;
+        const Block t = tree(j);
+        const Laid l = layoutTree(t, blocksArea(), 3, &items);
+        INFO(style);
+        CHECK(l.pages > 10);
+        CHECK(l.children[0].count > 0);
+        CHECK(l.children[0].items.size() == 300 - 43);
+        checkFits(t, &items);
+    }
+}
+
+TEST_CASE("plugin items: hit-testing a row or a card returns the ItemRow") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items;
+    fillItems(items);
+    const Block t = tree(itemsScreen());
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    const Laid& card = l.children[1];
+    REQUIRE(card.parts.size() == 1);
+    auto h = hitTest(l, card.parts[0].rect.center());
+    REQUIRE(h);
+    CHECK(h->kind == K::Items);
+    CHECK(h->id == "now");
+    CHECK(h->part == "B1");
+    REQUIRE(h->item);
+    CHECK(h->item->title == "The Brothers Karamazov");
+    const Laid& recent = l.children[3];
+    REQUIRE(recent.parts.size() == 3);
+    h = hitTest(l, recent.parts[2].rect.center());
+    REQUIRE(h);
+    CHECK(h->id == "recent");
+    REQUIRE(h->item);
+    CHECK(h->item->key == "P3");
+    CHECK(h->item->lib == 12);
+    CHECK(h->rect == recent.parts[2].rect);
+    CHECK_FALSE(hitTest(l, l.children[2].rect.center()));  // a label
 }
 
 TEST_CASE("plugin blocks: everything fits and is reachable on PW5, KT4 and Scribe") {

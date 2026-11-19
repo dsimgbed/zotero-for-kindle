@@ -1824,19 +1824,39 @@ std::vector<CollectionEntry> Library::allCollections() {
     });
 }
 
-std::vector<ItemRow> Library::recentlyOpened(int limit) {
-    std::vector<std::string> keys = guarded([&] {
+std::vector<std::string> Library::openedItemKeys(int64_t lib, int limit) {
+    return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT itemKey FROM reading_state WHERE openedMs > 0 AND coalesce((SELECT lib FROM items WHERE key = "
             "reading_state.itemKey), 0) IN (SELECT 0 UNION SELECT id FROM libraries WHERE enabled = 1 AND gone = 0) "
-            "ORDER BY openedMs DESC LIMIT ?");
-        st.bind(1, int64_t{limit});
+            "AND (?1 < 0 OR coalesce((SELECT lib FROM items WHERE key = reading_state.itemKey), 0) = ?1) "
+            "ORDER BY openedMs DESC LIMIT ?2");
+        st.bind(1, lib).bind(2, int64_t{limit});
         std::vector<std::string> out;
         while (st.step()) out.push_back(st.text(0));
         return out;
     });
+}
+
+ReadingInfo Library::readingInfo(const std::string& itemKey) {
+    return guarded([&] {
+        ReadingInfo info;
+        Stmt st = db_.prepare("SELECT openedMs, progress FROM reading_state WHERE itemKey = ?");
+        st.bind(1, itemKey);
+        if (st.step() && st.integer(0) > 0) {
+            info.openedMs = st.integer(0);
+            info.progress = std::clamp(st.real(1), 0.0, 1.0);
+        }
+        Stmt f = db_.prepare("SELECT readableType FROM items WHERE key = ?");
+        f.bind(1, itemKey);
+        if (f.step()) info.format = f.text(0);
+        return info;
+    });
+}
+
+std::vector<ItemRow> Library::recentlyOpened(int limit) {
     std::vector<ItemRow> rows;
-    for (const auto& k : keys)
+    for (const auto& k : openedItemKeys(kAllLibraries, limit))
         if (auto r = rowFor(k)) rows.push_back(std::move(*r));
     return rows;
 }

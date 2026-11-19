@@ -315,3 +315,34 @@ TEST_CASE("files: the real library (a copy: ZK_REAL_LIBRARY)") {
     q.downloaded = true;
     MESSAGE("downloaded: " << lib.countRows(q));
 }
+
+TEST_CASE("files: closed without a file (the tab tap's pop → onClose) → done \"Cancelled\" once; after a choice, never") {
+    Rig rig;
+    std::vector<std::string> told;
+    auto done = [&](const std::string& e) { told.push_back(e); };
+    rig.flow.open(rig.row(), rig.nav, std::nullopt, done);
+    auto* sheet = choice(rig.nav);
+    REQUIRE(sheet);
+    sheet->onClose(rig.nav);
+    CHECK(told == std::vector<std::string>{"Cancelled"});
+    sheet->onClose(rig.nav);
+    CHECK(told.size() == 1);
+    // An outside tap: pop, whose onClose comes too; still once.
+    told.clear();
+    rig.nav.pushed.clear();
+    rig.flow.open(rig.row(), rig.nav, std::nullopt, done);
+    sheet = choice(rig.nav);
+    REQUIRE(sheet);
+    sheet->onGesture(tapAt({5, 5}), rig.nav);
+    sheet->onClose(rig.nav);
+    CHECK(told == std::vector<std::string>{"Cancelled"});
+    // A file chosen, then the sheet closes: no "Cancelled".
+    told.clear();
+    rig.nav.pushed.clear();
+    rig.flow.open(rig.row(), rig.nav, std::nullopt, done);
+    sheet = choice(rig.nav);
+    REQUIRE(sheet);
+    sheet->onGesture(tapAt(sheet->fileRects()[1].center()), rig.nav);
+    sheet->onClose(rig.nav);
+    CHECK(std::count(told.begin(), told.end(), "Cancelled") == 0);
+}

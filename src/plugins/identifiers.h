@@ -42,9 +42,11 @@ std::string arxivIdOf(const ItemRecord&);      // the arXiv id, no version
 std::string citationKeyOf(const ItemRecord&);  // Zotero's citationKey, else Better BibTeX's "Citation Key:" in Extra
 
 // The Item of zk.d.ts: { key, type, title, creators, year, date, publication, doi, arxiv, isbn,
-// url, abstract, tags, collections, read, extra, citationKey }. Empty fields are null.
+// url, abstract, tags, collections, read, extra, citationKey, progress, openedAt, addedAt, format }. Empty fields are null.
 // Keys come out in that order (an ordered_json), which is what a plugin sees in JSON.stringify.
 // libraryName: of the item's library (Library::libraryName(r.lib)), with libraryId (0 My Library, else the group's ID).
-nlohmann::ordered_json itemJson(const ItemRecord&, bool read, const std::string& libraryName);
+// reading: Library::readingInfo(key) — adds progress (null if never opened here), openedAt (ISO 8601 or null),
+// addedAt (Zotero's dateAdded) and format ("EPUB", "PDF", "WEB" or null).
+nlohmann::ordered_json itemJson(const ItemRecord&, bool read, const std::string& libraryName, const ReadingInfo& reading);
 
 }  // namespace zk::plugins

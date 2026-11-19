@@ -141,9 +141,20 @@ for the page doesn't answer it. If you are turning a page, it waits for the turn
 - **Item details:** the **Plugins** section lists actions for that item.
 - **Home:** the puzzle-piece icon opens the plugins' own screens (a dot on it means a plugin has
   something new).
+- **Home itself**, if you choose so: see below.
 
 An action shows **Working…** while it runs; tap it to stop. The answer comes in a pop-up, with up to
 two buttons of the plugin's. If the plugin fails you see "<Plugin> couldn't do that: <message>".
+
+## A Home written by a plugin
+
+*Settings → Home* chooses what fills the body of Home: **Built-in**, or a screen a plugin offers,
+listed as "<screen title> — <plugin name>" (app 0.10.0). The title, icons, search field, banners
+and tab bar stay the app's. The choice is kept.
+
+If the plugin is turned off or removed, or its screen fails, Home shows the built-in body with no
+message and tries the plugin again the next time Home shows. The setting then says
+"<plugin> — not available" until it works again; pick **Built-in** to stop waiting for it.
 
 ## Turning plugins on and off
 

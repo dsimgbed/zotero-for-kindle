@@ -209,6 +209,7 @@ struct PluginRun {
         int64_t lastQuietRefreshMs = 0;  // when a render for a quiet zk.ui.refresh last started
         int64_t refreshAtMs = 0;         // quiet refreshes merged, due then (0: none)
         uint64_t received = 0, handled = 0;
+        TreeUse use = TreeUse::Screen;  // HomeBody: Home's body (no search or field; its trees' JSON kept)
     };
     std::map<uint64_t, OpenScreen> screens;
 };
@@ -1165,7 +1166,8 @@ struct PluginHost::Impl {
         return params ? js::Value::fromJson(p.cx, *params) : js::Value(p.cx.raw(), JS_UNDEFINED);
     }
 
-    void openScreen(uint64_t instance, const std::string& pluginId, const std::string& screenId, std::optional<nlohmann::json> params) {
+    void openScreen(uint64_t instance, const std::string& pluginId, const std::string& screenId, std::optional<nlohmann::json> params,
+                    TreeUse use) {
         activate();
         auto it = loaded.find(pluginId);
         if (it == loaded.end() || turnOffs.count(pluginId) || restarts.count(pluginId) || !screenEntry(*it->second, screenId)) {
@@ -1175,14 +1177,15 @@ struct PluginHost::Impl {
             postEvent(std::move(ev));
             return;
         }
-        startScreen(*it->second, instance, screenId, std::move(params), 0);
+        startScreen(*it->second, instance, screenId, std::move(params), 0, use);
         applyTurnOffs();
     }
 
     void startScreen(PluginCtx& p, uint64_t instance, const std::string& screenId, std::optional<nlohmann::json> params,
-                     uint64_t parent) {
+                     uint64_t parent, TreeUse use = TreeUse::Screen) {
         auto& sc = p.run->screens[instance];
         sc.screenId = screenId;
+        sc.use = use;
         sc.params = std::move(params);
         sc.parent = parent;
         sc.busy = true;
@@ -1296,7 +1299,8 @@ struct PluginHost::Impl {
         }
         std::string why = "it isn't JSON";
         std::optional<Block> tree;
-        if (auto j = nlohmann::json::parse(text, nullptr, false); !j.is_discarded()) tree = parseTree(j, &why);
+        nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (!j.is_discarded()) tree = parseTree(j, &why, sc->use);
         if (!tree) {
             recordFailure(p.manifest.id, "The " + sc->screenId + " screen's render returned what can't be shown: " + why);
             screenFailed(p, instance);
@@ -1308,6 +1312,7 @@ struct PluginHost::Impl {
         ev.instance = instance;
         ev.screenId = sc->screenId;
         ev.tree = std::make_shared<const Block>(std::move(*tree));
+        if (sc->use == TreeUse::HomeBody) ev.value = std::move(j);  // Home keeps it for its next start
         postEvent(std::move(ev));
         pumpScreen(p, instance);
         applyTurnOffs();
@@ -1383,6 +1388,16 @@ struct PluginHost::Impl {
         } else {
             sc->queue.emplace_back(nlohmann::json{{"kind", "back"}}, false);
         }
+        pumpScreen(*p, instance);
+        applyTurnOffs();
+    }
+
+    void rerender(uint64_t instance) {
+        PluginCtx* p = withScreen(instance);
+        PluginRun::OpenScreen* sc = p ? screenOf(*p, instance) : nullptr;
+        if (!sc || sc->closed || sc->failed) return;
+        sc->refreshDue = sc->refreshByUser = true;  // as a user-caused zk.ui.refresh: at once, its time free
+        sc->refreshAtMs = 0;
         pumpScreen(*p, instance);
         applyTurnOffs();
     }
@@ -1864,8 +1879,9 @@ void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, cons
     wakeUi();  // screens showing plugins' entries look at the version
 }
 
-void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent) {
-    PluginEntry info{"screen", id, title, main};
+void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, bool home, js::Value render,
+               js::Value onEvent) {
+    PluginEntry info{"screen", id, title, main, home};
     p.run->entries.push_back({info, std::move(render), std::move(onEvent)});
     {
         std::lock_guard<std::mutex> lock(p.host.mu);
@@ -2017,11 +2033,13 @@ void PluginHost::setBackground(bool background) {
     impl_->post([background](Impl& h) { h.appInBackground = background; });
 }
 
-uint64_t PluginHost::openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
+uint64_t PluginHost::openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params, TreeUse use) {
     const uint64_t instance = ++gNextInstance;
     std::optional<nlohmann::json> p;
     if (!params.is_null()) p = std::move(params);
-    impl_->post([instance, pluginId, screenId, p = std::move(p)](Impl& h) mutable { h.openScreen(instance, pluginId, screenId, std::move(p)); });
+    impl_->post([instance, pluginId, screenId, p = std::move(p), use](Impl& h) mutable {
+        h.openScreen(instance, pluginId, screenId, std::move(p), use);
+    });
     return instance;
 }
 
@@ -2031,6 +2049,10 @@ void PluginHost::screenEvent(uint64_t instance, nlohmann::json event) {
 
 void PluginHost::closeScreen(uint64_t instance) {
     impl_->post([instance](Impl& h) { h.closeScreen(instance); });
+}
+
+void PluginHost::rerender(uint64_t instance) {
+    impl_->post([instance](Impl& h) { h.rerender(instance); });
 }
 
 uint64_t PluginHost::runAction(const std::string& pluginId, const std::string& kind, const std::string& actionId,

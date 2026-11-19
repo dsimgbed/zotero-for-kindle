@@ -76,6 +76,7 @@ struct FakeEntries : PluginEntries {
 
     std::vector<PluginAction> actions(const std::string& kind) override { return kind == "itemAction" ? item : selection; }
     std::vector<PluginLaunch> mainScreens() override { return launch; }
+    std::vector<PluginLaunch> homeScreens() override { return {}; }
     bool anyBadge() override { return badge; }
     uint64_t version() override { return v; }
     uint64_t run(const PluginAction& a, const std::string& kind, nlohmann::ordered_json target, json again) override {
@@ -482,6 +483,7 @@ zk.itemAction({ id: "count", title: "Count", run: (item, again) => again ? undef
 zk.itemAction({ id: "open", title: "Open", run: () => { zk.ui.open("deck"); } });
 zk.itemAction({ id: "hang", title: "Hang", run: () => new Promise(() => {}) });
 zk.screen("deck", { title: "Riffle", main: true, render: () => zk.ui.text("deck") });
+zk.screen("desk", { title: "Reading Desk", home: true, render: () => zk.ui.text("desk") });
 zk.setBadge("3 new");
 )JS", {}, "Feed Riffle");
     Db db = Db::open(":memory:");
@@ -513,6 +515,12 @@ zk.setBadge("3 new");
     const auto launch = events.mainScreens();
     REQUIRE(launch.size() == 1);
     CHECK(launch[0].title == "Riffle");
+    const auto home = events.homeScreens();  // home: true, not main
+    REQUIRE(home.size() == 1);
+    CHECK(home[0].pluginId == "riffle");
+    CHECK(home[0].pluginName == "Feed Riffle");
+    CHECK(home[0].screenId == "desk");
+    CHECK(home[0].title == "Reading Desk");
     CHECK(eventually([&] { return events.anyBadge(); }));
 
     uint64_t run = events.run(actions[0], "itemAction", {{"key", "K1"}});

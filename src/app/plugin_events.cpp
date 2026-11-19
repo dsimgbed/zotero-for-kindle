@@ -65,6 +65,14 @@ std::vector<PluginLaunch> PluginEvents::mainScreens() {
     return out;
 }
 
+std::vector<PluginLaunch> PluginEvents::homeScreens() {
+    std::vector<PluginLaunch> out;
+    for (const auto& s : running())
+        for (const auto& e : s.entries)
+            if (e.kind == "screen" && e.home) out.push_back({s.folder.dir, s.folder.manifest->name, e.id, e.title, s.badge});
+    return out;
+}
+
 bool PluginEvents::anyBadge() {
     for (const auto& s : running())
         if (!s.badge.empty()) return true;
@@ -107,7 +115,7 @@ void PluginEvents::openScreen(const std::string& pluginId, const std::string& sc
 
 void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginName, const std::string& title) {
     screens_[instance] = pluginName;
-    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title));
+    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title, items_, itemTap_));
 }
 
 uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
@@ -133,6 +141,37 @@ uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const s
     return instance;
 }
 
+bool PluginEvents::homeAvailable(const std::string& pluginId, const std::string& screenId) {
+    if (!host_ || !running_) return false;
+    for (const auto& s : host_->status()) {
+        if (s.folder.dir != pluginId) continue;
+        if (!s.enabled || s.stopped || !s.folder.manifest || !s.folder.problem.empty() || !s.withdrawn.empty()) return false;
+        if (!s.loaded) return true;  // plugins load lazily: the host answers with a tree or a ScreenError
+        for (const auto& e : s.entries)
+            if (e.kind == "screen" && e.id == screenId && e.home) return true;
+        return false;
+    }
+    return false;  // removed
+}
+
+PluginEvents::Opened PluginEvents::openHome(const std::string& pluginId, const std::string& screenId) {
+    Opened o{0, pluginId, ""};
+    if (!host_ || !running_) return o;
+    for (const auto& st : host_->status()) {
+        if (st.folder.dir != pluginId) continue;
+        if (st.folder.manifest) o.pluginName = st.folder.manifest->name;
+        for (const auto& e : st.entries)
+            if (e.kind == "screen" && e.id == screenId) o.title = e.title;
+    }
+    o.instance = host_->openScreen(pluginId, screenId, nullptr, TreeUse::HomeBody);
+    screens_[o.instance] = o.pluginName;
+    return o;
+}
+
+void PluginEvents::rerender(uint64_t instance) {
+    if (host_ && running_ && screens_.count(instance)) host_->rerender(instance);
+}
+
 void PluginEvents::send(uint64_t instance, nlohmann::json event) {
     if (host_ && screens_.count(instance)) host_->screenEvent(instance, std::move(event));
 }
@@ -140,6 +179,7 @@ void PluginEvents::send(uint64_t instance, nlohmann::json event) {
 void PluginEvents::left(uint64_t instance) {
     screens_.erase(instance);
     mail_.erase(instance);
+    itemOpened_.erase(instance);
     if (host_) host_->closeScreen(instance);
 }
 
@@ -170,6 +210,26 @@ void PluginEvents::openPreview(App& app, const PluginHostEvent& ev) {
     };
     log(LogLevel::Info, "plugin %s opens a preview", ev.pluginId.c_str());
     previewOpener_(app, ev, std::move(answer), std::move(closed));
+}
+
+void PluginEvents::openItem(App& app, const PluginHostEvent& ev) {
+    const uint64_t id = ev.requestId, instance = ev.instance, bound = rebinds_;
+    auto answer = [this, id, instance, bound](const std::string& error) {
+        if (!host_ || rebinds_ != bound) return;  // the host that asked
+        if (error.empty() && instance != 0 && screens_.count(instance)) itemOpened_.insert(instance);
+        host_->answerReader(id, error);
+    };
+    ItemRef ref;
+    ref.key = ev.value.value("key", "");
+    if (ev.value.contains("library") && ev.value["library"].is_number_integer()) ref.library = ev.value["library"].get<int64_t>();
+    std::optional<std::string> attachment;
+    if (ev.value.contains("attachment") && ev.value["attachment"].is_string()) attachment = ev.value["attachment"].get<std::string>();
+    if (!itemOpener_ || ref.key.empty() || (instance != 0 && !screens_.count(instance))) {
+        answer("The reader can't open this right now");
+        return;
+    }
+    log(LogLevel::Info, "plugin %s opens item %s", ev.pluginId.c_str(), ref.key.c_str());
+    itemOpener_(app, ref, std::move(attachment), std::move(answer));
 }
 
 void PluginEvents::poll(App& app) {
@@ -229,6 +289,9 @@ void PluginEvents::poll(App& app) {
             }
             case PluginHostEvent::Kind::ReaderOpen:
                 openPreview(app, ev);
+                break;
+            case PluginHostEvent::Kind::ItemOpen:
+                openItem(app, ev);
                 break;
             case PluginHostEvent::Kind::ReaderClosed:  // the app's own: never from the host
                 break;

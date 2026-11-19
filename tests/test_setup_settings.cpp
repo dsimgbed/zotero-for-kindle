@@ -6,11 +6,15 @@
 #include "fake_nav.h"
 #include "fake_plugins.h"
 #include "golden.h"
+#include "screens/plugin_entries.h"
 #include "screens/settings.h"
+#include "screens/settings_home.h"
 #include "screens/setup.h"
 #include "store/db.h"
 #include "sync/config.h"
+#include "ui/metrics.h"
 #include "ui/text.h"
+#include "ui/widgets.h"
 
 #include <chrono>
 #include <filesystem>
@@ -59,6 +63,23 @@ void settle(SetupScreen& s, FakeNav& nav) {
         s.onTick(nav);
     }
 }
+
+// What Settings → Home sees of plugins: the home screens of the running ones.
+struct FakeEntries : PluginEntries {
+    std::vector<PluginLaunch> home;
+    uint64_t v = 1;
+    std::vector<PluginAction> actions(const std::string&) override { return {}; }
+    std::vector<PluginLaunch> mainScreens() override { return {}; }
+    std::vector<PluginLaunch> homeScreens() override { return home; }
+    bool anyBadge() override { return false; }
+    uint64_t version() override { return v; }
+    uint64_t run(const PluginAction&, const std::string&, nlohmann::ordered_json, nlohmann::json) override { return 0; }
+    std::optional<ActionOutcome> take(uint64_t) override { return std::nullopt; }
+    void stop(uint64_t) override {}
+    void openScreen(const std::string&, const std::string&) override {}
+};
+
+bool inside(const Rect& r) { return r.x >= 0 && r.y >= 0 && r.x + r.w <= metrics().width && r.y + r.h <= metrics().height; }
 
 }  // namespace
 
@@ -199,4 +220,147 @@ TEST_CASE("setup, setup error and settings match the reviewed goldens") {
     settings.onShow(nav);
     settings.draw(c);
     test::checkGolden(c, "tests/golden/settings.png");
+}
+
+TEST_CASE("settings: the Home choice is kept with the other settings") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    CHECK(loadSettings(lib).homeScreen.empty());  // built-in
+    AppSettings s = loadSettings(lib);
+    s.homeScreen = "desk/home";
+    s.flashEvery = 3;
+    saveSettings(lib, s);
+    CHECK(loadSettings(lib).homeScreen == "desk/home");
+    CHECK(loadSettings(lib).flashEvery == 3);
+    s.homeScreen = "";
+    saveSettings(lib, s);
+    CHECK(loadSettings(lib).homeScreen.empty());
+}
+
+TEST_CASE("settings: the Home row shows with a home screen to pick; Settings → Home lists Built-in and them; a tap keeps one") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    SettingsScreen plain(good(), [](Nav&) {});
+    plain.onShow(nav);
+    CHECK_FALSE(plain.homeRow());  // no plugin entries at all
+    FakeEntries entries;
+    nav.entries = &entries;
+    plain.onShow(nav);
+    CHECK_FALSE(plain.homeRow());  // nothing to pick, nothing chosen
+    const Rect pluginsBefore = plain.pluginsRect();
+
+    entries.home = {{"desk", "Desk", "home", "Reading Desk", ""}, {"riffle", "Feed Riffle", "today", "Today", ""}};
+    ++entries.v;
+    nav.damages.clear();
+    plain.onTick(nav);  // a plugin loaded meanwhile: the row comes, the rows move
+    CHECK(plain.homeRow());
+    REQUIRE_FALSE(nav.damages.empty());
+    CHECK(nav.damages.back().rect == Rect{0, 0, 1236, 1547});
+    CHECK(plain.homeLine() == "Built-in");
+    CHECK(plain.pluginsRect().y + plain.pluginsRect().h <= plain.homeRect().y);
+    CHECK(plain.homeRect().y + plain.homeRect().h <= plain.updateRect().y);
+    CHECK(plain.pluginsRect().y < pluginsBefore.y);  // closed up to make room
+
+    plain.onGesture(tapAt(plain.homeRect().center()), nav);
+    REQUIRE(nav.pushed.size() == 1);
+    auto* home = dynamic_cast<HomeSettingScreen*>(nav.pushed.back().get());
+    REQUIRE(home);
+    home->onShow(nav);
+    const auto& options = home->choices().options;
+    REQUIRE(options.size() == 3);
+    CHECK(options[0].label == "Built-in");
+    CHECK(options[1].label == "Reading Desk — Desk");
+    CHECK(options[2].label == "Today — Feed Riffle");
+    CHECK(home->choices().chosen() == 0);
+    CHECK(home->choices().unavailable.empty());
+    home->onGesture(tapAt(home->optionRects().at(1).center()), nav);
+    CHECK(loadSettings(lib).homeScreen == "desk/home");
+    CHECK(home->choices().chosen() == 1);
+    home->onGesture(tapAt(headerBackRect().center()), nav);
+    CHECK(nav.pops == 1);
+    plain.onShow(nav);
+    CHECK(plain.homeLine() == "Reading Desk — Desk");
+    home->onGesture(tapAt(home->optionRects().at(0).center()), nav);
+    CHECK(loadSettings(lib).homeScreen.empty());
+}
+
+TEST_CASE("settings: [Review Focus] a chosen Home no longer offered shows \"<Plugin> — not available\"; the row stays") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    FakeEntries entries;  // the plugin turned off: none of its screens offered
+    nav.entries = &entries;
+    AppSettings s = loadSettings(lib);
+    s.homeScreen = "feed/desk";
+    saveSettings(lib, s);
+    FakePlugins plugins;
+    addShowcasePlugins(plugins);  // "feed" is Feed Riffle
+    PluginHost host(plugins.deps());
+    SettingsScreen settings(good(), [](Nav&) {}, nullptr, nullptr, nullptr, [&] { return &host; });
+    settings.onShow(nav);
+    CHECK(settings.homeRow());
+    CHECK(settings.homeLine() == "Feed Riffle — not available");
+    HomeSettingScreen home([&] { return &host; });
+    home.onShow(nav);
+    REQUIRE(home.choices().options.size() == 1);
+    CHECK(home.choices().chosen() == -1);
+    CHECK(home.choices().unavailable == "Feed Riffle — not available");
+    CHECK(loadSettings(lib).homeScreen == "feed/desk");  // kept: it comes back with the plugin
+
+    s.homeScreen = "gone/desk";  // removed: only its id is left to name it
+    saveSettings(lib, s);
+    home.onShow(nav);
+    CHECK(home.choices().unavailable == "gone — not available");
+    entries.home = {{"gone", "Gone", "desk", "Desk", ""}};  // back again
+    ++entries.v;
+    nav.damages.clear();
+    home.onTick(nav);
+    CHECK(home.choices().chosen() == 1);
+    CHECK(home.choices().unavailable.empty());
+    CHECK_FALSE(nav.damages.empty());
+}
+
+TEST_CASE("settings: Settings and Settings → Home with the Home row match their goldens (PW5) and fit on KT4 and Scribe") {
+    if (!fonts()) return;
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    FakeEntries entries;
+    entries.home = {{"desk", "Desk", "home", "Reading Desk", ""}};
+    nav.entries = &entries;
+    AppSettings s = loadSettings(lib);
+    s.homeScreen = "feed/desk";
+    saveSettings(lib, s);
+    FakePlugins plugins;
+    addShowcasePlugins(plugins);
+    PluginHost host(plugins.deps());
+    for (const Metrics* m : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics scoped(*m);
+        CAPTURE(m->device);
+        SettingsScreen settings(good(), [](Nav&) {}, nullptr, nullptr, nullptr, [&] { return &host; });
+        settings.onShow(nav);
+        REQUIRE(settings.homeRow());
+        for (const Rect& r : {settings.accountRect(), settings.readTagRect(), settings.intervalRect(3), settings.toggleRect(),
+                              settings.removeRect(), settings.flashPlusRect(), settings.pluginsRect(), settings.homeRect(),
+                              settings.updateRect(), settings.aboutTextRect()})
+            CHECK(inside(r));
+        // Rows don't overlap: each ends above the next one's rule.
+        CHECK(settings.intervalRect(0).y + settings.intervalRect(0).h <= settings.toggleRect().y);
+        CHECK(settings.removeRect().y + settings.removeRect().h < settings.flashPlusRect().y);
+        CHECK(settings.flashPlusRect().y + settings.flashPlusRect().h < settings.pluginsRect().y);
+        CHECK(settings.pluginsRect().y + settings.pluginsRect().h <= settings.homeRect().y);
+        CHECK(settings.homeRect().y + settings.homeRect().h <= settings.updateRect().y);
+        HomeSettingScreen home([&] { return &host; });
+        home.onShow(nav);
+        CHECK(home.optionRects().size() == 2);
+        for (const Rect& r : home.optionRects()) CHECK(inside(r));
+        CHECK(inside(home.noteRect()));
+        if (m != &kPw5) continue;
+        Canvas c(m->width, m->height);
+        settings.draw(c);
+        checkGolden(c, "tests/golden/settings-home-row.png");
+        home.draw(c);
+        checkGolden(c, "tests/golden/settings-home.png");
+    }
 }

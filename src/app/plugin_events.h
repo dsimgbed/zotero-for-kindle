@@ -20,6 +20,8 @@
 //    plugins registered, only while plugins run; asking wakes the host once (plugins load lazily)
 //    so their entries become known. ActionResult/ActionError wait for take(); a rebind answers
 //    the runs still waiting with an error.
+//  - ItemOpen (zk.library.open): the item opener (main) opens the item; the screen asking is told
+//    when it shows again (ScreenLink::takeItemOpened) that the reader closed.
 //  - ReaderOpen (zk.reader.open): the preview opener (main) shows it over what shows; when that
 //    reader closes, a ReaderClosed waits for the plugin screen under it, which tells the plugin.
 
@@ -66,17 +68,45 @@ public:
     using PreviewOpener = std::function<void(App&, const PluginHostEvent&, std::function<void(const std::string& error)> answer,
                                              std::function<void()> closed)>;
     void setPreviewOpener(PreviewOpener f) { previewOpener_ = std::move(f); }
+    // Library items (zk.library.open, ItemOpen): main resolves the ref and opens it the app's way
+    // (OpenFlow). `answer` settles the plugin's promise ("" opened, else why not: "Item not found",
+    // "Cancelled", a download's error), "" once the reader shows; the asking screen is then told when
+    // it shows again that the reader closed. Unset: refused.
+    using ItemOpener = std::function<void(App&, const ItemRef&, std::optional<std::string> attachment,
+                                          std::function<void(const std::string& error)> answer)>;
+    void setItemOpener(ItemOpener f) { itemOpener_ = std::move(f); }
+    // What plugin screens made from now on show `items` blocks with (see PluginScreen); `items`
+    // outlives them.
+    void setItemUi(ItemSource* items, ItemTap tap) {
+        items_ = items;
+        itemTap_ = std::move(tap);
+    }
     // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance.
     // Plugins not running (or no host): the screen shows "<Plugin> can't show this screen right now".
     uint64_t openScreen(App&, const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // Home's body (Settings → Home, see app/home_tree.h): whether the plugin may show it now (plugins
+    // run; it is on, not stopped, loads; once loaded, it has that screen with `home`), then the
+    // screen opened without pushing anything (TreeUse::HomeBody; its trees taken as any screen's).
+    // An instance of 0: nothing opened (plugins don't run).
+    struct Opened {
+        uint64_t instance = 0;
+        std::string pluginName, title;
+    };
+    bool homeAvailable(const std::string& pluginId, const std::string& screenId);
+    Opened openHome(const std::string& pluginId, const std::string& screenId);
+    // Renders an open screen again (Home shown, a sync): to the host it belongs to; nothing for a
+    // screen of a host gone with rebind() (it has its ScreenError waiting) or when plugins don't run.
+    void rerender(uint64_t instance) override;
     // ScreenLink (PluginScreen).
     void send(uint64_t instance, nlohmann::json event) override;
     void left(uint64_t instance) override;
     bool take(uint64_t instance, PluginHostEvent& out) override;
+    bool takeItemOpened(uint64_t instance) override { return itemOpened_.erase(instance) > 0; }
     // PluginEntries. attach() first: the app the launcher pushes screens on.
     void attach(App& app) { app_ = &app; }
     std::vector<PluginAction> actions(const std::string& kind) override;
     std::vector<PluginLaunch> mainScreens() override;
+    std::vector<PluginLaunch> homeScreens() override;
     bool anyBadge() override;
     uint64_t version() override;
     uint64_t run(const PluginAction&, const std::string& kind, nlohmann::ordered_json target, nlohmann::json again = nullptr) override;
@@ -94,6 +124,11 @@ private:
     std::function<void(uint64_t)> backgroundDone_;
     PreviewOpener previewOpener_;
     void openPreview(App&, const PluginHostEvent&);
+    ItemOpener itemOpener_;
+    ItemSource* items_ = nullptr;
+    ItemTap itemTap_;
+    void openItem(App&, const PluginHostEvent&);
+    std::set<uint64_t> itemOpened_;  // screens whose zk.library.open opened an item (see takeItemOpened)
     bool running_ = true;
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them

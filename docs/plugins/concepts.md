@@ -328,3 +328,47 @@ plugin does needs a reinstall to undo; see [Using plugins](using.md#if-something
 `zk.selectionAction` (the selection bar's **More…**), `zk.itemAction` (the **Plugins** section of an
 item's details) and `zk.screen` (screens; the `main` ones in the launcher behind the puzzle-piece
 icon on Home) are shown by the app. See [Screens and entry points](screens.md).
+
+### Home, written by a plugin
+
+A screen made with `home: true` can be the body of the app's Home (app 0.10.0). The user picks it in
+**Settings → Home**, which lists *Built-in* and every such screen as "<screen title> — <plugin
+name>". The app keeps Home's frame: the title and sync line, the Plugins, settings, sync and close
+icons, the search field, the error, safe-mode and update banners, and the tab bar. The screen draws
+only the body between them; its `render` takes no params. The body may hold every block except
+`search` and `field`; a tree with one counts as a failure.
+
+Home draws a plugin's body at once from the last tree it kept, so once a tree is kept there is no
+waiting after the app starts (the first time, the built-in body shows for up to 1 second, then the
+plugin's); the plugin renders again every time Home shows, and after a sync that changed items or
+annotations. A sync that changed nothing repaints nothing.
+
+**Falling back.** Home shows the app's own body, with no message, when plugins are off (safe mode,
+the `OFF` file, stopped for an install), the chosen plugin is turned off, removed or incompatible or
+has no such screen, no tree is kept and the first one doesn't arrive within 1 second, `render` fails or
+returns an invalid tree (including one with `search` or `field`), or the body calls `zk.ui.close`
+(Home drops it: the built-in body shows until the next Home show). An `onEvent` that throws is not
+a failure of the body: the error pop-up shows over it and the body stays. The next time Home shows,
+the plugin is tried again; Settings → Home says "<plugin> — not available" while it can't be.
+
+**Items.** Draw library items with the `items` block: you give keys (`"ABCD2345"`, or
+`{ key, library?, label? }`), the app draws each item (`style: "card"` or `"row"`), keeps its
+progress current, opens it on a tap and shows its menu on a long-press. The plugin hears neither,
+only `{ kind: "reader", closed: true }` once the reader of an item opened that way closes. Keys of
+items that are gone or unreadable are skipped without a word; if all are, `empty` shows (without
+`empty` the block draws nothing). When a sync changes only some items' progress, only the blocks
+holding them are repainted.
+
+**Opening an item yourself.** `zk.library.open(item)` (permission `library:read`) opens it in the
+reader, and only in answer to the user: from `onEvent` or an action's `run`. It resolves when the
+reader shows and rejects with `"Item not found"`, `"Cancelled"` or the download's error.
+
+`Item` carries what a Home needs: `progress` (0…1 on this Kindle, `null` if never opened here),
+`openedAt`, `addedAt` and `format`. `zk.library.items({ opened: true })` yields the most recently
+opened first; `{ read: false }` selects by the read mark, which is not the same as progress: a book
+at 100% is unread until it is marked read.
+
+See the recipes [Items drawn by the app](recipes.md#items-drawn-by-the-app) and
+[Your own Home](recipes.md#your-own-home), and the example
+[Reading Desk](../../sdk/examples/reading-desk/).
+

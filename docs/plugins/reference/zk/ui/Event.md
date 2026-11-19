@@ -68,7 +68,8 @@ screen, so a tap on "File" sees the note just typed.
   (`undefined` if closed with Back or without a result).
 - `back` — the user left this screen. It is already closed; nothing is rendered after.
 - `reader` — a preview this screen opened with [zk.reader.open](../reader/open.md) closed (`closed:
-  true`): the screen shows again as it was. Needs app 0.9.0.
+  true`): the screen shows again as it was. Needs app 0.9.0. Also sent (app 0.10.0) when an
+  item opened from an [items](items.md) block or with [zk.library.open](../library/open.md) closes.
 
 ## Example
 

@@ -23,6 +23,7 @@
 
 #include "core/geometry.h"
 #include "plugins/ui_tree.h"
+#include "store/library.h"
 #include "ui/text.h"
 
 namespace zk {
@@ -34,16 +35,34 @@ struct FocusState {
     std::map<std::string, std::vector<std::string>> chips;   // a chips block's selection shown before the next render
 };
 
+// Where an `items` block gets its Zotero items, and what the app adds to how it draws them
+// (screens/item_source.h has the one that reads the library).
+class ItemSource {
+public:
+    virtual ~ItemSource() = default;
+    // The row to draw for a ref, nullopt (skipped silently) when it is gone, unreadable or in a switched-off group.
+    virtual std::optional<ItemRow> row(const ItemRef&) = 0;
+    // A card's meta line ("13% · 3 highlights · opened today").
+    virtual std::string cardMeta(const ItemRow&) = 0;
+    // A row's download progress or error ("" when there is none).
+    virtual std::string status(const std::string& attachmentKey) = 0;
+};
+
 struct Laid {
     struct Part {
-        int index = 0;  // a list row, a chip, a button of `buttons`
+        int index = 0;  // a list row, a chip, a button of `buttons`, an item
         Rect rect;
+        std::optional<ItemRow> item;  // an items block's row or card
+
         bool operator==(const Part&) const = default;
     };
     const Block* block = nullptr;
     Rect rect;
     std::vector<Laid> children;  // the root's: the top-level blocks shown on this page
     std::vector<Part> parts;
+    std::vector<ItemRow> items;  // an items block: the rows its refs resolved to, in order (skipped ones left out)
+    std::vector<std::string> itemLabels;  // and each one's label
+    std::vector<std::string> itemMetas;   // and, for cards, the meta line (as of the layout; "" for rows)
     int first = 0, count = 0;    // the units shown: text lines, list rows, chip lines, card body lines
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
     Rect corner;                 // on the root: a filling deck's page indicator, in the card's corner (else empty)
@@ -60,7 +79,10 @@ Rect blocksArea();
 // A text block's text is laid out once and kept with the tree: drawing it again, turning a page or
 // laying out a new tree in which the block's text, style and width are the same (while the earlier
 // tree is still held) reuses that layout.
-Laid layoutTree(const Block& root, Rect area, int page);
+//
+// `items` resolves the refs of items blocks (once per layout); without it they take no room and
+// draw nothing.
+Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items = nullptr);
 
 // How many times a text block's text has been laid out (for tests).
 int64_t textBlockLayouts();
@@ -68,16 +90,17 @@ int64_t textBlockLayouts();
 // The root's page indicator ("2 / 5"), empty when there is one page.
 Rect pageIndicatorRect(const Laid& root);
 
-void drawTree(cairo_t*, const Laid& root, const FocusState&);
+void drawTree(cairo_t*, const Laid& root, const FocusState&, ItemSource* items = nullptr);
 
 struct Hit {
     std::string id;    // the block's
     std::string part;  // a list row's or a chip's id
     Block::Kind kind = Block::Kind::Button;
-    Rect rect;         // what was hit (the row, the chip, the button)
+    Rect rect;         // what was hit (the row, the chip, the button, the item)
+    std::optional<ItemRow> item;  // an items block's: part is its key
 };
 
-// The interactive block under `p`: a button, a list row, a chip, a search/field, the deck, a notice
+// The interactive block under `p`: a button, a list row, an item, a chip, a search/field, the deck, a notice
 // with an id.
 std::optional<Hit> hitTest(const Laid& root, Point p);
 

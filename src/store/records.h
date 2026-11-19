@@ -30,6 +30,14 @@ struct ItemRecord {
     int64_t lib = kMyLibrary;  // set on insert; an existing row keeps its library
 };
 
+// What the Kindle knows of an item's reading, as plugins see it (Item.progress, openedAt, format).
+// progress -1: never opened here (JSON null); openedMs 0 likewise; format "" is no readable file.
+struct ReadingInfo {
+    double progress = -1;
+    int64_t openedMs = 0;
+    std::string format;  // "EPUB", "PDF" or "WEB"
+};
+
 struct AttachmentRecord {
     std::string key, parentKey, contentType, filename, md5, linkMode;
     int64_t mtime = 0;

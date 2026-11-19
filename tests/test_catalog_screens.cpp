@@ -155,6 +155,7 @@ struct FakeLaunchEntries : PluginEntries {
     std::vector<PluginLaunch> launch{{"feed", "Feed Riffle", "deck", "Riffle", ""}};
     std::vector<PluginAction> actions(const std::string&) override { return {}; }
     std::vector<PluginLaunch> mainScreens() override { return launch; }
+    std::vector<PluginLaunch> homeScreens() override { return {}; }
     bool anyBadge() override { return false; }
     uint64_t version() override { return 1; }
     uint64_t run(const PluginAction&, const std::string&, nlohmann::ordered_json, json) override { return 0; }

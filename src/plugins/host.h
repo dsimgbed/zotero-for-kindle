@@ -88,7 +88,8 @@ struct PluginHostDeps {
 // Screens (zk.screen; `instance` names one open screen, see PluginHost::openScreen):
 // ScreenTree: `tree` is what render returned, checked; `requestId` counts the events of the screen
 // sent with screenEvent() that were handled before it (an event is answered by the first tree
-// whose requestId reaches its number, 1 for the first). ScreenOpen: the plugin opened `screenId`
+// whose requestId reaches its number, 1 for the first); for Home's body (TreeUse::HomeBody)
+// `value` is the tree's JSON as render returned it. ScreenOpen: the plugin opened `screenId`
 // (title in `text`) over `parent` with zk.ui.open (parent 0: from an action's run); `value` the
 // params (null: none). ScreenClose: the plugin closed the screen (zk.ui.close); `value` the result.
 // ScreenError: the screen can't be shown (render failed, an invalid tree, the plugin turned off or
@@ -106,11 +107,15 @@ struct PluginHostDeps {
 // action's run); answer with PluginHost::answerReader(requestId) once the reader shows (or it
 // failed or was cancelled). A Withdrawn with that requestId: nobody waits for the answer any more.
 // ReaderClosed is the app's own (never the host's): the preview over `instance` closed.
+// ItemOpen (zk.library.open, 0.10): open the library item `value` ({key, library?, attachment?}) in the
+// reader, `instance` the screen it was asked from (0: an action's run); answered with answerReader as
+// ReaderOpen is ("" once it shows, else "Item not found", "Cancelled", the download's error); a
+// Withdrawn with that requestId: nobody waits.
 struct PluginHostEvent {
     enum class Kind {
         Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
         ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError,
-        ActionResult, ActionError, ReaderOpen, ReaderClosed
+        ActionResult, ActionError, ReaderOpen, ReaderClosed, ItemOpen
     } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
@@ -123,10 +128,11 @@ struct PluginHostEvent {
 };
 
 // What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen.
-// kind: "selectionAction", "itemAction" or "screen"; `main`: a screen listed in the launcher.
+// kind: "selectionAction", "itemAction" or "screen"; `main`: a screen listed in the launcher;
+// `home`: a screen that can be Home's body (Settings → Home).
 struct PluginEntry {
     std::string kind, id, title;
-    bool main = false;
+    bool main = false, home = false;
 };
 
 struct PluginStatus {
@@ -185,14 +191,22 @@ public:
     void resetData(const std::string& id);
     // Opens a plugin's screen (the launcher, a test): returns its instance number at once; the
     // plugin gets an `open` event (if it has onEvent), then render runs and a ScreenTree (or a
-    // ScreenError) follows. `params` (null: none) are given to render and onEvent.
-    uint64_t openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // ScreenError) follows. `params` (null: none) are given to render and onEvent. `use` HomeBody:
+    // Home's body: its trees are parsed as such (a search or field is an invalid tree: a ScreenError,
+    // counted as a failure), and each ScreenTree carries the tree's JSON in `value` (Home keeps it).
+    uint64_t openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr,
+                        TreeUse use = TreeUse::Screen);
     // What the user did on an open screen ({kind:"tap", id}, …: zk.d.ts's zk.ui.Event). Events are
     // handled one at a time, in order; each is answered by a ScreenTree (see PluginHostEvent).
     void screenEvent(uint64_t instance, nlohmann::json event);
     // The user left the screen (Back, or it went with its tab): it is closed now; the plugin gets
     // a `back` event, and the screen below a `result` event.
     void closeScreen(uint64_t instance);
+    // Runs an open screen's render again, with no event (Home's body when Home shows, after a sync):
+    // a ScreenTree follows (or a ScreenError), as after an event: the render budget, its time free.
+    // While the screen's onEvent or render runs, once that has ended (one render for any number of
+    // asks). Ignored for a screen closed or failed.
+    void rerender(uint64_t instance);
     // Runs a plugin's action (kind "selectionAction" or "itemAction") on `target` (zk.d.ts's
     // TextSelection or Item); `again` ({action, text}: a pop-up button) or null. User-caused, with
     // deps.actionBudgetMs (waiting for the user's confirmation is free). Returns its number at
