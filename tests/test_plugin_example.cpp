@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -496,4 +498,170 @@ TEST_CASE("example: Feed Riffle — open, render, swipe, keep into a collection,
     t = r.treeWith(o->instance, "cleared");
     REQUIRE(t);
     r.host->closeScreen(deck);
+}
+
+// ───────────────────────────── Reading Desk ─────────────────────────────
+
+namespace {
+
+void deskItem(Library& lib, const std::string& key, const std::string& type, const std::string& title,
+              const std::string& added, const std::string& collection, const std::string& fileType) {
+    ItemRecord r;
+    r.key = key;
+    r.version = 1;
+    r.itemType = type;
+    r.title = title;
+    r.dateAdded = added;
+    r.dateModified = added;
+    r.json = "{}";
+    if (!collection.empty()) r.collections.push_back(collection);
+    lib.upsertItem(r);
+    if (fileType.empty()) return;
+    AttachmentRecord a;
+    a.key = "F" + key.substr(1);
+    a.parentKey = key;
+    a.contentType = fileType;
+    a.filename = "file";
+    a.linkMode = "imported_file";
+    lib.upsertAttachment(a);
+}
+
+// The "items" blocks of a Home body tree, by id: their entries as {key, label}.
+std::map<std::string, std::vector<std::pair<std::string, std::string>>> deskBlocks(const json& tree) {
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> out;
+    std::function<void(const json&)> walk = [&](const json& n) {
+        if (n.value("kind", "") == "items") {
+            auto& v = out[n["id"].get<std::string>()];
+            for (const auto& e : n["items"])
+                v.push_back(e.is_string() ? std::make_pair(e.get<std::string>(), std::string())
+                                          : std::make_pair(e["key"].get<std::string>(), e.value("label", "")));
+        }
+        if (n.contains("children")) for (const auto& c : n["children"]) walk(c);
+    };
+    walk(tree);
+    return out;
+}
+
+struct Desk {
+    FakePlugins fp;
+    Db db = Db::open(fp.path("library.db"));
+    Library lib{db};
+    std::unique_ptr<PluginHost> host;
+    std::deque<PluginHostEvent> got;
+
+    Desk(const std::string& settings) {
+        fs::copy("tests/data/plugins/examples/reading-desk", fp.path("reading-desk"), fs::copy_options::recursive);
+        if (!settings.empty()) fp.write("reading-desk/settings.json", settings);
+        lib.upsertCollection({"COLLINBX", "Inbox", "", 1});
+        // A book (type) and an EPUB article, a paper, two more papers, and the inbox (added dates differ).
+        deskItem(lib, "BOOK0001", "book", "A Book", "2024-01-01T00:00:00Z", "", "application/pdf");
+        deskItem(lib, "EPUB0001", "journalArticle", "An EPUB", "2024-01-02T00:00:00Z", "", "application/epub+zip");
+        deskItem(lib, "PAPR0001", "journalArticle", "A Paper", "2024-01-03T00:00:00Z", "", "application/pdf");
+        deskItem(lib, "PAPR0002", "journalArticle", "Another Paper", "2024-01-04T00:00:00Z", "", "application/pdf");
+        deskItem(lib, "INBX0001", "journalArticle", "Old", "2024-02-01T00:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0002", "journalArticle", "Newest", "2024-03-01T00:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0003", "journalArticle", "Middle", "2024-02-15T00:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0004", "journalArticle", "Done", "2024-04-01T00:00:00Z", "COLLINBX", "application/pdf");
+        lib.markRead("INBX0004", true);
+        PluginHostDeps d = fp.deps();
+        d.dbPath = fp.path("library.db");
+        d.handlerBudgetMs = 5000;
+        d.renderBudgetMs = 5000;
+        d.actionBudgetMs = 10000;
+        host = std::make_unique<PluginHost>(d);
+        host->setEnabled("reading-desk", true);
+        host->start();
+    }
+    ~Desk() { host->stop(); }
+
+    std::optional<PluginHostEvent> next(PluginHostEvent::Kind kind, uint64_t key, int ms = 8000) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        for (;;) {
+            PluginHostEvent ev;
+            while (host->poll(ev)) got.push_back(std::move(ev));
+            for (auto it = got.begin(); it != got.end(); ++it) {
+                const bool match = kind == PluginHostEvent::Kind::ActionResult
+                                       ? (it->kind == kind || it->kind == PluginHostEvent::Kind::ActionError) && it->requestId == key
+                                       : it->kind == kind && it->instance == key;
+                if (match) {
+                    PluginHostEvent out = std::move(*it);
+                    got.erase(it);
+                    return out;
+                }
+            }
+            if (std::chrono::steady_clock::now() >= end) return std::nullopt;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    // Home's body, rendered afresh: opens the screen the first time, then rerenders.
+    uint64_t inst = 0;
+    json render() {
+        if (!inst) inst = host->openScreen("reading-desk", "desk", nullptr, TreeUse::HomeBody);
+        else host->rerender(inst);
+        auto t = next(PluginHostEvent::Kind::ScreenTree, inst);
+        REQUIRE(t);
+        CAPTURE(fp.log("reading-desk"));
+        REQUIRE(t->value.is_object());
+        return t->value;
+    }
+    std::string pin(const std::string& key) {
+        const uint64_t run = host->runAction("reading-desk", "itemAction", "pin", {{"key", key}, {"libraryId", 0}});
+        auto r = next(PluginHostEvent::Kind::ActionResult, run);
+        REQUIRE(r);
+        REQUIRE(r->kind == PluginHostEvent::Kind::ActionResult);
+        return r->value["text"].get<std::string>();
+    }
+};
+
+using Keys = std::vector<std::pair<std::string, std::string>>;
+
+}  // namespace
+
+TEST_CASE("example: Reading Desk — Continue cards for a book and a paper, pin and unpin through the item action") {
+    Desk d("");
+    d.lib.markOpened("PAPR0001", "FAPR0001", 1000);
+    d.lib.markOpened("EPUB0001", "FPUB0001", 2000);  // an EPUB: a book, whatever the item type
+    d.lib.markOpened("BOOK0001", "FOOK0001", 3000);  // a newer book: wins the book slot
+    auto blocks = deskBlocks(d.render());
+    CHECK(blocks["book"] == Keys{{"BOOK0001", "BOOK · CONTINUE"}});
+    CHECK(blocks["paper"] == Keys{{"PAPR0001", "PAPER · CONTINUE"}});
+    CHECK(blocks.count("pinned") == 0);
+    CHECK(blocks.count("inbox") == 0);  // no setting: no inbox section
+
+    // Marking the book read hands the slot to the EPUB (a book by its file's format).
+    d.lib.markRead("BOOK0001", true);
+    blocks = deskBlocks(d.render());
+    CHECK(blocks["book"] == Keys{{"EPUB0001", "BOOK · CONTINUE"}});
+
+    // Pin an item: it shows under PINNED on the next render; pinning what Continue shows adds nothing.
+    CHECK(d.pin("PAPR0002") == "Pinned to Home");
+    blocks = deskBlocks(d.render());
+    REQUIRE(blocks.count("pinned") == 1);
+    CHECK(blocks["pinned"].size() == 1);
+    CHECK(blocks["pinned"][0].first == "PAPR0002");
+    d.pin("PAPR0001");
+    blocks = deskBlocks(d.render());
+    CHECK(blocks["pinned"].size() == 1);
+
+    // The same action again unpins.
+    CHECK(d.pin("PAPR0002") == "Unpinned");
+    blocks = deskBlocks(d.render());
+    CHECK(blocks.count("pinned") == 0);
+}
+
+TEST_CASE("example: Reading Desk — with an inbox set, unread items of the collection, newest added first, minus what shows above") {
+    Desk d(R"({"inbox":"COLLINBX"})");
+    auto blocks = deskBlocks(d.render());
+    REQUIRE(blocks.count("inbox") == 1);
+    const Keys expected = {{"INBX0002", ""}, {"INBX0003", ""}, {"INBX0001", ""}};  // INBX0004 is read
+    CHECK(blocks["inbox"] == expected);
+
+    // An inbox item opened (and so under Continue) or pinned is not listed twice.
+    d.lib.markOpened("INBX0002", "FNBX0002", 5000);
+    d.pin("INBX0003");
+    blocks = deskBlocks(d.render());
+    CHECK(blocks["paper"] == Keys{{"INBX0002", "PAPER · CONTINUE"}});
+    REQUIRE(blocks.count("pinned") == 1);
+    CHECK(blocks["pinned"][0].first == "INBX0003");
+    CHECK(blocks["inbox"] == Keys{{"INBX0001", ""}});
 }
