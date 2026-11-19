@@ -1033,7 +1033,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
                                                                                            : nlohmann::ordered_json(preview_->url)}}}};
             } else {
                 target = {{"text", selection_->text},
-                          {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib))},
+                          {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib), nav.library().readingInfo(row_.key))},
                           {"attachment", plugins::attachmentJson(*att)},
                           {"pageLabel", pageLabel}};
             }

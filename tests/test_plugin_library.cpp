@@ -196,7 +196,7 @@ TEST_CASE("identifiers: the Item shape") {
     r.publication = "J";
     r.tags = {"a"};
     r.collections = {"C1"};
-    json j = itemJson(r, true, "My Library");
+    json j = itemJson(r, true, "My Library", ReadingInfo{});
     CHECK(j["key"] == "AAAAAAA1");
     CHECK(j["type"] == "journalArticle");
     CHECK(j["title"] == "T");
@@ -216,10 +216,22 @@ TEST_CASE("identifiers: the Item shape") {
     CHECK(j["citationKey"].is_null());
     CHECK(j["libraryId"] == 0);
     CHECK(j["libraryName"] == "My Library");
-    CHECK(j.size() == 19);
+    CHECK(j["progress"].is_null());
+    CHECK(j["openedAt"].is_null());
+    CHECK(j["addedAt"] == "2024-01-01T00:00:00Z");
+    CHECK(j["format"].is_null());
+    CHECK(j.size() == 23);
+    ReadingInfo ri;
+    ri.progress = 0.13;
+    ri.openedMs = 1700000000123;
+    ri.format = "EPUB";
+    json o = itemJson(r, false, "My Library", ri);
+    CHECK(o["progress"] == 0.13);
+    CHECK(o["openedAt"] == "2023-11-14T22:13:20.123Z");
+    CHECK(o["format"] == "EPUB");
     ItemRecord empty = record("EEEEEEE1", "", {});
     empty.itemType = "book";
-    json e = itemJson(empty, false, "My Library");
+    json e = itemJson(empty, false, "My Library", ReadingInfo{});
     CHECK(e["year"].is_null());
     CHECK(e["date"].is_null());
     CHECK(e["publication"].is_null());
@@ -283,6 +295,76 @@ TEST_CASE("library: items() iterates a collection lazily in pages") {
     CHECK(contains(log, R"(OUT ["TypeError","TypeError"])"));
 }
 
+TEST_CASE("library: items carry progress, openedAt, addedAt and format") {
+    Env env;
+    fill(env.lib);
+    AttachmentRecord epub;
+    epub.key = "EPUBEPU1";
+    epub.parentKey = "AAAAAAA1";
+    epub.contentType = "application/epub+zip";
+    epub.filename = "a.epub";
+    epub.linkMode = "imported_file";
+    env.lib.upsertAttachment(epub);
+    env.lib.markOpened("AAAAAAA1", "EPUBEPU1", 1700000000000);
+    env.lib.saveReading("AAAAAAA1", "loc", 0.13);
+    env.fp.add("a", pluginWith(R"(
+        const a = await zk.library.item("AAAAAAA1");
+        const d = await zk.library.item("DDDDDDD1");
+        out([a.progress, a.openedAt, a.addedAt, a.format]);
+        out([d.progress, d.openedAt, d.addedAt, d.format]);
+    )"), {"library:read"});
+    const std::string log = env.run("a");
+    CHECK(contains(log, R"(OUT [0.13,"2023-11-14T22:13:20.000Z","2024-01-01T00:00:00Z","EPUB"])"));
+    CHECK(contains(log, R"(OUT [null,null,"2024-01-01T00:00:00Z",null])"));
+}
+
+TEST_CASE("library: items({ opened, read }) lists what was opened, last first") {
+    Env env;
+    fill(env.lib);
+    env.lib.upsertCollection({"COLLEMP1", "Empty", "", 1});
+    for (const char* k : {"AAAAAAA1", "BBBBBBB1", "CCCCCCC1"}) {
+        AttachmentRecord f;
+        f.key = std::string("F") + k;
+        f.key.resize(8);
+        f.parentKey = k;
+        f.contentType = "application/pdf";
+        f.linkMode = "imported_file";
+        env.lib.upsertAttachment(f);
+    }
+    env.lib.markOpened("AAAAAAA1", "FAAAAAA1", 3000);
+    env.lib.markOpened("BBBBBBB1", "FBBBBBB1", 1000);  // tagged "read"
+    env.lib.markOpened("CCCCCCC1", "FCCCCCC1", 2000);
+    env.fp.add("a", pluginWith(R"(
+        const keys = async (q) => { const r = []; for await (const i of zk.library.items(q)) r.push(i.key); return r; };
+        out(["opened", await keys({ opened: true })]);
+        out(["limit", await keys({ opened: true, limit: 2 })]);
+        out(["unread", await keys({ opened: true, read: false })]);
+        out(["read", await keys({ opened: true, read: true })]);
+        out(["tag", await keys({ opened: true, tag: "to-read" })]);
+        out(["coll", await keys({ opened: true, collection: "COLLSUB1" })]);
+        out(["none", await keys({ opened: true, collection: "COLLEMP1" })]);
+        out(["lib", await keys({ opened: true, library: 5 })]);
+        out(["readOnly", (await keys({ read: true })).join()]);
+        out(["plain", (await keys({ collection: "COLLSUB1" })).join()]);
+        const names = [];
+        try { zk.library.items({ opened: false }); } catch (e) { names.push(e.name); }
+        try { zk.library.items({ read: "yes" }); } catch (e) { names.push(e.name); }
+        out(names);
+    )"), {"library:read"});
+    const std::string log = env.run("a");
+    CHECK(contains(log, R"(OUT ["opened",["AAAAAAA1","CCCCCCC1","BBBBBBB1"]])"));
+    CHECK(contains(log, R"(OUT ["limit",["AAAAAAA1","CCCCCCC1"]])"));
+    CHECK(contains(log, R"(OUT ["unread",["AAAAAAA1","CCCCCCC1"]])"));
+    CHECK(contains(log, R"(OUT ["read",["BBBBBBB1"]])"));
+    CHECK(contains(log, R"(OUT ["tag",["AAAAAAA1"]])"));
+    CHECK(contains(log, R"(OUT ["coll",["AAAAAAA1"]])"));
+    CHECK(contains(log, R"(OUT ["none",[]])"));
+    CHECK(contains(log, R"(OUT ["lib",[]])"));
+    CHECK(contains(log, R"(OUT ["readOnly","BBBBBBB1"])"));
+    CHECK(contains(log, R"(OUT ["plain","AAAAAAA1"])"));
+    CHECK(contains(log, R"(OUT ["TypeError","TypeError"])"));
+}
+
 TEST_CASE("library: item(), search(), tags(), attachments()") {
     Env env;
     fill(env.lib);
@@ -299,7 +381,7 @@ TEST_CASE("library: item(), search(), tags(), attachments()") {
         out(await zk.library.attachments("DDDDDDD1"));
     )"), {"library:read"});
     const std::string log = env.run("a");
-    CHECK(contains(log, R"(OUT {"key":"AAAAAAA1","type":"journalArticle","title":"Gaussian random fields","creators":[{"first":"Robert","last":"Adler","type":"author"},{"name":"Some Institute","type":"editor"}],"year":1981,"date":"1981","publication":"Annals","doi":"10.1214/AOP/1176990650","arxiv":null,"isbn":null,"url":null,"abstract":"Fields.","tags":["to-read","probability"],"collections":["COLLSUB1"],"read":false,"extra":null,"citationKey":null,"libraryId":0,"libraryName":"My Library"})"));
+    CHECK(contains(log, R"(OUT {"key":"AAAAAAA1","type":"journalArticle","title":"Gaussian random fields","creators":[{"first":"Robert","last":"Adler","type":"author"},{"name":"Some Institute","type":"editor"}],"year":1981,"date":"1981","publication":"Annals","doi":"10.1214/AOP/1176990650","arxiv":null,"isbn":null,"url":null,"abstract":"Fields.","tags":["to-read","probability"],"collections":["COLLSUB1"],"read":false,"extra":null,"citationKey":null,"libraryId":0,"libraryName":"My Library","progress":null,"openedAt":null,"addedAt":"2024-01-01T00:00:00Z","format":"PDF"})"));
     CHECK(contains(log, "OUT null"));
     CHECK(contains(log, R"(OUT [true,"vaswani2017","2401.01234"])"));
     CHECK(contains(log, R"(OUT ["AAAAAAA1"])"));

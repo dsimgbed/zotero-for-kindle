@@ -437,6 +437,11 @@ public:
     std::vector<CollectionEntry> collectionsTab();
     // Items whose books were opened on the Kindle, last opened first.
     std::vector<ItemRow> recentlyOpened(int limit);
+    // The keys of items opened on the Kindle, last opened first (libraries switched on only; lib:
+    // kAllLibraries or one library's).
+    std::vector<std::string> openedItemKeys(int64_t lib, int limit);
+    // The place on this Kindle (progress, when opened) and the file format that opens, for plugins.
+    ReadingInfo readingInfo(const std::string& itemKey);
     // Highlights and notes, newest first; with a query (as search()'s, over their text, comment and
     // tags) only those that match, grouped by item and in book order. tag: only those with that tag.
     std::vector<NoteRow> recentAnnotations(int offset, int limit, const std::string& query = "", const std::string& tag = "");

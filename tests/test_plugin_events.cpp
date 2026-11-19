@@ -100,6 +100,7 @@ TEST_CASE("events: bookOpened carries the item and the file once the book has op
     Db db = Db::open(":memory:");
     Library lib(db);
     fillFixtureLibrary(lib, 10);
+    lib.markOpened("IT000003", "EP000003", 1700000000000);  // as the open flow does before the reader shows
     FakeNav nav(lib);
     ReaderScreen r(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
         return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
@@ -116,6 +117,10 @@ TEST_CASE("events: bookOpened carries the item and the file once the book has op
     CHECK(opened[0].userCaused);
     CHECK(opened[0].payload["origin"] == "kindle");
     CHECK(opened[0].payload["item"]["key"] == "IT000003");
+    CHECK(opened[0].payload["item"]["openedAt"].is_string());
+    CHECK(opened[0].payload["item"]["progress"].is_number());
+    CHECK(opened[0].payload["item"]["addedAt"].is_string());
+    CHECK(opened[0].payload["item"]["format"] == "EPUB");
     CHECK(opened[0].payload["attachment"]["key"] == "EP000003");
     CHECK(opened[0].payload["attachment"]["contentType"] == "application/epub+zip");
     r.onShow(nav);  // back from a panel: not opened again
