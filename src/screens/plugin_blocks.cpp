@@ -110,7 +110,7 @@ int textH(const std::string& s, const TextStyle& st, int w, int lines) {
 ItemSource* gSource = nullptr;
 struct Resolved {
     std::vector<ItemRow> rows;
-    std::vector<std::string> labels;
+    std::vector<std::string> labels, metas;
 };
 std::map<const Block*, Resolved>* gResolved = nullptr;
 
@@ -121,6 +121,7 @@ const Resolved& resolved(const Block& b) {
     Resolved r;
     for (const ItemRef& ref : b.items)
         if (auto row = gSource->row(ref)) {
+            r.metas.push_back(b.itemStyle == Block::ItemStyle::Card ? gSource->cardMeta(*row) : std::string());
             r.rows.push_back(std::move(*row));
             r.labels.push_back(ref.label);
         }
@@ -344,6 +345,7 @@ Laid place(const Block& b, Rect r, int first, int count) {
             const Resolved& res = resolved(b);
             l.items = res.rows;
             l.itemLabels = res.labels;
+            l.itemMetas = res.metas;
             for (int i = first; i < first + count && i < static_cast<int>(res.rows.size()); ++i)
                 l.parts.push_back({i, Rect{r.x, r.y + (i - first) * itemUnitH(b), r.w, itemH(b)}.intersected(r), res.rows[i]});
             break;
@@ -505,7 +507,7 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             if (l.items.empty()) centredText(cr, b.empty, kEmpty, r);
             for (const auto& p : l.parts) {
                 if (!p.item) continue;
-                if (itemCards(b)) drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], gDrawSource ? gDrawSource->cardMeta(*p.item) : "");
+                if (itemCards(b)) drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], l.itemMetas[p.index]);
                 else drawItemRow(cr, p.rect, *p.item, gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
             }
             break;

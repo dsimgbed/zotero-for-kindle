@@ -62,6 +62,7 @@ struct Laid {
     std::vector<Part> parts;
     std::vector<ItemRow> items;  // an items block: the rows its refs resolved to, in order (skipped ones left out)
     std::vector<std::string> itemLabels;  // and each one's label
+    std::vector<std::string> itemMetas;   // and, for cards, the meta line (as of the layout; "" for rows)
     int first = 0, count = 0;    // the units shown: text lines, list rows, chip lines, card body lines
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
     Rect corner;                 // on the root: a filling deck's page indicator, in the card's corner (else empty)

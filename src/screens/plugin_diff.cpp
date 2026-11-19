@@ -8,8 +8,16 @@ namespace {
 
 using K = Block::Kind;
 
+// The rows an items block resolved to (and a card's meta line) count as its content, wherever it sits in the tree.
+bool sameItems(const Laid& a, const Laid& b) {
+    if (a.items != b.items || a.itemMetas != b.itemMetas || a.children.size() != b.children.size()) return false;
+    for (size_t i = 0; i < a.children.size(); ++i)
+        if (!sameItems(a.children[i], b.children[i])) return false;
+    return true;
+}
+
 bool same(const Laid& a, const Laid& b) {
-    return a.rect == b.rect && a.first == b.first && a.count == b.count && a.items == b.items && sameBlock(*a.block, *b.block);
+    return a.rect == b.rect && a.first == b.first && a.count == b.count && sameItems(a, b) && sameBlock(*a.block, *b.block);
 }
 
 Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {

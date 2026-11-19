@@ -131,7 +131,8 @@ struct Rows : ItemSource {
         if (it == rows.end()) return std::nullopt;
         return it->second;
     }
-    std::string cardMeta(const ItemRow&) override { return ""; }
+    std::string meta;
+    std::string cardMeta(const ItemRow&) override { return meta; }
     std::string status(const std::string&) override { return ""; }
     Rows() {
         for (const char* k : {"A", "B", "C"}) {
@@ -172,4 +173,33 @@ TEST_CASE("plugin diff: one row's progress changing redraws only the items block
     more.rows["MISSING"] = more.rows["C"];
     more.rows["MISSING"].key = "MISSING";
     CHECK_FALSE(diffTrees(la, layoutTree(b, blocksArea(), 0, &more)).empty());
+}
+
+TEST_CASE("plugin diff: an items block nested in a column is diffed on its rows and a card on its meta line") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const char* nested = R"({"kind":"column","children":[
+      {"kind":"text","text":"Reading","style":"label"},
+      {"kind":"column","children":[{"kind":"items","id":"recent","style":"row","items":["A","B"]}]},
+      {"kind":"buttons","buttons":[{"id":"more","title":"More"}]}]})";
+    Rows before, after;
+    after.rows["B"].progress = 0.5;
+    const Block a = tree(nested), b = tree(nested);
+    const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &after);
+    const auto d = diffTrees(la, lb);
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].rect == lb.children[1].rect);
+
+    const char* cards = R"({"kind":"column","children":[
+      {"kind":"items","id":"now","style":"card","items":["A"]},
+      {"kind":"buttons","buttons":[{"id":"more","title":"More"}]}]})";
+    Rows x, y;
+    x.meta = "42% · 3 highlights · opened today";
+    y.meta = "42% · 4 highlights · opened today";
+    const Block c = tree(cards), e = tree(cards);
+    CHECK(diffTrees(layoutTree(c, blocksArea(), 0, &x), layoutTree(e, blocksArea(), 0, &x)).empty());
+    const Laid lc = layoutTree(c, blocksArea(), 0, &x), le = layoutTree(e, blocksArea(), 0, &y);
+    const auto d2 = diffTrees(lc, le);
+    REQUIRE(d2.size() == 1);
+    CHECK(d2[0].rect == le.children[0].rect);
 }
