@@ -25,6 +25,7 @@
 #include "app/app.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
+#include "app/home_tree.h"
 #include "app/lifecycle.h"
 #include "app/plugin_background.h"
 #include "app/plugin_events.h"
@@ -625,9 +626,14 @@ int main(int argc, char** argv) {
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     // `items` blocks on plugin screens read the library as the app's own lists do; a tap opens the item.
     LibraryItemSource pluginItems(lib, flow.statusFn(), wallMs);
-    pluginEvents.setItemUi(&pluginItems, ItemTap{[&flow, &app](const ItemRow& r, std::function<void(const std::string&)> done) {
-                               flow.open(r, app, std::nullopt, std::move(done));
-                           }});
+    const ItemTap itemTap{[&flow, &app](const ItemRow& r, std::function<void(const std::string&)> done) {
+        flow.open(r, app, std::nullopt, std::move(done));
+    }};
+    pluginEvents.setItemUi(&pluginItems, itemTap);
+    // Home's body written by a plugin (Settings → Home): its last tree is kept, so the first frame of
+    // the next start shows it (plugins load after the first screen).
+    HomeTreeStore homeTrees(paths.stateDir + "/home-tree.json");
+    PluginHome pluginHome(pluginEvents, homeTrees, [&lib] { return loadSettings(lib).homeScreen; }, &pluginItems, itemTap);
     // zk.library.open: the same rule as an items block (the key, in that library if one is given), the
     // file asked for if any (a file the item hasn't: not found). The promise follows OpenFlow's outcome.
     pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
@@ -716,6 +722,7 @@ int main(int argc, char** argv) {
         home.dismissUpdate = [&] { updateNotice.dismiss(lib); };
         home.openItem = openItem;
         home.status = flow.statusFn();
+        home.body = [&pluginHome]() -> HomeBodyLink* { return &pluginHome; };
         return std::make_unique<HomeScreen>(status, home, wallMs);
     };
     makeSetup = [&](const Config& initial, bool imported, bool canGoBack) -> std::unique_ptr<Screen> {

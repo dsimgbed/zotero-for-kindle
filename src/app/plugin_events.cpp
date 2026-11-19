@@ -141,6 +141,37 @@ uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const s
     return instance;
 }
 
+bool PluginEvents::homeAvailable(const std::string& pluginId, const std::string& screenId) {
+    if (!host_ || !running_) return false;
+    for (const auto& s : host_->status()) {
+        if (s.folder.dir != pluginId) continue;
+        if (!s.enabled || s.stopped || !s.folder.manifest || !s.folder.problem.empty() || !s.withdrawn.empty()) return false;
+        if (!s.loaded) return true;  // plugins load lazily: the host answers with a tree or a ScreenError
+        for (const auto& e : s.entries)
+            if (e.kind == "screen" && e.id == screenId && e.home) return true;
+        return false;
+    }
+    return false;  // removed
+}
+
+PluginEvents::Opened PluginEvents::openHome(const std::string& pluginId, const std::string& screenId) {
+    Opened o{0, pluginId, ""};
+    if (!host_ || !running_) return o;
+    for (const auto& st : host_->status()) {
+        if (st.folder.dir != pluginId) continue;
+        if (st.folder.manifest) o.pluginName = st.folder.manifest->name;
+        for (const auto& e : st.entries)
+            if (e.kind == "screen" && e.id == screenId) o.title = e.title;
+    }
+    o.instance = host_->openScreen(pluginId, screenId, nullptr, TreeUse::HomeBody);
+    screens_[o.instance] = o.pluginName;
+    return o;
+}
+
+void PluginEvents::rerender(uint64_t instance) {
+    if (host_ && running_ && screens_.count(instance)) host_->rerender(instance);
+}
+
 void PluginEvents::send(uint64_t instance, nlohmann::json event) {
     if (host_ && screens_.count(instance)) host_->screenEvent(instance, std::move(event));
 }

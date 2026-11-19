@@ -491,3 +491,26 @@ zk.screen("f", { title: "F", render: () => { throw new Error("nope"); } });
     CHECK_FALSE(h.next(Kind::ScreenError, f, 100));
     CHECK(h.failures() == failures);
 }
+
+TEST_CASE("screens host: Home's body (TreeUse::HomeBody) refuses a search or field as an invalid tree (a failure); its trees carry their JSON") {
+    Host h(R"JS(
+let form = false;
+zk.screen("desk", { title: "Desk", home: true,
+  render: () => form ? zk.ui.column([zk.ui.field({ id: "f" })]) : zk.ui.column([zk.ui.text("desk")]),
+  onEvent(e) { if (e.kind === "tap") form = true; } });
+)JS");
+    const uint64_t home = h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody);
+    auto t = h.next(Kind::ScreenTree, home);
+    REQUIRE(t);
+    CHECK(Host::firstText(*t) == "desk");
+    CHECK(t->value == json::parse(R"({"kind":"column","children":[{"kind":"text","text":"desk"}]})"));  // as render returned it
+    const uint64_t screen = h.host->openScreen("p", "desk");
+    t = h.next(Kind::ScreenTree, screen);
+    REQUIRE(t);
+    CHECK(t->value.is_null());  // a screen's tree carries nothing more
+    const int failures = h.failures();
+    h.host->screenEvent(home, {{"kind", "tap"}, {"id", "x"}});
+    REQUIRE(h.next(Kind::ScreenError, home));  // a field on Home: refused like any invalid tree
+    CHECK(h.failures() == failures + 1);
+    CHECK(h.fp.log("p").find("field") != std::string::npos);
+}

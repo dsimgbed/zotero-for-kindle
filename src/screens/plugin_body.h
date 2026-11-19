@@ -6,7 +6,8 @@
 // PluginScreen (a header above it, Loading/error states around it) and Home's body.
 //
 // - State: Loading until the first tree; Failed when the host says the screen can't show
-//   (ScreenError), or, for Home's body (TreeUse::HomeBody), when a tree holds a search or field.
+//   (ScreenError), or, for Home's body (TreeUse::HomeBody), when a tree holds a search or field
+//   (a backstop: the host parses Home's trees as HomeBody and sends a ScreenError for those).
 //   The owner draws Loading and Failed; the body draws the Shown blocks.
 // - An onEvent error shows in the action result pop-up ("<Plugin> couldn't do that: …", Close);
 //   the tree that follows is drawn under it.
@@ -23,7 +24,11 @@
 //   laid out again, the rows read afresh). When the body shows again after an item was opened (by
 //   a tap, or by the plugin's zk.library.open), `{kind: "reader", closed: true}` goes to the plugin.
 // - The plugin closing its screen (zk.ui.close: ScreenClose) stops the body; the owner hears it
-//   through onPluginClose.
+//   through onPluginClose. Nothing more is sent once it is closed (by the plugin, or the user left).
+// - The item sheet and the error pop-up cover the window (the owner may give less: Home keeps its
+//   tab bar). Item details pushed from the sheet (More…) open items without the body: it may be
+//   gone by then (Home falls back to its built-in body), and the open still reports to the plugin
+//   through what the body shared with it.
 
 #include <cstdint>
 #include <deque>
@@ -82,6 +87,8 @@ public:
     // The plugin closed its screen (ScreenClose): the body has stopped (keyboard hidden, nothing
     // more taken); `f` does the rest (PluginScreen pops itself). Unset: nothing more.
     void onPluginClose(std::function<void(Nav&)> f) { pluginClose_ = std::move(f); }
+    // What the item sheet and the error pop-up cover (default: the whole window).
+    void setWindow(std::function<Rect()> f) { window_ = std::move(f); }
 
     // The Shown state's blocks, the item sheet and "Working…"; the error pop-up in any state.
     // Paints nothing else (the owner fills the background and draws Loading/Failed).
@@ -93,6 +100,12 @@ public:
     void onShow(Nav&);   // lays out again (rows read afresh); tells the plugin a reader it opened closed
     void onTick(Nav&);   // takes the host's answers, sends the next event, the typing pause, "Working…"
     void onClose(Nav&);  // the user left: what was typed goes, the rest is dropped; the host hears `left`
+    // The rows of items blocks read afresh (a sync, a download): only blocks that now draw
+    // differently are repainted; nothing when nothing changed.
+    void reread(Nav&);
+    // Where the item `itemKey` (or the file `attachmentKey`) shows on this page: its row's download
+    // line is drawn from the app's status at draw time, so its owner repaints these on progress.
+    std::vector<Rect> itemRects(const std::string& itemKey, const std::string& attachmentKey) const;
     bool wantsKeyboard() const { return !focus_.focused.empty(); }
 
     uint64_t instance() const { return instance_; }
@@ -122,7 +135,7 @@ private:
     void tapBlocks(Point, Nav&);
     void openItem(const ItemRow&);
     void sheetGesture(const Gesture&, Nav&);
-    static Rect sheetArea();
+    Rect sheetArea() const;
 
     ScreenLink& link_;
     const uint64_t instance_;
@@ -130,6 +143,7 @@ private:
     Area area_;
     const TreeUse use_;
     std::function<void(Nav&)> pluginClose_;
+    std::function<Rect()> window_;
     State state_ = State::Loading;
     std::string error_;
     std::shared_ptr<const Block> tree_;

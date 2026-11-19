@@ -95,13 +95,42 @@ void PluginBody::onShow(Nav& nav) {
     }
 }
 
-Rect PluginBody::sheetArea() { return {0, 0, W(), H()}; }
+Rect PluginBody::sheetArea() const { return window_ ? window_() : Rect{0, 0, W(), H()}; }
 
-void PluginBody::openItem(const ItemRow& row) {
-    if (!tap_.open) return;
-    tap_.open(row, [shown = openedItem_](const std::string& error) {
+namespace {
+
+// Opens an item the app's way; `shown` is set once the reader shows (the body tells the plugin
+// when it shows again). Needs nothing of the body: item details may call it after the body went.
+void openWith(const ItemTap& tap, const std::shared_ptr<bool>& shown, const ItemRow& row) {
+    if (!tap.open) return;
+    tap.open(row, [shown](const std::string& error) {
         if (error.empty()) *shown = true;
     });
+}
+
+}  // namespace
+
+void PluginBody::openItem(const ItemRow& row) { openWith(tap_, openedItem_, row); }
+
+void PluginBody::reread(Nav& nav) {
+    if (!tree_) return;
+    const Laid before = std::move(laid_);
+    relayout(nav);
+    for (const Damage& d : diffTrees(before, laid_)) nav.damage(d.rect, d.wave);
+}
+
+std::vector<Rect> PluginBody::itemRects(const std::string& itemKey, const std::string& attachmentKey) const {
+    std::vector<Rect> out;
+    if (state_ != State::Shown || !tree_) return out;
+    std::function<void(const Laid&)> walk = [&](const Laid& l) {
+        for (const auto& p : l.parts)
+            if (p.item && ((!itemKey.empty() && p.item->key == itemKey) ||
+                           (!attachmentKey.empty() && p.item->attachmentKey == attachmentKey)))
+                out.push_back(p.rect);
+        for (const auto& c : l.children) walk(c);
+    };
+    walk(laid_);
+    return out;
 }
 
 void PluginBody::sheetGesture(const Gesture& g, Nav& nav) {
@@ -126,7 +155,9 @@ void PluginBody::sheetGesture(const Gesture& g, Nav& nav) {
             const ItemRow row = sheet_->row();
             sheet_.reset();
             nav.damage(area, Waveform::Ui);
-            nav.push(std::make_unique<ItemDetailsScreen>(row, [this](const ItemRow& r) { openItem(r); }));
+            // Not `this`: the details may outlive the body (Home dropping it meanwhile).
+            nav.push(std::make_unique<ItemDetailsScreen>(
+                row, [tap = tap_, shown = openedItem_](const ItemRow& r) { openWith(tap, shown, r); }));
             break;
         }
         case ItemSheet::Action::None: break;
@@ -170,7 +201,7 @@ void PluginBody::receive(const PluginHostEvent& ev, Nav& nav) {
             // The pop-up sits at the bottom, where the keyboard is: the keyboard goes, so Close shows.
             setFocus("", nav);
             if (popup_) nav.damage(popup_->rect(), Waveform::Quality);
-            popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, Rect{0, 0, W(), H()});
+            popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, sheetArea());
             nav.damage(popup_->rect(), Waveform::Ui);
             break;
         case PluginHostEvent::Kind::ReaderClosed:  // a preview it opened (zk.reader.open) closed
@@ -235,7 +266,7 @@ void PluginBody::flushChange() {
 }
 
 void PluginBody::enqueue(json event, Nav& nav) {
-    if (state_ != State::Shown) return;
+    if (state_ != State::Shown || closedByPlugin_ || left_) return;
     flushChange();  // a pending change goes first
     if (event["kind"] == "swipe")
         for (const auto& q : queue_)
@@ -245,7 +276,7 @@ void PluginBody::enqueue(json event, Nav& nav) {
 }
 
 void PluginBody::pump(Nav& nav) {
-    if (state_ != State::Shown || sending() || queue_.empty()) return;
+    if (state_ != State::Shown || closedByPlugin_ || left_ || sending() || queue_.empty()) return;
     link_.send(instance_, std::move(queue_.front()));
     queue_.pop_front();
     ++sent_;

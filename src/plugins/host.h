@@ -88,7 +88,8 @@ struct PluginHostDeps {
 // Screens (zk.screen; `instance` names one open screen, see PluginHost::openScreen):
 // ScreenTree: `tree` is what render returned, checked; `requestId` counts the events of the screen
 // sent with screenEvent() that were handled before it (an event is answered by the first tree
-// whose requestId reaches its number, 1 for the first). ScreenOpen: the plugin opened `screenId`
+// whose requestId reaches its number, 1 for the first); for Home's body (TreeUse::HomeBody)
+// `value` is the tree's JSON as render returned it. ScreenOpen: the plugin opened `screenId`
 // (title in `text`) over `parent` with zk.ui.open (parent 0: from an action's run); `value` the
 // params (null: none). ScreenClose: the plugin closed the screen (zk.ui.close); `value` the result.
 // ScreenError: the screen can't be shown (render failed, an invalid tree, the plugin turned off or
@@ -190,8 +191,11 @@ public:
     void resetData(const std::string& id);
     // Opens a plugin's screen (the launcher, a test): returns its instance number at once; the
     // plugin gets an `open` event (if it has onEvent), then render runs and a ScreenTree (or a
-    // ScreenError) follows. `params` (null: none) are given to render and onEvent.
-    uint64_t openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // ScreenError) follows. `params` (null: none) are given to render and onEvent. `use` HomeBody:
+    // Home's body: its trees are parsed as such (a search or field is an invalid tree: a ScreenError,
+    // counted as a failure), and each ScreenTree carries the tree's JSON in `value` (Home keeps it).
+    uint64_t openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr,
+                        TreeUse use = TreeUse::Screen);
     // What the user did on an open screen ({kind:"tap", id}, …: zk.d.ts's zk.ui.Event). Events are
     // handled one at a time, in order; each is answered by a ScreenTree (see PluginHostEvent).
     void screenEvent(uint64_t instance, nlohmann::json event);

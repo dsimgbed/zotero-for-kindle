@@ -15,6 +15,7 @@ struct Paths {
     std::string launcherPath;  // the library launcher, Zotero.sh
     std::string pluginsDir;    // <pluginsDir>/<id>/plugin.json; outside appDir so updates never touch it
     std::string cacheDir;      // what can be fetched again: <cacheDir>/preview (zk.reader.open's documents)
+    std::string stateDir;      // what the app keeps between runs: <stateDir>/home-tree.json (Home's kept tree)
     std::string configFile() const { return configDir + "/config.json"; }
 };
 

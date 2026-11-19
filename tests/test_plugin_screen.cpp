@@ -838,6 +838,11 @@ TEST_CASE("plugin body: the plugin closing its screen stops the body and tells i
     CHECK(body.closedByPlugin());
     CHECK(link.mail.size() == 1);  // nothing more taken
     CHECK(nav.pops == 0);          // the owner decides
+    const Rect keep = body.laid()->children.at(3).parts.at(2).rect;
+    body.onGesture(tapAt({keep.x + keep.w / 2, keep.y + keep.h / 2}), nav);  // Home keeps showing it meanwhile
+    body.onShow(nav);
+    body.onTick(nav);
+    CHECK(link.sent.empty());  // nothing goes to a screen the plugin closed
     body.onClose(nav);
     CHECK(link.leftScreens.empty());  // the plugin closed it: no `left`
 }

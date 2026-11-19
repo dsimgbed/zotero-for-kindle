@@ -645,9 +645,13 @@ static Laid layOut(const Block& root, Rect area, int page) {
         for (int i = 0; i < n; ++i)
             if (units[i].breakable()) order.push_back(i);
         std::sort(order.begin(), order.end(), [&](int a, int b) { return units[a].sum() < units[b].sum(); });
-        int room = avail - fixed, left = static_cast<int>(order.size());
+        // Each gets at least its first unit (a card taller than its share would otherwise push the
+        // blocks under it out of the area): what the others still need is held back.
+        int room = avail - fixed, left = static_cast<int>(order.size()), reserve = minimum;
         for (int i : order) {
-            budget[i] = std::min(units[i].sum(), room / left--);
+            reserve -= units[i].h[0];
+            const int share = std::min(room / left--, room - reserve);
+            budget[i] = std::min(units[i].sum(), std::max(units[i].h[0], share));
             room -= budget[i];
         }
         std::vector<std::vector<std::pair<int, int>>> split_(n);

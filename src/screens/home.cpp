@@ -3,6 +3,7 @@
 #include "app/catalog_service.h"
 
 #include "screens/item_details.h"
+#include "screens/plugin_body.h"
 #include "screens/plugin_entries.h"
 #include "screens/plugin_launcher.h"
 
@@ -28,6 +29,7 @@ constexpr int kCardY = 292, kCoverH = 400;
 constexpr int kRecentLabelY = kCardY + kCoverH + 80;
 constexpr int kRowsY = kRecentLabelY + 56;
 constexpr int kBannerH = 150;
+constexpr int kBodyBottomGap = 12;  // a plugin's body: above the banner or the tab bar
 constexpr int64_t kResyncAfterMs = 2 * 60'000;
 
 }  // namespace
@@ -62,6 +64,39 @@ Rect HomeScreen::updateBannerRect() const { return updateBannerText() ? bannerRe
 Rect HomeScreen::updateDismissRect() const {
     const Rect b = updateBannerRect();
     return b.empty() ? Rect{} : Rect{b.x + b.w - kMargin - 120, b.y, 120 + kMargin, b.h};
+}
+
+Rect HomeScreen::bodyRect() const {
+    const int bottom = bannerShown() ? bannerRect().y : H() - kTabBarH;
+    return {kMargin, kCardY, W() - 2 * kMargin, bottom - kBodyBottomGap - kCardY};
+}
+
+Rect HomeScreen::bodyRegion() const { return {0, kCardY, W(), H() - kCardY - kTabBarH}; }
+
+PluginBody* HomeScreen::body() const { return link_ ? link_->body() : nullptr; }
+
+bool HomeScreen::showsPluginBody() const {
+    const PluginBody* b = body();
+    return b && b->state() == PluginBody::State::Shown;
+}
+
+void HomeScreen::fallBack(Nav& nav) {
+    const bool drawn = showsPluginBody();  // else the built-in body shows already (or a failure redrew all)
+    link_->drop(nav);
+    if (drawn) {
+        reload(nav.library());
+        nav.damage(bodyRegion(), Waveform::Quality);
+    }
+}
+
+void HomeScreen::tickBody(Nav& nav) {
+    PluginBody* b = body();
+    if (!b) return;
+    b->onTick(nav);
+    if (b->state() == PluginBody::State::Failed || b->closedByPlugin()) return fallBack(nav);
+    if (b->state() != PluginBody::State::Loading) return;
+    if (nav.nowMs() - waitingSinceMs_ >= kFirstTreeMs) fallBack(nav);  // too slow: the built-in body stays
+    else nav.wakeAt(waitingSinceMs_ + kFirstTreeMs);
 }
 
 std::vector<Rect> HomeScreen::recentRowRects() const {
@@ -132,11 +167,21 @@ void HomeScreen::onShow(Nav& nav) {
     nowMs_ = nav.nowMs();
     update_ = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     safe_ = actions_.safeModeNotice && actions_.safeModeNotice();
-    reload(nav.library());
+    reload(nav.library());  // also with a plugin's body: the built-in one is ready whenever that can't show
+    link_ = actions_.body ? actions_.body() : nullptr;
+    if (link_) {
+        link_->shown(nav, [this](Nav&) { return bodyRect(); }, [this] { return sheetArea(); });
+        if (PluginBody* b = body()) {
+            b->onShow(nav);
+            if (b->state() == PluginBody::State::Loading) waitingSinceMs_ = nav.nowMs();
+            tickBody(nav);  // the kept tree (drawn in this first frame), or what came while Home was hidden
+        }
+    }
     if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
 }
 
 void HomeScreen::onTick(Nav& nav) {
+    tickBody(nav);
     if (nav.pluginEntries() && readPlugins(nav)) nav.damage(pluginsRect(), Waveform::Ui);
     auto now = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     const bool safe = actions_.safeModeNotice && actions_.safeModeNotice();
@@ -144,6 +189,7 @@ void HomeScreen::onTick(Nav& nav) {
     update_ = std::move(now);
     safe_ = safe;
     nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Ui);  // the banner and the rows above it
+    if (PluginBody* b = body()) b->reread(nav);  // laid out again in the body's new rect
 }
 
 std::string HomeScreen::cardMeta() const {
@@ -180,7 +226,10 @@ void HomeScreen::draw(Canvas& canvas) {
     centredText(cr, "Search your library…", {kSans, 9, 400, false, kTertiary},
                 {search.x + 96, search.y, search.w - 120, search.h}, Align::Left);
 
-    if (total_ == 0) {
+    const bool plugin = showsPluginBody();
+    if (plugin) {
+        // The plugin's blocks are drawn after the banners (its item sheet and pop-up go over them).
+    } else if (total_ == 0) {
         std::string msg = "Your library is empty here. Tap ⟳ to sync.";
         if (status_.syncing()) {
             const std::string prefix = "Syncing…";
@@ -192,7 +241,7 @@ void HomeScreen::draw(Canvas& canvas) {
         // Continue reading (or, before anything was opened, the newest readable item).
         drawItemCard(cr, cardRect(), *card_, cardOpened_ ? "CONTINUE READING" : "START READING", cardMeta());
     }
-    if (total_ > 0) {
+    if (total_ > 0 && !plugin) {
         hRule(cr, kCardY + kCoverH + 44, 0, W());
         drawText(cr, "RECENT", {kSans, 7, 700, false, kSecondary}, {kMargin, kRecentLabelY, contentW, 50}, 1);
         auto rects = recentRowRects();
@@ -215,6 +264,7 @@ void HomeScreen::draw(Canvas& canvas) {
                  {b.x + kMargin, b.y + 84, x.x - b.x - kMargin, 40}, 1);
         centredText(cr, "×", {kSans, 12, 400}, {x.x, x.y, x.w - kMargin, x.h});
     }
+    if (plugin) body()->draw(cr);
     if (sheet_) sheet_->draw(cr, sheetArea());
 }
 
@@ -248,6 +298,16 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
             }
             case ItemSheet::Action::None: break;
         }
+        return;
+    }
+    PluginBody* b = body();
+    const bool plugin = showsPluginBody();
+    if (b && (b->sheet() || b->errorPopup())) {  // they take every gesture until closed
+        b->onGesture(g, nav);
+        return;
+    }
+    if (plugin && g.type != GestureType::Tap) {  // long-press on an item: the item sheet; swipes turn its pages
+        if (bodyRect().contains(g.type == GestureType::Swipe ? g.start : g.pos)) b->onGesture(g, nav);
         return;
     }
     if (g.type == GestureType::LongPress) {
@@ -298,6 +358,10 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
         if (actions_.openSearch) actions_.openSearch();
         return;
     }
+    if (plugin) {
+        if (bodyRect().contains(g.pos)) b->onGesture(g, nav);
+        return;
+    }
     if (card_ && total_ > 0 && cardRect().contains(g.pos)) {
         if (actions_.openItem) actions_.openItem(*card_);
         return;
@@ -323,6 +387,8 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     nowMs_ = nav.nowMs();
     status_.onEvent(e, nowMs_);
     const bool headerChanged = header() != shownHeader;
+    PluginBody* b = body();
+    if (showsPluginBody()) return pluginSyncEvent(e, *b, headerChanged, shownContent, nav);
     switch (e.kind) {
         case SyncEvent::Kind::SyncStarted:
         case SyncEvent::Kind::SyncProgress:
@@ -363,6 +429,47 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         case SyncEvent::Kind::PushFinished:
             nav.damage({0, 0, W(), kHeaderH}, Waveform::Quality);
             break;
+        default: break;
+    }
+}
+
+// The same as the built-in body's, for a plugin's: the blocks that draw an item repaint when the
+// item changed (PluginBody::reread compares the rows they draw), nothing else; a sync that
+// changed the library renders the body again (its tree compared with the last).
+void HomeScreen::pluginSyncEvent(const SyncEvent& e, PluginBody& b, bool headerChanged, const Content& shown, Nav& nav) {
+    const auto bannerChanged = [&] {
+        const Content now = content();
+        return now.hasError != shown.hasError || now.error != shown.error;
+    };
+    switch (e.kind) {
+        case SyncEvent::Kind::SyncStarted:
+        case SyncEvent::Kind::SyncProgress:
+            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
+            if (total_ == 0) reload(nav.library());  // the built-in body stays ready
+            break;
+        case SyncEvent::Kind::SyncFinished: {
+            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Quality);
+            reload(nav.library());
+            if (bannerChanged()) nav.damage(bodyRegion(), Waveform::Quality);  // the body ends at the banner
+            b.reread(nav);
+            const SyncReport& r = e.report;
+            if (r.itemsAdded || r.itemsUpdated || r.itemsRemoved || r.annotations || !r.pluginEvents.empty()) link_->synced();
+            break;
+        }
+        case SyncEvent::Kind::DownloadProgress:
+            for (const Rect& r : b.itemRects(e.itemKey, e.attachmentKey)) nav.damage(r, Waveform::Ui);
+            break;
+        case SyncEvent::Kind::DownloadFinished:
+            reload(nav.library());
+            for (const Rect& r : b.itemRects(e.itemKey, e.attachmentKey)) nav.damage(r, Waveform::Quality);  // its download line
+            b.reread(nav);
+            break;
+        case SyncEvent::Kind::AnnotationsReady:
+            reload(nav.library());
+            b.reread(nav);
+            break;
+        case SyncEvent::Kind::PushStarted: nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui); break;
+        case SyncEvent::Kind::PushFinished: nav.damage({0, 0, W(), kHeaderH}, Waveform::Quality); break;
         default: break;
     }
 }

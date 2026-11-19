@@ -84,6 +84,19 @@ public:
     // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance.
     // Plugins not running (or no host): the screen shows "<Plugin> can't show this screen right now".
     uint64_t openScreen(App&, const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // Home's body (Settings → Home, see app/home_tree.h): whether the plugin may show it now (plugins
+    // run; it is on, not stopped, loads; once loaded, it has that screen with `home`), then the
+    // screen opened without pushing anything (TreeUse::HomeBody; its trees taken as any screen's).
+    // An instance of 0: nothing opened (plugins don't run).
+    struct Opened {
+        uint64_t instance = 0;
+        std::string pluginName, title;
+    };
+    bool homeAvailable(const std::string& pluginId, const std::string& screenId);
+    Opened openHome(const std::string& pluginId, const std::string& screenId);
+    // Renders an open screen again (Home shown, a sync): to the host it belongs to; nothing for a
+    // screen of a host gone with rebind() (it has its ScreenError waiting) or when plugins don't run.
+    void rerender(uint64_t instance);
     // ScreenLink (PluginScreen).
     void send(uint64_t instance, nlohmann::json event) override;
     void left(uint64_t instance) override;
