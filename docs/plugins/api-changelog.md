@@ -12,8 +12,9 @@ first, with what to do about it.
   in Settings → Home. The app keeps Home's frame (title, icons, search, banners, tab bar); the body
   may hold every block except `search` and `field` (a tree with one counts as a failure). It is
   drawn at once from the last kept tree, and rendered again on every Home show and after a sync
-  that changed something. Home falls back to the built-in body, silently,
-  when the plugin is off, gone or slow (no first tree within 1 s) or the screen fails.
+  that changed items or annotations. Home falls back to the built-in body, silently, when the
+  plugin is off, gone or slow (no first tree within 1 s), `render` fails or `zk.ui.close` is
+  called; an `onEvent` that throws shows the error pop-up and keeps the body.
 - `zk.ui.items({ id, style: "card" | "row", items, empty? })` — library items drawn by the app, with
   their reading progress, repainted when that changes. A tap opens the item, a long-press shows its
   menu; neither reaches the plugin. `ItemRef` is a key or `{ key, library?, label? }`.

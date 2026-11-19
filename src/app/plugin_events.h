@@ -96,7 +96,7 @@ public:
     Opened openHome(const std::string& pluginId, const std::string& screenId);
     // Renders an open screen again (Home shown, a sync): to the host it belongs to; nothing for a
     // screen of a host gone with rebind() (it has its ScreenError waiting) or when plugins don't run.
-    void rerender(uint64_t instance);
+    void rerender(uint64_t instance) override;
     // ScreenLink (PluginScreen).
     void send(uint64_t instance, nlohmann::json event) override;
     void left(uint64_t instance) override;

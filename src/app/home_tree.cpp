@@ -126,4 +126,6 @@ bool PluginHome::take(uint64_t instance, PluginHostEvent& out) {
 
 bool PluginHome::takeItemOpened(uint64_t instance) { return events_.takeItemOpened(instance); }
 
+void PluginHome::rerender(uint64_t instance) { events_.rerender(instance); }
+
 }  // namespace zk

@@ -61,6 +61,8 @@ public:
     // Whether an item this screen's plugin opened (zk.library.open) has been opened since the last
     // call; the screen tells the plugin when it shows again (the reader closed).
     virtual bool takeItemOpened(uint64_t) { return false; }
+    // Render the screen again (the long-press sheet changed an item's read state).
+    virtual void rerender(uint64_t) {}
 };
 
 // What the app does with an item of an `items` block (no event goes to the plugin): `open` is the

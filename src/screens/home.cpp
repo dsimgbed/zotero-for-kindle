@@ -170,6 +170,10 @@ void HomeScreen::onShow(Nav& nav) {
     reload(nav.library());  // also with a plugin's body: the built-in one is ready whenever that can't show
     link_ = actions_.body ? actions_.body() : nullptr;
     if (link_) {
+        if (PluginBody* old = body()) {  // kept from the last show: failed or closed while Home was hidden → dropped
+            old->onTick(nav);              // here, so shown() reopens it (with its kept tree) in this very show
+            if (old->state() == PluginBody::State::Failed || old->closedByPlugin()) link_->drop(nav);
+        }
         link_->shown(nav, [this](Nav&) { return bodyRect(); }, [this] { return sheetArea(); });
         if (PluginBody* b = body()) {
             b->onShow(nav);

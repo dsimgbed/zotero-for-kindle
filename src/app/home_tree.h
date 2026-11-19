@@ -61,6 +61,7 @@ public:
     void left(uint64_t instance) override;
     bool take(uint64_t instance, PluginHostEvent& out) override;
     bool takeItemOpened(uint64_t instance) override;
+    void rerender(uint64_t instance) override;
 
 private:
     PluginEvents& events_;

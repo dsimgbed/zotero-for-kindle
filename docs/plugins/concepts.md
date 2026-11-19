@@ -338,15 +338,18 @@ icons, the search field, the error, safe-mode and update banners, and the tab ba
 only the body between them; its `render` takes no params. The body may hold every block except
 `search` and `field`; a tree with one counts as a failure.
 
-Home draws a plugin's body at once from the last tree it kept, so there is no waiting after the
-app starts; the plugin renders again every time Home shows, and after a sync that changed
-something. A sync that changed nothing repaints nothing.
+Home draws a plugin's body at once from the last tree it kept, so once a tree is kept there is no
+waiting after the app starts (the first time, the built-in body shows for up to 1 second, then the
+plugin's); the plugin renders again every time Home shows, and after a sync that changed items or
+annotations. A sync that changed nothing repaints nothing.
 
 **Falling back.** Home shows the app's own body, with no message, when plugins are off (safe mode,
 the `OFF` file, stopped for an install), the chosen plugin is turned off, removed or incompatible or
-has no such screen, no tree is kept and the first one doesn't arrive within 1 second, or `render`
-or `onEvent` fails (including a tree with `search` or `field`). The next time Home shows, the plugin
-is tried again; Settings → Home says "<plugin> — not available" while it can't be.
+has no such screen, no tree is kept and the first one doesn't arrive within 1 second, `render` fails or
+returns an invalid tree (including one with `search` or `field`), or the body calls `zk.ui.close`
+(Home drops it: the built-in body shows until the next Home show). An `onEvent` that throws is not
+a failure of the body: the error pop-up shows over it and the body stays. The next time Home shows,
+the plugin is tried again; Settings → Home says "<plugin> — not available" while it can't be.
 
 **Items.** Draw library items with the `items` block: you give keys (`"ABCD2345"`, or
 `{ key, library?, label? }`), the app draws each item (`style: "card"` or `"row"`), keeps its

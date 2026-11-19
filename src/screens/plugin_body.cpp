@@ -149,6 +149,7 @@ void PluginBody::sheetGesture(const Gesture& g, Nav& nav) {
         }
         case ItemSheet::Action::Changed:  // marked read or unread, or the file removed: the rows are read again
             relayout(nav);
+            link_.rerender(instance_);  // and the plugin renders again (the item may leave its list)
             nav.damage(area, Waveform::Ui);
             break;
         case ItemSheet::Action::More: {

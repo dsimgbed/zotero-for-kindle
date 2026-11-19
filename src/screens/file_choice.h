@@ -21,6 +21,7 @@ public:
     FileChoiceScreen(ItemRow row, std::vector<FileChoice> files, Screen* under, Choose choose, std::function<void()> cancel = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
+    void onClose(Nav&) override;  // cancel, if no file was chosen
     bool showsTabBar() const override { return under_ ? under_->showsTabBar() : true; }
 
     const std::vector<FileChoice>& files() const { return files_; }

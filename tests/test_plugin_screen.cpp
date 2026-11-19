@@ -37,10 +37,11 @@ bool fonts() {
 
 struct FakeLink : ScreenLink {
     std::vector<json> sent;
-    std::vector<uint64_t> leftScreens;
+    std::vector<uint64_t> leftScreens, rerendered;
     std::deque<PluginHostEvent> mail;
     void send(uint64_t, json e) override { sent.push_back(std::move(e)); }
     void left(uint64_t instance) override { leftScreens.push_back(instance); }
+    void rerender(uint64_t instance) override { rerendered.push_back(instance); }
     bool take(uint64_t, PluginHostEvent& out) override {
         if (mail.empty()) return false;
         out = std::move(mail.front());
@@ -715,6 +716,7 @@ TEST_CASE("plugin screen items: Mark as read in the sheet reads the rows again, 
     r.screen->onGesture(tapAt({read.x + read.w / 2, read.y + read.h / 2}), r.nav);
     CHECK(r.screen->laid()->children.at(0).items.at(0).read);
     CHECK(r.link.sent.empty());
+    CHECK(r.link.rerendered == std::vector<uint64_t>{1});  // the plugin renders again (the item may leave its list)
 }
 
 TEST_CASE("plugin screen, end to end: zk.library.open opens through the item opener; unknown → \"Item not found\"; Back brings a `reader` event") {

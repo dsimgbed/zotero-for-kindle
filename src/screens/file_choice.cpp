@@ -77,10 +77,17 @@ void FileChoiceScreen::draw(Canvas& canvas) {
     }
 }
 
+void FileChoiceScreen::onClose(Nav&) {  // closed with no file chosen (a tab tap pops to the root, ...)
+    const auto cancel = std::move(cancel_);
+    cancel_ = nullptr;
+    if (cancel) cancel();
+}
+
 void FileChoiceScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     if (!sheetRect().contains(g.pos)) {
-        const auto cancel = cancel_;  // this screen goes with the pop
+        const auto cancel = std::move(cancel_);  // this screen goes with the pop (whose onClose must not call it again)
+        cancel_ = nullptr;
         nav.pop();
         if (cancel) cancel();
         return;
@@ -95,6 +102,7 @@ void FileChoiceScreen::onGesture(const Gesture& g, Nav& nav) {
         r.fileState = a.state;
         r.exactFile = true;
         const Choose choose = choose_;  // this screen goes with the pop
+        cancel_ = nullptr;              // a file is chosen: closing is no cancel
         nav.pop();
         if (choose) choose(r, nav);
         return;

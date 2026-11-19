@@ -612,6 +612,19 @@ TEST_CASE("home plugin: a ScreenError while shown (render failed, plugin off or 
     CHECK(rig.home->showsPluginBody());
 }
 
+TEST_CASE("home plugin: a ScreenError that came while Home was hidden → dropped and reopened with its kept tree in the same show") {
+    PluginRig rig;
+    REQUIRE(rig.home->showsPluginBody());
+    PluginHostEvent err{PluginHostEvent::Kind::ScreenError, "desk", "Reading Desk", "x", {}, 0, ""};
+    err.instance = rig.link.instance;
+    rig.link.give(err);  // the plugin was reloaded from Settings → Plugins while Home was hidden
+    rig.home->onShow(rig.nav);
+    CHECK(rig.link.opens == 2);
+    CHECK(rig.link.rerenders == 0);
+    CHECK(rig.link.drops == 1);
+    CHECK(rig.home->showsPluginBody());
+}
+
 TEST_CASE("home plugin: zk.ui.close on Home's body drops it; nothing more is sent; built-in until the next show") {
     PluginRig rig;
     PluginHostEvent close{PluginHostEvent::Kind::ScreenClose, "desk", "Reading Desk", "", {}, 0, ""};
