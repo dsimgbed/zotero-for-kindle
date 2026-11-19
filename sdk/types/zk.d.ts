@@ -641,7 +641,9 @@ declare namespace zk {
      * {@link zk.reader.open}; from a background task or a timer it throws, and nothing opens. The
      * promise resolves when the reader shows, and rejects with the reason when it can't: the item
      * is gone or unreadable (`"Item not found"`), the download failed, or the user cancelled it
-     * (`"Cancelled"`). An unknown key never opens anything.
+     * (`"Cancelled"`). An unknown key never opens anything. Given as `{ key, library }`, the key is
+     * looked up in that library; with `library` omitted (or a plain key) the app looks it up as it
+     * does today, not in a fixed library 0.
      *
      * **Permission**: `library:read`. Needs app 0.10.0.
      *
@@ -1517,9 +1519,9 @@ declare namespace zk {
     /** An item for an {@link items} block: its key, or the key with its library and a label. */
     type ItemRef = string | {
       key: string;
-      /** 0 My Library (the default), else a group's id ({@link zk.library.libraries}). */
+      /** 0 My Library, else a group's id ({@link zk.library.libraries}). Omitted: the app looks the key up, as it does today. */
       library?: number;
-      /** A short line shown with the item (e.g. "Up next"). */
+      /** The kicker line above a `card`'s title (e.g. "BOOK · CONTINUE"); a `row` ignores it. */
       label?: string;
     };
 
@@ -1749,9 +1751,9 @@ declare namespace zk {
     /** Whether it is marked read. */
     read: boolean;
     /**
-     * How far the user has read on this Kindle, 0…1 (the furthest place reached in the item's
-     * attachment); `null` if it was never opened here. Not synced, and not the read mark
-     * (`read`). Needs app 0.10.0.
+     * How far the item was read on this Kindle (its current place in the attachment), 0…1;
+     * `null` if it was never opened here. Not synced, and not the read mark (`read`). Needs app
+     * 0.10.0.
      */
     progress: number | null;
     /** When the user last opened it on this Kindle (ISO 8601), `null` if never. Needs app 0.10.0. */

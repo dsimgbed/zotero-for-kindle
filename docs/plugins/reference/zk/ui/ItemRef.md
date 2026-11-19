@@ -33,5 +33,5 @@ An item for an [items](items.md) block: its key, or the key with its library and
 | Name | Type | Description |
 | ------ | ------ | ------ |
 | `key` | `string` | - |
-| `label?` | `string` | A short line shown with the item (e.g. "Up next"). |
-| `library?` | `number` | 0 My Library (the default), else a group's id ([zk.library.libraries](../library/libraries.md)). |
+| `label?` | `string` | The kicker line above a `card`'s title (e.g. "BOOK · CONTINUE"); a `row` ignores it. |
+| `library?` | `number` | 0 My Library, else a group's id ([zk.library.libraries](../library/libraries.md)). Omitted: the app looks the key up, as it does today. |

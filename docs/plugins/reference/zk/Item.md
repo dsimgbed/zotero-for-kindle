@@ -24,7 +24,7 @@ empty are `null`; lists are empty arrays.
 | <a id="libraryid"></a> `libraryId` | `number` | Its library: 0 My Library, else the Zotero group's id. Needs app 0.8.0. |
 | <a id="libraryname"></a> `libraryName` | `string` | Its library's name: `"My Library"` or the group's name. Needs app 0.8.0. |
 | <a id="openedat"></a> `openedAt` | `string` \| `null` | When the user last opened it on this Kindle (ISO 8601), `null` if never. Needs app 0.10.0. |
-| <a id="progress"></a> `progress` | `number` \| `null` | How far the user has read on this Kindle, 0…1 (the furthest place reached in the item's attachment); `null` if it was never opened here. Not synced, and not the read mark (`read`). Needs app 0.10.0. |
+| <a id="progress"></a> `progress` | `number` \| `null` | How far the item was read on this Kindle (its current place in the attachment), 0…1; `null` if it was never opened here. Not synced, and not the read mark (`read`). Needs app 0.10.0. |
 | <a id="publication"></a> `publication` | `string` \| `null` | Journal, book, proceedings or website title. |
 | <a id="read"></a> `read` | `boolean` | Whether it is marked read. |
 | <a id="tags"></a> `tags` | `string`[] | Tag names. |

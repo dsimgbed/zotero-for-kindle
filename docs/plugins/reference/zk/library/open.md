@@ -15,7 +15,9 @@ Only in answer to the user (a screen's `onEvent`, an action's `run`), like
 [zk.reader.open](../reader/open.md); from a background task or a timer it throws, and nothing opens. The
 promise resolves when the reader shows, and rejects with the reason when it can't: the item
 is gone or unreadable (`"Item not found"`), the download failed, or the user cancelled it
-(`"Cancelled"`). An unknown key never opens anything.
+(`"Cancelled"`). An unknown key never opens anything. Given as `{ key, library }`, the key is
+looked up in that library; with `library` omitted (or a plain key) the app looks it up as it
+does today, not in a fixed library 0.
 
 **Permission**: `library:read`. Needs app 0.10.0.
 
