@@ -34,4 +34,4 @@ An item for an [items](items.md) block: its key, or the key with its library and
 | ------ | ------ | ------ |
 | `key` | `string` | - |
 | `label?` | `string` | The kicker line above a `card`'s title (e.g. "BOOK · CONTINUE"); a `row` ignores it. |
-| `library?` | `number` | 0 My Library, else a group's id ([zk.library.libraries](../library/libraries.md)). Omitted: the app looks the key up, as it does today. |
+| `library?` | `number` | 0 My Library, else a group's id ([zk.library.libraries](../library/libraries.md)). Omitted: the app finds the item by its key across the libraries it shows. |

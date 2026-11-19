@@ -31,10 +31,7 @@ interface Pin {
   library: number;
 }
 
-/** How many inbox items to hand the block; the app pages them. */
-const INBOX_LIMIT = 50;
-
-const heading = (text: string) => zk.ui.text(text, { style: "meta" });
+const heading = (text: string) => zk.ui.text(text, { style: "label" });
 
 /** A book, by item type or by its readable file being an EPUB. */
 const isBook = (item: zk.Item) =>
@@ -79,6 +76,7 @@ zk.itemAction({
 // ───────────────────────────── Inbox ─────────────────────────────
 
 async function findInbox(collection: string): Promise<zk.Item[]> {
+  // Visits every unread item of the collection: fine for an inbox (render has 1 s).
   const unread: zk.Item[] = [];
   for await (const item of zk.library.items({ collection, read: false })) unread.push(item);
   // ISO 8601 strings of one format sort as text.
@@ -106,6 +104,7 @@ zk.screen("desk", {
     // Pinned, minus what already shows under Continue.
     const shown = new Set([book?.key, paper?.key]);
     const pins = (await loadPins()).filter((p) => !shown.has(p.key));
+    for (const p of pins) shown.add(p.key);
     if (pins.length > 0) {
       blocks.push(heading("PINNED"));
       blocks.push(zk.ui.items({ id: "pinned", style: "row", items: pins }));
@@ -113,14 +112,14 @@ zk.screen("desk", {
 
     const inbox = zk.settings.inbox;
     if (inbox) {
-      const unread = await findInbox(inbox);
+      const unread = (await findInbox(inbox)).filter((i) => !shown.has(i.key));
       if (unread.length > 0) {
         blocks.push(heading(`NEW IN INBOX (${unread.length})`));
         blocks.push(
           zk.ui.items({
             id: "inbox",
             style: "row",
-            items: unread.slice(0, INBOX_LIMIT).map((i) => ({ key: i.key, library: i.libraryId })),
+            items: unread.map((i) => ({ key: i.key, library: i.libraryId })),
           }),
         );
       }

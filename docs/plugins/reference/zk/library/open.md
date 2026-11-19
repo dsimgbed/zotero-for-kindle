@@ -16,8 +16,8 @@ Only in answer to the user (a screen's `onEvent`, an action's `run`), like
 promise resolves when the reader shows, and rejects with the reason when it can't: the item
 is gone or unreadable (`"Item not found"`), the download failed, or the user cancelled it
 (`"Cancelled"`). An unknown key never opens anything. Given as `{ key, library }`, the key is
-looked up in that library; with `library` omitted (or a plain key) the app looks it up as it
-does today, not in a fixed library 0.
+looked up in that library; with `library` omitted (or a plain key) the app finds the item
+by its key across the libraries it shows.
 
 **Permission**: `library:read`. Needs app 0.10.0.
 
