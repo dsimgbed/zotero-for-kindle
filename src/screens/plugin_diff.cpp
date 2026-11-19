@@ -9,7 +9,7 @@ namespace {
 using K = Block::Kind;
 
 bool same(const Laid& a, const Laid& b) {
-    return a.rect == b.rect && a.first == b.first && a.count == b.count && sameBlock(*a.block, *b.block);
+    return a.rect == b.rect && a.first == b.first && a.count == b.count && a.items == b.items && sameBlock(*a.block, *b.block);
 }
 
 Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
@@ -19,6 +19,7 @@ Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
     switch (a->block->kind) {
         case K::Deck: return a->block->children == b->block->children ? Waveform::Fast : Waveform::Quality;
         case K::Card: return Waveform::Quality;
+        case K::Items: return a->block->itemStyle == Block::ItemStyle::Card ? Waveform::Quality : Waveform::Ui;
         case K::Text:
         case K::Notice: return a->rect == b->rect ? Waveform::Fast : Waveform::Ui;
         default: return Waveform::Ui;

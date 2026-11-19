@@ -27,6 +27,15 @@ void drawItemRow(cairo_t*, Rect, const ItemRow&, const std::string& status);
 // "2 files" before its "✓ Read" ("" with one file).
 std::string itemRowMeta(const ItemRow&);
 
+// The Continue card: cover on the left, `label` (the kicker, "CONTINUE READING"; none: the title
+// moves up), title, byline, progress bar and `meta` on the right. The cover is `r.h` tall, 290 wide.
+void drawItemCard(cairo_t*, Rect, const ItemRow&, const std::string& label, const std::string& meta);
+// The card's meta line: "13% · 3 highlights · opened today"; "new" / "2 highlights · new" before it was opened.
+// openedMs 0: never opened.
+std::string cardMetaText(const ItemRow&, int highlights, int64_t openedMs, int64_t nowMs);
+// The same for an item in the library: its highlights and when it was last opened on this Kindle.
+std::string itemCardMeta(Library&, const ItemRow&, int64_t nowMs);
+
 void drawTabBar(cairo_t*, Rect bar, const std::vector<std::string>& tabs, int active);
 Rect tabRect(Rect bar, int index, int count);
 

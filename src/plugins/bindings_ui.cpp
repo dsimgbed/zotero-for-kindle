@@ -86,6 +86,7 @@ zk.ui = Object.freeze({
   text: (text, opts) => ({ kind: "text", text, ...opts }),
   card: (card) => ({ kind: "card", ...card }),
   deck: (deck) => ({ kind: "deck", ...deck }),
+  items: (items) => ({ kind: "items", ...items }),
   list: (list) => ({ kind: "list", ...list }),
   search: (search) => ({ kind: "search", ...search }),
   field: (field) => ({ kind: "field", ...field }),

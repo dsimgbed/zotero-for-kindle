@@ -24,29 +24,11 @@ namespace {
 
 int W() { return metrics().width; }
 int H() { return metrics().height; }
-constexpr int kCardY = 292, kCoverW = 290, kCoverH = 400;
+constexpr int kCardY = 292, kCoverH = 400;
 constexpr int kRecentLabelY = kCardY + kCoverH + 80;
 constexpr int kRowsY = kRecentLabelY + 56;
 constexpr int kBannerH = 150;
 constexpr int64_t kResyncAfterMs = 2 * 60'000;
-
-std::string authorsOf(const std::string& byline) {
-    const size_t dot = byline.find(" · ");
-    return dot == std::string::npos ? byline : byline.substr(0, dot);
-}
-
-std::string openedAgo(int64_t openedMs, int64_t nowMs) {
-    const int64_t days = (nowMs - openedMs) / (24 * 3600 * 1000LL);
-    if (days < 1) return "opened today";
-    if (days < 2) return "opened yesterday";
-    if (days < 7) return "opened " + std::to_string(days) + " days ago";
-    std::time_t t = static_cast<std::time_t>(openedMs / 1000);
-    std::tm tm{};
-    localtime_r(&t, &tm);
-    char buf[32];
-    std::strftime(buf, sizeof buf, "opened %Y-%m-%d", &tm);
-    return buf;
-}
 
 }  // namespace
 
@@ -165,12 +147,7 @@ void HomeScreen::onTick(Nav& nav) {
 }
 
 std::string HomeScreen::cardMeta() const {
-    std::string meta = std::to_string(cardHighlights_) + (cardHighlights_ == 1 ? " highlight" : " highlights");
-    if (cardOpened_) {
-        if (card_->progress > 0) meta = std::to_string(static_cast<int>(card_->progress * 100 + 0.5)) + "% · " + meta;
-        return meta + " · " + openedAgo(cardOpenedMs_, wallMs_());
-    }
-    return cardHighlights_ ? meta + " · new" : "new";
+    return cardMetaText(*card_, cardHighlights_, cardOpened_ ? cardOpenedMs_ : 0, wallMs_());
 }
 
 void HomeScreen::draw(Canvas& canvas) {
@@ -213,20 +190,7 @@ void HomeScreen::draw(Canvas& canvas) {
         drawText(cr, msg, {kSerif, 11, 400, false, kSecondary}, {kMargin + 40, 560, contentW - 80, 200}, 3, Align::Center);
     } else if (card_) {
         // Continue reading (or, before anything was opened, the newest readable item).
-        const Rect cover{kMargin, kCardY, kCoverW, kCoverH};
-        generatedCover(cr, cover, card_->title.empty() ? "Untitled" : card_->title, authorsOf(card_->byline), true);
-        const int colX = cover.x + cover.w + 48, colW = W() - kMargin - colX;
-        drawText(cr, cardOpened_ ? "CONTINUE READING" : "START READING", {kSans, 7, 700, false, kSecondary},
-                 {colX, kCardY + 6, colW, 50}, 1);
-        const Rect bar{colX, kCardY + kCoverH - 92, colW, 10};
-        const TextStyle bylineStyle{kSans, 8, 400, false, kSecondary};
-        const int bylineH = measureText(card_->byline.empty() ? " " : card_->byline, bylineStyle, colW, 1).height;
-        const int bylineY = bar.y - 24 - bylineH;
-        drawText(cr, card_->title.empty() ? "Untitled" : card_->title, {kSerif, 13, 700},
-                 {colX, kCardY + 58, colW, bylineY - 16 - (kCardY + 58)}, 3);
-        drawText(cr, card_->byline, bylineStyle, {colX, bylineY, colW, bylineH + 4}, 1);
-        progressBar(cr, bar, card_->progress > 0 ? card_->progress : 0);
-        drawText(cr, cardMeta(), {kSans, 7, 400, false, kSecondary}, {colX, kCardY + kCoverH - 64, colW, 70}, 2);
+        drawItemCard(cr, cardRect(), *card_, cardOpened_ ? "CONTINUE READING" : "START READING", cardMeta());
     }
     if (total_ > 0) {
         hRule(cr, kCardY + kCoverH + 44, 0, W());

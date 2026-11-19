@@ -45,6 +45,7 @@ std::string multiLine(const std::string& s) {
 }
 
 struct Parser {
+    TreeUse use = TreeUse::Screen;
     size_t blocks = 0, text = 0;
     std::set<std::string> ids;
 
@@ -167,7 +168,8 @@ struct Parser {
         const std::string where = prefix + (child ? "." : "") + kind;
         static const std::pair<const char*, Block::Kind> kinds[] = {
             {"column", Block::Kind::Column}, {"row", Block::Kind::Row},         {"text", Block::Kind::Text},
-            {"card", Block::Kind::Card},     {"deck", Block::Kind::Deck},       {"list", Block::Kind::List},
+            {"card", Block::Kind::Card},     {"deck", Block::Kind::Deck},       {"items", Block::Kind::Items},
+            {"list", Block::Kind::List},
             {"search", Block::Kind::Search}, {"field", Block::Kind::Field},     {"chips", Block::Kind::Chips},
             {"button", Block::Kind::Button}, {"buttons", Block::Kind::Buttons}, {"divider", Block::Kind::Divider},
             {"space", Block::Kind::Space},   {"notice", Block::Kind::Notice},
@@ -175,6 +177,8 @@ struct Parser {
         const auto* found = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return kind == p.first; });
         if (found == std::end(kinds)) bad(prefix.empty() ? "the screen" : prefix, "unknown block kind \"" + kind + "\"");
         if (depth > kMaxTreeDepth) bad(where, "blocks nested more than 16 deep");
+        if (use == TreeUse::HomeBody && (found->second == Block::Kind::Search || found->second == Block::Kind::Field))
+            bad(prefix, kind + " can't be on Home");
         if (found->second == Block::Kind::Button) return button(o, where);
         count(where);
         Block b;
@@ -235,6 +239,39 @@ struct Parser {
                     if (c->contains("kind") && (*c)["kind"] != "card") bad(where + ".card", "must be a card");
                     count(where);
                     b.children.push_back(card(*c, where + ".card"));
+                }
+                break;
+            }
+            case K::Items: {
+                onlyFields(o, where, {"id", "style", "items", "empty"});
+                b.id = id(o, where);
+                b.empty = str(o, "empty", where, false);
+                b.itemStyle = choice<Block::ItemStyle>(o, "style", where, Block::ItemStyle::Row,
+                                                       {{"card", Block::ItemStyle::Card}, {"row", Block::ItemStyle::Row}});
+                if (!field(o, "style")) bad(where, "\"style\" is missing");
+                const json* refs = field(o, "items");
+                if (!refs) bad(where, "\"items\" is missing");
+                if (!refs->is_array()) bad(where, "\"items\" must be a list");
+                for (size_t i = 0; i < refs->size(); ++i) {
+                    const std::string at = where + ".items[" + std::to_string(i) + "]";
+                    const json& r = (*refs)[i];
+                    ItemRef ref;
+                    if (r.is_string()) {
+                        ref.key = str(*refs, i, at);
+                    } else if (r.is_object()) {
+                        onlyFieldsPlain(r, at, {"key", "library", "label"});
+                        ref.key = str(r, "key", at, true);
+                        ref.label = str(r, "label", at, false);
+                        if (const json* lib = field(r, "library")) {
+                            if (!lib->is_number_integer() || lib->get<long long>() < 0) bad(at, "\"library\" must be a whole number, 0 or more");
+                            ref.library = lib->get<long long>();
+                        }
+                    } else {
+                        bad(at, "an item must be a key or { key, library?, label? }");
+                    }
+                    if (ref.key.empty()) bad(at, "an item needs a key");
+                    count(at);
+                    b.items.push_back(std::move(ref));
                 }
                 break;
             }
@@ -363,9 +400,10 @@ struct Parser {
 
 }  // namespace
 
-std::optional<Block> parseTree(const json& j, std::string* why) {
+std::optional<Block> parseTree(const json& j, std::string* why, TreeUse use) {
     try {
         Parser p;
+        p.use = use;
         return p.block(j, "", false, 1);
     } catch (const Bad& b) {
         if (why) *why = b.msg;
@@ -376,7 +414,7 @@ std::optional<Block> parseTree(const json& j, std::string* why) {
 }
 
 size_t blockCount(const Block& b) {
-    size_t n = 1 + b.rows.size() + b.chips.size();
+    size_t n = 1 + b.rows.size() + b.chips.size() + b.items.size();
     for (const auto& c : b.children) n += blockCount(c);
     return n;
 }

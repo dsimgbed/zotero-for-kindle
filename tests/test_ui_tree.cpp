@@ -190,3 +190,58 @@ TEST_CASE("ui tree: a row holds at most 6 blocks") {
     kids.push_back({{"kind", "text"}, {"text", "t"}});
     CHECK(whyNot(json{{"kind", "row"}, {"children", kids}}) == "row: a row holds at most 6 blocks");
 }
+
+TEST_CASE("ui tree: an items block takes keys, refs with a library and a label; each ref counts one block") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"items","id":"now","style":"card","items":[{"key":"ABCD2345","label":"BOOK · CONTINUE"},"EFGH6789"]},
+      {"kind":"items","id":"pick","style":"row","items":[{"key":"QRST2345","library":12}],"empty":"Nothing yet"}]})"));
+    REQUIRE(t.children.size() == 2);
+    const Block& card = t.children[0];
+    CHECK(card.kind == K::Items);
+    CHECK(card.id == "now");
+    CHECK(card.itemStyle == Block::ItemStyle::Card);
+    REQUIRE(card.items.size() == 2);
+    CHECK(card.items[0].key == "ABCD2345");
+    CHECK(card.items[0].label == "BOOK · CONTINUE");
+    CHECK_FALSE(card.items[0].library);
+    CHECK(card.items[1].key == "EFGH6789");
+    CHECK(card.items[1].label.empty());
+    const Block& row = t.children[1];
+    CHECK(row.itemStyle == Block::ItemStyle::Row);
+    CHECK(row.items[0].library == 12);
+    CHECK(row.empty == "Nothing yet");
+    CHECK(blockCount(t) == 1 + 1 + 2 + 1 + 1);
+
+    json refs = json::array();
+    for (int i = 0; i < 2000; ++i) refs.push_back("K" + std::to_string(i));
+    CHECK(whyNot(json{{"kind", "items"}, {"id", "x"}, {"style", "row"}, {"items", refs}}).find("more than 2,000 blocks") != std::string::npos);
+}
+
+TEST_CASE("ui tree: an items block with a bad style, ref or field is refused, naming where") {
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"grid","items":[]})")) ==
+          "items: \"style\" must be one of \"card\", \"row\"");
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","items":[]})")) == "items: \"style\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row"})")) == "items: \"items\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row","items":[3]})")) ==
+          "items.items[0]: an item must be a key or { key, library?, label? }");
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row","items":[{"library":1}]})")) == "items.items[0]: \"key\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row","items":[{"key":"A","library":-1}]})")).find("\"library\"") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row","items":[{"key":"A","color":"red"}]})")) ==
+          "items.items[0]: unknown field \"color\"");
+    CHECK(whyNot(json::parse(R"({"kind":"items","style":"row","items":[]})")) == "items: \"id\" is missing");
+}
+
+TEST_CASE("ui tree: Home's body refuses a search and a field, other blocks pass") {
+    const json items = json::parse(R"({"kind":"items","id":"i","style":"row","items":["A"]})");
+    std::string why;
+    CHECK(parseTree(json{{"kind", "column"}, {"children", json::array({items})}}, &why, TreeUse::HomeBody));
+    const json search = json::parse(R"({"kind":"search","id":"s"})"), field = json::parse(R"({"kind":"field","id":"f"})");
+    why.clear();
+    CHECK_FALSE(parseTree(json{{"kind", "column"}, {"children", json::array({items, search})}}, &why, TreeUse::HomeBody));
+    CHECK(why == "column[1]: search can't be on Home");
+    why.clear();
+    CHECK_FALSE(parseTree(json{{"kind", "column"}, {"children", json::array({json{{"kind", "row"}, {"children", json::array({field})}}})}},
+                          &why, TreeUse::HomeBody));
+    CHECK(why == "column[0].row[0]: field can't be on Home");
+    CHECK(parseTree(json{{"kind", "column"}, {"children", json::array({search})}}, &why));  // fine on a screen
+}

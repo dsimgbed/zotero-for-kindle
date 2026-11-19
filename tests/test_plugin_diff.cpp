@@ -4,6 +4,7 @@
 
 #include <filesystem>
 
+#include "screens/item_source.h"
 #include "screens/plugin_diff.h"
 #include "ui/metrics.h"
 #include "ui/text.h"
@@ -119,4 +120,56 @@ TEST_CASE("plugin diff: a short card after a long one redraws only the deck (the
     REQUIRE(d.size() == 1);
     CHECK(d[0].rect == la.children[1].rect);  // the card; its page indicator is inside it
     CHECK(d[0].wave == Waveform::Quality);    // a partial refresh, never a full flash
+}
+
+namespace {
+
+struct Rows : ItemSource {
+    std::map<std::string, ItemRow> rows;
+    std::optional<ItemRow> row(const ItemRef& r) override {
+        auto it = rows.find(r.key);
+        if (it == rows.end()) return std::nullopt;
+        return it->second;
+    }
+    std::string cardMeta(const ItemRow&) override { return ""; }
+    std::string status(const std::string&) override { return ""; }
+    Rows() {
+        for (const char* k : {"A", "B", "C"}) {
+            ItemRow& r = rows[k];
+            r.key = k, r.title = std::string("Item ") + k, r.badge = "PDF", r.attachmentKey = std::string("F") + k;
+        }
+    }
+};
+
+const char* kItems = R"({"kind":"column","children":[
+  {"kind":"text","text":"Reading","style":"label"},
+  {"kind":"items","id":"recent","style":"row","items":["A","B","MISSING"]},
+  {"kind":"buttons","buttons":[{"id":"more","title":"More"}]}
+]})";
+
+}  // namespace
+
+TEST_CASE("plugin diff: an items block with the same tree and the same rows needs no redraw") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Rows rows;
+    const Block a = tree(kItems), b = tree(kItems);
+    CHECK(diffTrees(layoutTree(a, blocksArea(), 0, &rows), layoutTree(b, blocksArea(), 0, &rows)).empty());
+}
+
+TEST_CASE("plugin diff: one row's progress changing redraws only the items block") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Rows before, after;
+    after.rows["B"].progress = 0.5;
+    const Block a = tree(kItems), b = tree(kItems);
+    const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &after);
+    const auto d = diffTrees(la, lb);
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].rect == lb.children[1].rect);
+    // a key that turns readable adds a row: the block's rect grows and the buttons below move
+    Rows more;
+    more.rows["MISSING"] = more.rows["C"];
+    more.rows["MISSING"].key = "MISSING";
+    CHECK_FALSE(diffTrees(la, layoutTree(b, blocksArea(), 0, &more)).empty());
 }

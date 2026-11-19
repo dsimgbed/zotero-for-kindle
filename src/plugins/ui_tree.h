@@ -4,6 +4,7 @@
 // what the zk.ui helpers produce (and the same objects written by hand); anything else is refused
 // with a message naming where, e.g. `column[2].buttons: at most 3`.
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -34,11 +35,20 @@ struct Chip {
     bool operator==(const Chip&) const = default;
 };
 
+// An item for an `items` block: its key, its library when the plugin says which, a card's kicker.
+struct ItemRef {
+    std::string key;
+    std::optional<int64_t> library;
+    std::string label;
+    bool operator==(const ItemRef&) const = default;
+};
+
 struct Block {
-    enum class Kind { Column, Row, Text, Card, Deck, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice };
+    enum class Kind { Column, Row, Text, Card, Deck, Items, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice };
     enum class Gap { None, Small, Medium, Large };  // also a space's size
     enum class Style { Title, Body, Meta, Label };
     enum class Select { None, One, Many };
+    enum class ItemStyle { Card, Row };
 
     Kind kind = Kind::Column;
     std::string id;                // deck, list, search, field, chips, button; a notice's (optional)
@@ -49,8 +59,10 @@ struct Block {
     int lines = 0;                 // text: at most (0: no cap); field: lines tall (1 by default)
     std::string title, meta, body, badge;  // card; a button's title
     std::string text;              // notice
-    std::string empty;             // deck, list
+    std::string empty;             // deck, list, items
     std::vector<ListRow> rows;     // list
+    std::vector<ItemRef> items;    // items
+    ItemStyle itemStyle = ItemStyle::Row;  // items; `empty` is shown when none can be read
     std::string label, placeholder;  // field, search
     std::optional<std::string> value;  // search, field
     bool focus = false, primary = false;
@@ -61,10 +73,13 @@ struct Block {
     bool operator==(const Block&) const = default;
 };
 
-// nullopt (and *why) when `j` is not a valid tree or goes over the caps.
-std::optional<Block> parseTree(const nlohmann::json& j, std::string* why);
+// Where a tree is shown: a screen of its own, or Home's body (no search or field: Home keeps its own).
+enum class TreeUse { Screen, HomeBody };
 
-// Blocks as the caps count them (list rows, chips and buttons one each).
+// nullopt (and *why) when `j` is not a valid tree or goes over the caps.
+std::optional<Block> parseTree(const nlohmann::json& j, std::string* why, TreeUse use = TreeUse::Screen);
+
+// Blocks as the caps count them (list rows, chips, buttons and items one each).
 size_t blockCount(const Block&);
 
 // Deep equality, for diffing renders.

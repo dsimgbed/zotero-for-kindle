@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 
 #include <nlohmann/json.hpp>
 
@@ -35,7 +36,61 @@ std::string metaOf(const ItemRow& r) {
 
 std::string filesOf(const ItemRow& r) { return r.files > 1 ? std::to_string(r.files) + " files" : ""; }
 
+std::string authorsOf(const std::string& byline) {
+    const size_t dot = byline.find(" · ");
+    return dot == std::string::npos ? byline : byline.substr(0, dot);
+}
+
+std::string openedAgo(int64_t openedMs, int64_t nowMs) {
+    const int64_t days = (nowMs - openedMs) / (24 * 3600 * 1000LL);
+    if (days < 1) return "opened today";
+    if (days < 2) return "opened yesterday";
+    if (days < 7) return "opened " + std::to_string(days) + " days ago";
+    std::time_t t = static_cast<std::time_t>(openedMs / 1000);
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "opened %Y-%m-%d", &tm);
+    return buf;
+}
+
 }  // namespace
+
+std::string cardMetaText(const ItemRow& row, int highlights, int64_t openedMs, int64_t nowMs) {
+    std::string meta = std::to_string(highlights) + (highlights == 1 ? " highlight" : " highlights");
+    if (openedMs > 0) {
+        if (row.progress > 0) meta = std::to_string(static_cast<int>(row.progress * 100 + 0.5)) + "% · " + meta;
+        return meta + " · " + openedAgo(openedMs, nowMs);
+    }
+    return highlights ? meta + " · new" : "new";
+}
+
+std::string itemCardMeta(Library& lib, const ItemRow& row, int64_t nowMs) {
+    const size_t highlights = row.attachmentKey.empty() ? 0 : lib.annotationsFor(row.attachmentKey).size();
+    int64_t opened = 0;
+    if (auto st = lib.readingState(row.key)) opened = st->openedMs;
+    return cardMetaText(row, static_cast<int>(highlights), opened, nowMs);
+}
+
+void drawItemCard(cairo_t* cr, Rect r, const ItemRow& item, const std::string& label, const std::string& meta) {
+    const std::string title = item.title.empty() ? "Untitled" : item.title;
+    const Rect cover{r.x, r.y, 290, r.h};
+    generatedCover(cr, cover, title, authorsOf(item.byline), true);
+    const int colX = cover.x + cover.w + 48, colW = r.x + r.w - colX;
+    int top = r.y + 6;
+    if (!label.empty()) {
+        drawText(cr, label, {kSans, 7, 700, false, kSecondary}, {colX, top, colW, 50}, 1);
+        top = r.y + 58;
+    }
+    const Rect bar{colX, r.y + r.h - 92, colW, 10};
+    const TextStyle bylineStyle{kSans, 8, 400, false, kSecondary};
+    const int bylineH = measureText(item.byline.empty() ? " " : item.byline, bylineStyle, colW, 1).height;
+    const int bylineY = bar.y - 24 - bylineH;
+    drawText(cr, title, {kSerif, 13, 700}, {colX, top, colW, bylineY - 16 - top}, 3);
+    drawText(cr, item.byline, bylineStyle, {colX, bylineY, colW, bylineH + 4}, 1);
+    progressBar(cr, bar, item.progress > 0 ? item.progress : 0);
+    drawText(cr, meta, {kSans, 7, 400, false, kSecondary}, {colX, r.y + r.h - 64, colW, 70}, 2);
+}
 
 std::string itemRowMeta(const ItemRow& item) {
     const std::string files = filesOf(item);

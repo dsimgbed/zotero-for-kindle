@@ -106,6 +106,33 @@ int textH(const std::string& s, const TextStyle& st, int w, int lines) {
     return measureText(s.empty() ? " " : s, st, std::max(1, w), lines).height;
 }
 
+// ── Items, resolved once per layout ──
+ItemSource* gSource = nullptr;
+struct Resolved {
+    std::vector<ItemRow> rows;
+    std::vector<std::string> labels;
+};
+std::map<const Block*, Resolved>* gResolved = nullptr;
+
+const Resolved& resolved(const Block& b) {
+    static const Resolved none;
+    if (!gSource || !gResolved) return none;
+    if (auto it = gResolved->find(&b); it != gResolved->end()) return it->second;
+    Resolved r;
+    for (const ItemRef& ref : b.items)
+        if (auto row = gSource->row(ref)) {
+            r.rows.push_back(std::move(*row));
+            r.labels.push_back(ref.label);
+        }
+    return (*gResolved)[&b] = std::move(r);
+}
+
+// A card is as tall as Home's (cover 400), a gap under it; a row is the app's row.
+constexpr int kItemCardH = 400, kItemCardGap = 36;
+bool itemCards(const Block& b) { return b.itemStyle == Block::ItemStyle::Card; }
+int itemUnitH(const Block& b) { return itemCards(b) ? kItemCardH + kItemCardGap : kRowH; }
+int itemH(const Block& b) { return itemCards(b) ? kItemCardH : kRowH; }
+
 int rowH(const Block& list) {
     for (const auto& r : list.rows)
         if (!r.subtitle.empty()) return 150;
@@ -209,6 +236,16 @@ Units unitsOf(const Block& b, int w) {
             if (!card.body.empty()) u.h = diffs(lineTops(card.body, kCardBody, w - 2 * kCardPad));
             break;
         }
+        case K::Items: {
+            const size_t n = resolved(b).rows.size();
+            if (!gSource) break;  // no source: no room
+            if (n == 0) u.head = b.empty.empty() ? 0 : 112;
+            else {
+                u.h.assign(n, itemUnitH(b));
+                u.h.back() = itemH(b);
+            }
+            break;
+        }
         case K::List:
             if (b.rows.empty()) u.head = b.empty.empty() ? 0 : 112;
             else u.h.assign(b.rows.size(), rowH(b));
@@ -301,6 +338,14 @@ Laid place(const Block& b, Rect r, int first, int count) {
                 l.children.push_back(place(b.children[i], {x, r.y + (r.h - h) / 2, ws[i], h}, 0, static_cast<int>(u.h.size())));
                 x += ws[i] + gap;
             }
+            break;
+        }
+        case K::Items: {
+            const Resolved& res = resolved(b);
+            l.items = res.rows;
+            l.itemLabels = res.labels;
+            for (int i = first; i < first + count && i < static_cast<int>(res.rows.size()); ++i)
+                l.parts.push_back({i, Rect{r.x, r.y + (i - first) * itemUnitH(b), r.w, itemH(b)}.intersected(r), res.rows[i]});
             break;
         }
         case K::List:
@@ -424,6 +469,8 @@ void drawInput(cairo_t* cr, const Block& b, Rect r, const FocusState& f) {
     }
 }
 
+ItemSource* gDrawSource = nullptr;
+
 void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
     const Block& b = *l.block;
     const Rect r = l.rect;
@@ -452,6 +499,14 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             } else {
                 border(cr, r, 200, 16);
                 drawText(cr, b.empty, kEmpty, {r.x + 40, r.y + r.h / 2 - 30, r.w - 80, r.h / 2}, 2, Align::Center);
+            }
+            break;
+        case K::Items:
+            if (l.items.empty()) centredText(cr, b.empty, kEmpty, r);
+            for (const auto& p : l.parts) {
+                if (!p.item) continue;
+                if (itemCards(b)) drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], gDrawSource ? gDrawSource->cardMeta(*p.item) : "");
+                else drawItemRow(cr, p.rect, *p.item, gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
             }
             break;
         case K::List:
@@ -495,11 +550,13 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
             if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
             break;
         case K::Buttons:
+        case K::Items:
         case K::List:
         case K::Chips:
             for (const auto& part : l.parts)
                 if (part.rect.contains(p)) {
-                    if (b.kind == K::Buttons) hit = Hit{b.children[part.index].id, "", K::Button, part.rect};
+                    if (b.kind == K::Items) hit = Hit{b.id, part.item->key, b.kind, part.rect, part.item};
+                    else if (b.kind == K::Buttons) hit = Hit{b.children[part.index].id, "", K::Button, part.rect};
                     else if (b.kind == K::List) hit = Hit{b.id, b.rows[part.index].id, b.kind, part.rect};
                     else hit = Hit{b.id, b.chips[part.index].id, b.kind, part.rect};
                 }
@@ -660,11 +717,16 @@ static Laid layOut(const Block& root, Rect area, int page) {
     return out;
 }
 
-Laid layoutTree(const Block& root, Rect area, int page) {
+Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items) {
     std::vector<std::shared_ptr<const KeptText>> pins;
+    std::map<const Block*, Resolved> res;
     auto* outer = std::exchange(gPins, &pins);
+    auto* outerRes = std::exchange(gResolved, &res);
+    auto* outerSource = std::exchange(gSource, items);
     Laid out = layOut(root, area, page);
     gPins = outer;
+    gResolved = outerRes;
+    gSource = outerSource;
     std::sort(pins.begin(), pins.end());
     pins.erase(std::unique(pins.begin(), pins.end()), pins.end());
     out.kept = std::move(pins);
@@ -679,9 +741,11 @@ Rect pageIndicatorRect(const Laid& root) {
     return {root.rect.x, root.rect.y + root.rect.h - kPageIndicatorH, root.rect.w, kPageIndicatorH};
 }
 
-void drawTree(cairo_t* cr, const Laid& root, const FocusState& f) {
+void drawTree(cairo_t* cr, const Laid& root, const FocusState& f, ItemSource* items) {
     fillRect(cr, root.rect, 255);
+    auto* outer = std::exchange(gDrawSource, items);
     for (const auto& c : root.children) drawLaid(cr, c, f);
+    gDrawSource = outer;
     if (root.pages > 1 && !root.corner.empty()) {  // inside the card: quiet, on the card's white
         centredText(cr, std::to_string(root.page + 1) + " / " + std::to_string(root.pages), {kSans, 6.5, 400, false, kTertiary},
                     root.corner, Align::Right);
