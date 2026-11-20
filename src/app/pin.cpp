@@ -6,7 +6,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <vector>
 
 extern "C" {
@@ -21,6 +20,7 @@ constexpr size_t kSaltBytes = 16;
 constexpr size_t kHashBytes = 32;
 constexpr int kMaxMemoryKiB = 64 * 1024;  // a stored value above this is not ours
 constexpr int kMaxIterations = 100;
+constexpr size_t kMaxKeyFileBytes = 4096;
 constexpr int kFreeMisses = 5;
 constexpr int64_t kFirstWaitMs = 30'000;
 constexpr int64_t kMaxWaitMs = 30 * 60 * 1000;
@@ -104,10 +104,10 @@ bool validPinFormat(const std::string& pin) {
     return std::all_of(pin.begin(), pin.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
 
-PinHash hashPin(const std::string& pin) {
+std::optional<PinHash> hashPin(const std::string& pin) {
     PinHash h;
     uint8_t salt[kSaltBytes], out[kHashBytes];
-    if (!randomBytes(salt, sizeof salt)) return {};  // empty: checkPin never matches it
+    if (!randomBytes(salt, sizeof salt)) return std::nullopt;
     argon(pin, salt, sizeof salt, h.iterations, h.memoryKiB, out);
     h.salt = b64encode(salt, sizeof salt);
     h.hash = b64encode(out, sizeof out);
@@ -128,7 +128,7 @@ bool checkPin(const PinHash& stored, const std::string& pin) {
     return ok;
 }
 
-int64_t pinWaitMs(const PinBackoff& b, int64_t nowMs) { return std::max<int64_t>(0, b.waitUntilMs - nowMs); }
+int64_t pinWaitMs(const PinBackoff& b, int64_t nowMs) { return std::clamp<int64_t>(b.waitUntilMs - nowMs, 0, kMaxWaitMs); }
 
 void recordMiss(PinBackoff& b, int64_t nowMs) {
     if (b.misses < 1000) b.misses++;
@@ -150,10 +150,11 @@ std::optional<std::string> takeResetKey(const std::string& dropFile) {
     std::string content;
     {
         std::ifstream in(dropFile);
-        if (!in) return std::nullopt;
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        content = ss.str();
+        if (in) {
+            content.resize(kMaxKeyFileBytes);
+            in.read(content.data(), std::streamsize(content.size()));
+            content.resize(size_t(in.gcount()));
+        }
     }
     std::filesystem::remove(dropFile, ec);
     std::string key = trim(content);
