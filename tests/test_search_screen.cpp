@@ -110,3 +110,31 @@ TEST_CASE("search screen matches the reviewed golden") {
     rig.screen.draw(c);
     test::checkGolden(c, "tests/golden/search.png");
 }
+
+TEST_CASE("search fix: after a sync the results are searched again (a deleted item goes)") {
+    Rig rig;
+    rig.type("neur");
+    rig.screen.onKey({KeyEvent::Code::Return, ""}, rig.nav);
+    REQUIRE_FALSE(rig.screen.results().rows().empty());
+    const auto before = rig.screen.results().pager().total();
+    const std::string gone = rig.screen.results().rows()[0].key;
+    rig.lib.removeObject("item", gone);  // deleted in Zotero, as the sync applies it
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    rig.nav.damages.clear();
+    rig.screen.onSyncEvent(e, rig.nav);
+    CHECK(rig.screen.results().pager().total() == before - 1);
+    for (const auto& r : rig.screen.results().rows()) CHECK(r.key != gone);
+    CHECK(rig.count(Waveform::Quality) == 1);
+}
+
+TEST_CASE("search fix: a sync that changed nothing repaints nothing") {
+    Rig rig;
+    rig.type("neur");
+    rig.screen.onKey({KeyEvent::Code::Return, ""}, rig.nav);
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    rig.nav.damages.clear();
+    rig.screen.onSyncEvent(e, rig.nav);
+    CHECK(rig.nav.damages.empty());
+}
