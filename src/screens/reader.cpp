@@ -1332,6 +1332,7 @@ void ReaderScreen::back(Nav& nav) {
     const BackEntry to = back_.back();
     back_.pop_back();
     turnsSinceJump_ = 0;
+    pendingGo_.reset();  // Back instead
     commitInk();
     turning_ = true;
     turnTarget_ = -1;

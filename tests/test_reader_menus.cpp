@@ -224,3 +224,24 @@ TEST_CASE("reader menus fix: a page from before the re-layout doesn't take Go to
     }
     CHECK(rig.reader->page() == 37);
 }
+
+TEST_CASE("reader menus fix: Back while the book re-paginates replaces a Go to page asked meanwhile") {
+    // Audit B fix round 1: back() left the waiting Go to page in place, which then won.
+    Rig rig;
+    FakeEngine probe;
+    rig.reader->jumpTo(probe.positionOfPage(40));
+    REQUIRE(rig.waitPage(40));
+    for (int i = 0; i < 20 && rig.reader->turning(); ++i) rig.reader->onTick(rig.nav);
+    REQUIRE(rig.reader->backLabel());
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);
+    rig.reader->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);  // Back, to page 1
+    CHECK(rig.waitPage(0));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.reader->page() == 0);
+}
