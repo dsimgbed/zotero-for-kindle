@@ -795,6 +795,55 @@ Laid place(const Block& b, Rect r, int first, int count) {
     return l;
 }
 
+// ── Trimming (0.12, a Home body's root with fit "trim") ──
+
+std::vector<Laid> trimStack(const std::vector<Block>& kids, Rect r, int gap);
+
+// `b` cut to what fits in `r` (it doesn't fit whole): a grid to its rows that fit, a column to its
+// children that fit (recursively); nullopt (dropped) when nothing of it fits or it can't be cut.
+std::optional<Laid> trimmed(const Block& b, Rect r) {
+    r.w = ownW(b, r.w);
+    switch (b.kind) {
+        case K::Grid: {
+            const auto hs = gridRowHs(b, r.w);
+            const int gap = gapPx(b.gap);
+            int rows = 0, h = 0;
+            while (rows < static_cast<int>(hs.size()) && h + (rows ? gap : 0) + hs[rows] <= r.h) h += (rows ? gap : 0) + hs[rows++];
+            if (rows == 0) return std::nullopt;
+            return place(b, {r.x, r.y, r.w, h}, 0, rows);  // its rect ends where the rows do: no row after them is placed
+        }
+        case K::Column: {
+            Laid l;
+            l.block = &b;
+            l.children = trimStack(b.children, r, gapPx(b.gap));
+            if (l.children.empty()) return std::nullopt;
+            const Rect& last = l.children.back().rect;
+            l.rect = {r.x, r.y, r.w, last.y + last.h - r.y};
+            return l;
+        }
+        default: return std::nullopt;
+    }
+}
+
+// `kids` top to bottom at their natural heights while they fit in `r`; the first that doesn't is
+// trimmed (or dropped), and everything after it is dropped.
+std::vector<Laid> trimStack(const std::vector<Block>& kids, Rect r, int gap) {
+    std::vector<Laid> out;
+    int y = r.y;
+    for (const Block& c : kids) {
+        const int top = out.empty() ? y : y + gap;
+        const Units u = childUnits(c, r.w);
+        if (top + u.natural() <= r.y + r.h) {
+            out.push_back(placeChild(c, {r.x, top, r.w, u.natural()}, 0, static_cast<int>(u.h.size())));
+            y = top + u.natural();
+            continue;
+        }
+        if (auto t = trimmed(c, {r.x, top, r.w, std::max(0, r.y + r.h - top)})) out.push_back(std::move(*t));
+        break;
+    }
+    return out;
+}
+
 // ── Drawing ──
 
 void border(cairo_t* cr, Rect r, uint8_t g, double radius, double width = 3) {
@@ -1061,6 +1110,13 @@ Rect blocksArea() {
 }
 
 static Laid layOut(const Block& root, Rect area, int page) {
+    if (root.kind == K::Column && root.fit == Block::Fit::Trim) {  // a Home body: what doesn't fit is left out, one page
+        Laid out;
+        out.block = &root;
+        out.rect = area;
+        out.children = trimStack(root.children, area, gapPx(root.gap));
+        return out;
+    }
     std::vector<const Block*> kids;
     int gap = 0;
     if (root.kind == K::Column) {

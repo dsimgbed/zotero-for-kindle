@@ -340,3 +340,28 @@ zk.screen("desk", {
     REQUIRE(r.home().pluginBody()->sheet());
     CHECK(r.home().pluginBody()->sheet()->row().key == "IT000009");
 }
+
+TEST_CASE("home tree: a body with fit \"trim\" never pages: what doesn't fit is left out from the end; swipes change nothing") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column(Array.from({ length: 40 }, (_, i) => zk.ui.text("Line " + i, { id: "l" + i })), { fit: "trim" }),
+});
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "Line 0"; }));
+    const Laid laid = *r.home().pluginBody()->laid();
+    CHECK(laid.pages == 1);
+    CHECK(pageIndicatorRect(laid).empty());
+    REQUIRE(laid.children.size() > 1);
+    REQUIRE(laid.children.size() < 40);
+    const Laid& last = laid.children.back();
+    CHECK(last.block->id == "l" + std::to_string(laid.children.size() - 1));
+    CHECK(last.rect.y + last.rect.h <= laid.rect.y + laid.rect.h);
+    CHECK_FALSE(findLaid(laid, "l" + std::to_string(laid.children.size())));
+    const Point mid = laid.rect.center();
+    r.home().onGesture(Gesture{GestureType::Swipe, {mid.x - 400, mid.y}, mid, Direction::Left}, r.app);
+    r.app.step(0);
+    CHECK(r.home().pluginBody()->laid()->page == 0);
+    CHECK(r.home().pluginBody()->laid()->children.size() == laid.children.size());
+}

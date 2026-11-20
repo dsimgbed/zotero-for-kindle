@@ -1505,3 +1505,161 @@ TEST_CASE("plugin primitives: an image over 4 megapixels or 4096 px a side is re
     CHECK(l.children.at(4).rect.h == 1000 * 1000 / 4096);
     CHECK(l.children.at(5).rect.h == 500);  // a small one still loads
 }
+
+// ---- a trimming Home body (0.12): fit "trim" on its root never pages -------------------------------
+
+namespace {
+
+Block homeTree(const json& j) {
+    std::string why;
+    auto t = parseTree(j, &why, TreeUse::HomeBody);
+    INFO(why);
+    REQUIRE(t);
+    return *t;
+}
+
+// A Home body like Reading Desk 3's: the pair (about 330 px), the pinned row (a grid of 1 row), the
+// inbox's lines, the passage.
+json deskHome(const std::string& fit = "trim", const json& grid = gridOf(8, {{"minWidth", "17%"}, {"rows", 1}})) {
+    json pair = json::parse(R"({"kind":"row","children":[
+      {"kind":"cover","item":"S0","width":"20%"},{"kind":"text","text":"Pride and Prejudice","style":"title"},
+      {"kind":"cover","item":"S3","width":"20%"},{"kind":"text","text":"Gaussian random fields","style":"title"}]})");
+    json pinned = {{"kind", "column"}, {"children", json::array({json{{"kind", "text"}, {"text", "Pinned"}, {"style", "label"}}, grid})}};
+    json inbox = json::parse(R"({"kind":"column","children":[{"kind":"text","text":"Inbox","style":"label"},
+      {"kind":"text","id":"in1","text":"Brownian loops and the central charge"},
+      {"kind":"text","id":"in2","text":"Random walks on percolation clusters"},
+      {"kind":"text","id":"in3","text":"Schramm–Loewner evolution, a survey"}]})");
+    json quote = json::parse(R"({"kind":"quote","id":"passage","text":"It is a truth universally acknowledged.","source":"Austen · p. 1"})");
+    return {{"kind", "column"}, {"fit", fit}, {"children", json::array({pair, pinned, inbox, quote})}};
+}
+
+void checkInside(const Laid& l, Rect area) {
+    std::vector<Rect> rects;
+    collectRects(l, rects);
+    for (Rect r : rects) {
+        INFO(r.x << "," << r.y << " " << r.w << "x" << r.h);
+        CHECK(inside(r, area));
+    }
+}
+
+}  // namespace
+
+TEST_CASE("plugin trim: a short area keeps the pair, the pinned row and one inbox line; the rest is dropped, never paged") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(8);
+    const Block t = homeTree(deskHome());
+    const Rect tall{blocksArea().x, blocksArea().y, blocksArea().w, 5000};
+    const Laid full = layoutTree(t, tall, 0, &items);
+    REQUIRE(full.children.size() == 4);
+    const Laid& inbox = full.children[2];
+    REQUIRE(inbox.children.size() == 4);
+    const Rect in2 = inbox.children[2].rect;
+    CHECK(full.children[0].rect.h > 250);  // the pair, about 330 px
+
+    // The area ends halfway down the second inbox line.
+    const Rect area{tall.x, tall.y, tall.w, in2.y + in2.h / 2 - tall.y};
+    const Laid l = layoutTree(t, area, 0, &items);
+    CHECK(l.pages == 1);
+    CHECK(pageIndicatorRect(l).empty());
+    REQUIRE(l.children.size() == 3);
+    CHECK(l.children[0].rect == full.children[0].rect);
+    CHECK(l.children[1].rect == full.children[1].rect);
+    CHECK(l.children[1].children.size() == full.children[1].children.size());
+    const Laid& kept = l.children[2];
+    REQUIRE(kept.children.size() == 2);  // the label and the first line
+    CHECK(kept.children[1].block->id == "in1");
+    CHECK(kept.rect.h == inbox.children[1].rect.y + inbox.children[1].rect.h - inbox.rect.y);
+    CHECK(findLaid(l, "in2") == nullptr);
+    CHECK(findLaid(l, "passage") == nullptr);
+    checkInside(l, area);
+    // Hit-testing sees only what's shown: the top of the dropped line, inside the area, is nothing.
+    CHECK_FALSE(hitTest(l, {in2.x + 4, in2.y + 2}));
+    CHECK(hitTest(l, inbox.children[1].rect.center()));
+    // Drawn: nothing outside the area, no page indicator.
+    Canvas c(metrics().width, metrics().height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 128);
+    drawTree(c.cr(), l, {}, &items);
+    const auto g = grayOf(c);
+    size_t outside = 0;
+    for (int y = 0; y < c.height(); ++y)
+        for (int x = 0; x < c.width(); ++x)
+            if (!area.contains({x, y}) && g[(size_t)y * c.width() + x] != 128) ++outside;
+    CHECK(outside == 0);
+
+    // fit "page" (the default) is unchanged: the same blocks page there.
+    const Block paged = homeTree(deskHome("page"));
+    CHECK(layoutTree(paged, area, 0, &items).pages > 1);
+    const Laid pagedFull = layoutTree(paged, tall, 0, &items);
+    REQUIRE(pagedFull.children.size() == full.children.size());
+    for (size_t i = 0; i < full.children.size(); ++i) CHECK(pagedFull.children[i].rect == full.children[i].rect);
+}
+
+TEST_CASE("plugin trim: a grid that doesn't fit is trimmed to its rows that do; a block that can't be trimmed is dropped") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(24);
+    for (const json& grid : {gridOf(24, {{"minWidth", "22%"}}), gridOf(24, {{"minWidth", "22%"}, {"rows", 3}})}) {
+        INFO(grid.dump().substr(0, 60));
+        const Block t = homeTree({{"kind", "column"}, {"fit", "trim"},
+                                  {"children", json::array({json{{"kind", "text"}, {"text", "Pinned"}, {"style", "label"}}, grid,
+                                                            json{{"kind", "text"}, {"text", "after"}}})}});
+        const Rect tall{blocksArea().x, blocksArea().y, blocksArea().w, 5000};
+        const Laid full = layoutTree(t, tall, 0, &items);
+        const Laid& g = full.children.at(1);
+        const int perRow = static_cast<int>(std::count_if(g.children.begin(), g.children.end(),
+                                                          [&](const Laid& c) { return c.rect.y == g.children[0].rect.y; }));
+        REQUIRE(static_cast<int>(g.children.size()) > 2 * perRow);
+        const Rect second = g.children[perRow].rect;  // the second row's first cell
+        const Rect area{tall.x, tall.y, tall.w, second.y + second.h / 2 - tall.y};
+        const Laid l = layoutTree(t, area, 0, &items);
+        CHECK(l.pages == 1);
+        REQUIRE(l.children.size() == 2);  // "after" dropped
+        const Laid& trimmed = l.children[1];
+        CHECK(static_cast<int>(trimmed.children.size()) == perRow);  // one whole row, no cut cells
+        for (int i = 0; i < perRow; ++i) CHECK(trimmed.children[i].rect == g.children[i].rect);
+        CHECK(trimmed.rect.h == g.children[0].rect.h);
+        checkInside(l, area);
+        // Not even one row fits: the grid is dropped (and what follows).
+        const Laid none = layoutTree(t, {tall.x, tall.y, tall.w, g.rect.y - tall.y + 20}, 0, &items);
+        CHECK(none.children.size() == 1);
+    }
+    // A block that can't be trimmed (a quote, a row) is dropped whole.
+    const Block q = homeTree(json::parse(R"({"kind":"column","fit":"trim","children":[{"kind":"text","text":"Desk"},
+      {"kind":"quote","id":"passage","text":"It is a truth universally acknowledged.","source":"Austen · p. 1"}]})"));
+    const Laid full = layoutTree(q, {0, 0, 1000, 5000}, 0);
+    const Laid l = layoutTree(q, {0, 0, 1000, full.children[1].rect.y + 30}, 0);
+    CHECK(l.children.size() == 1);
+    CHECK_FALSE(hitTest(l, {full.children[1].rect.x + 10, full.children[1].rect.y + 10}));
+}
+
+TEST_CASE("plugin trim: on every Kindle, portrait and landscape, the pair and what fits under it; never a page") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        for (bool landscape : {false, true}) {
+            Metrics mm = *dev;
+            if (landscape) std::swap(mm.width, mm.height);
+            ScopedMetrics m(mm);
+            INFO(dev->device << (landscape ? " landscape" : ""));
+            FakeItems items = shelfItems(8);
+            const Block t = homeTree(deskHome());
+            const Rect area = blocksArea();
+            const Laid l = layoutTree(t, area, 0, &items);
+            CHECK(l.pages == 1);
+            REQUIRE_FALSE(l.children.empty());
+            const Laid alone = layoutTree(t, {area.x, area.y, area.w, 5000}, 0, &items);
+            CHECK(l.children[0].rect == alone.children[0].rect);  // the pair, whole
+            for (size_t i = 0; i < l.children.size(); ++i) CHECK(l.children[i].block == &t.children[i]);  // in order
+            checkInside(l, area);
+        }
+    }
+    // PW5 landscape: the pair and the pinned row fit under it.
+    Metrics land = kPw5;
+    std::swap(land.width, land.height);
+    ScopedMetrics m(land);
+    FakeItems items = shelfItems(8);
+    const Block t = homeTree(deskHome());
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    REQUIRE(l.children.size() >= 2);
+    CHECK(l.children[1].children.size() == 2);
+}

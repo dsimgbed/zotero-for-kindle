@@ -100,6 +100,11 @@ Rect blocksArea();
 // An item piece is its child, hit as the item (Hit::kind Item); while its file downloads, the
 // status is drawn in a bar over the piece's bottom. A grid's cells are equal, in rows as tall as
 // their tallest cell; it pages by row, or, with `rows`, shows at most that many and never pages.
+//
+// A root column with fit "trim" (a Home body's, 0.12) never pages: its children at their natural
+// heights while they fit; the first that doesn't is trimmed if it can be (a grid to its rows that
+// fit, a column to its children that fit, recursively) and dropped otherwise, and everything after
+// it is dropped. Laid::children holds only what's shown, so hit-testing and diffs see only that.
 Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items = nullptr, const std::string& package = {});
 
 // How many times a text block's text has been laid out (for tests).
