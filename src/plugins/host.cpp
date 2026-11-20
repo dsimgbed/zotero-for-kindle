@@ -204,6 +204,9 @@ struct PluginRun {
         bool busy = false, counting = false;
         bool closed = false;      // left or closed by the plugin: no more renders; gone once its queue is empty
         bool failed = false;      // ScreenError sent: nothing more runs for it
+        // Its last onEvent failed: the renders after it don't clear the failure count (only an event
+        // and its render both going well do), or an onEvent that always throws would never add up.
+        bool eventFailed = false;
         bool refreshDue = false;  // zk.ui.refresh while busy
         bool refreshByUser = false;     // ... asked for by a user-caused call
         int64_t lastQuietRefreshMs = 0;  // when a render for a quiet zk.ui.refresh last started
@@ -841,7 +844,9 @@ struct PluginHost::Impl {
     }
 
     void succeed(PluginCtx& p, Call& c) {
-        const bool counts = c.resets && (c.kind == CallKind::Load || c.kind == CallKind::Event || c.kind == CallKind::Background);
+        // A screen's onEvent going well is half of its cycle: the render after it decides (renderDone).
+        const bool counts = c.resets && (c.kind == CallKind::Load || (c.kind == CallKind::Event && c.screen == 0) ||
+                                         c.kind == CallKind::Background);
         if (c.done) {
             JSContext* cx = p.cx.raw();
             std::string text;
@@ -1239,6 +1244,8 @@ struct PluginHost::Impl {
         sc->counting = false;
         sc->busy = false;
         if (sc->failed) return;
+        if (ok) sc->eventFailed = false;
+        else if (!text.empty()) sc->eventFailed = true;  // "": stopped on purpose, not counted
         if (!ok && !text.empty())
             postScreen(p, PluginHostEvent::Kind::ScreenActionError, instance, p.manifest.name + " couldn't do that: " + text);
         if (ok && !sc->closed) {
@@ -1307,7 +1314,7 @@ struct PluginHost::Impl {
             applyTurnOffs();
             return;
         }
-        if (state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
+        if (!sc->eventFailed && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
         PluginHostEvent ev{PluginHostEvent::Kind::ScreenTree, p.manifest.id, p.manifest.name, "", {}, sc->handled, ""};
         ev.instance = instance;
         ev.screenId = sc->screenId;

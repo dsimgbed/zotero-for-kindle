@@ -185,6 +185,57 @@ zk.screen("s", { title: "S", render: () => zk.ui.text(`n=${n}`), onEvent(e) { if
     CHECK(t->requestId == 1);
 }
 
+TEST_CASE("screens host: an onEvent that always throws is three failures in a row; the render after each doesn't clear them") {
+    Host h(R"JS(
+zk.screen("s", { title: "S", render: () => zk.ui.text("s"), onEvent(e) { if (e.kind === "tap") throw new Error("boom"); } });
+)JS");
+    const uint64_t s = h.host->openScreen("p", "s");
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    for (int i = 1; i <= 2; ++i) {
+        h.host->screenEvent(s, {{"kind", "tap"}, {"id", "x"}});
+        REQUIRE(h.next(Kind::ScreenActionError, s));
+        REQUIRE(h.next(Kind::ScreenTree, s));
+        REQUIRE(h.host->waitIdle(2000));
+        CHECK(h.failures() == i);
+    }
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "x"}});
+    CHECK(eventually([&] { return statusOf(h.host->status(), "p")->stopped; }));
+    CHECK(h.next(Kind::ScreenError, s));  // turned off: the screen can't show any more
+}
+
+TEST_CASE("screens host: a failed event, then a whole event and render that went well: the failures are cleared") {
+    Host h(R"JS(
+zk.screen("s", { title: "S", render: () => zk.ui.text("s"), onEvent(e) { if (e.kind === "tap" && e.id === "bad") throw new Error("boom"); } });
+)JS");
+    const uint64_t s = h.host->openScreen("p", "s");
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "bad"}});
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 1);
+    h.host->rerender(s);  // a render alone isn't the user's action going well
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 1);
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "good"}});
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 0);
+}
+
+TEST_CASE("screens host: Home's body whose render fails on each show: the `open` event going well doesn't clear the count") {
+    Host h(R"JS(
+zk.screen("desk", { title: "Desk", home: true, render() { throw new Error("broken"); }, onEvent(e) {} });
+)JS");
+    for (int i = 1; i <= 2; ++i) {
+        REQUIRE(h.next(Kind::ScreenError, h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody)));
+        REQUIRE(h.host->waitIdle(2000));
+        CHECK(h.failures() == i);
+    }
+    REQUIRE(h.next(Kind::ScreenError, h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody)));
+    CHECK(eventually([&] { return statusOf(h.host->status(), "p")->stopped; }));
+}
+
 namespace {
 JSValue jsUserCaused(JSContext* c, JSValueConst, int, JSValueConst*) {
     return JS_NewBool(c, plugins::currentCall(plugins::ctxOf(c)).userCaused);
