@@ -131,7 +131,8 @@ public:
 
     // Compiles and evaluates `source` as a module and returns its namespace object. On failure
     // returns undefined and records an error for takeError().
-    Value evalModule(const std::string& source, const std::string& name);
+    // `evaluation` (optional): the module's evaluation promise, pending while a top-level await waits.
+    Value evalModule(const std::string& source, const std::string& name, Value* evaluation = nullptr);
     // Calls `fn` with undefined as `this`. On a throw returns undefined and records the error.
     Value call(const Value& fn, std::vector<Value> args);
     // Drains the promise job queue; an exception in a job is recorded.

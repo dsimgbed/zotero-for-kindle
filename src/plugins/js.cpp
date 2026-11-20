@@ -250,7 +250,7 @@ void Context::recordException() {
     error_ = std::move(e);
 }
 
-Value Context::evalModule(const std::string& source, const std::string& name) {
+Value Context::evalModule(const std::string& source, const std::string& name, Value* evaluation) {
     begin();
     JSValue fn = JS_Eval(cx_, source.c_str(), source.size(), name.c_str(),
                          JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -271,6 +271,7 @@ Value Context::evalModule(const std::string& source, const std::string& name) {
         recordException();
         return {};
     }
+    if (evaluation) *evaluation = promise;
     return Value(cx_, JS_GetModuleNamespace(cx_, mod));
 }
 

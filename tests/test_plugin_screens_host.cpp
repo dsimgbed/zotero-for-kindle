@@ -605,3 +605,19 @@ zk.screen("desk", { title: "Desk", home: true,
     CHECK(h.failures() == failures + 1);
     CHECK(h.fp.log("p").find("field") != std::string::npos);
 }
+
+TEST_CASE("screens host: a screen not there yet while main.js still loads is not `missing`; one not there after is") {
+    Host h(R"JS(
+await new Promise((resolve) => setTimeout(resolve, 100));
+zk.screen("desk", { title: "Desk", home: true, render: () => zk.ui.text("desk") });
+)JS");
+    auto e = h.next(Kind::ScreenError, h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody));
+    REQUIRE(e);
+    CHECK(e->value.is_null());  // it may yet come: Home keeps its tree
+    REQUIRE(eventually([&] { return !statusOf(h.host->status(), "p")->entries.empty(); }));  // registered after its await
+    CHECK(h.next(Kind::ScreenTree, h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody)));
+    e = h.next(Kind::ScreenError, h.host->openScreen("p", "gone", nullptr, TreeUse::HomeBody));
+    REQUIRE(e);
+    CHECK(e->value == json{{"missing", true}});
+}
+
