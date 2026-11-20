@@ -3,6 +3,7 @@
 #include "app/accounts.h"
 #include "test_paths.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sys/stat.h>
@@ -225,4 +226,18 @@ TEST_CASE("accounts: credentials under another id's name are rejected; orphan cr
     bool orphan = false;
     for (auto& l : log) orphan = orphan || l.find("orphan credentials") != std::string::npos;
     CHECK(orphan);
+}
+
+TEST_CASE("accounts: every account's plugin data root, listed or not; dot-dirs and files aren't accounts") {
+    Root r;
+    Paths p = r.paths();
+    CHECK(pluginDataRoots(p).empty());  // no accounts folder yet
+    fs::create_directories(p.accountsRoot + "/111/plugins");
+    fs::create_directories(p.accountsRoot + "/222");  // no plugin data yet: still its root
+    fs::create_directories(p.accountsRoot + "/.leftovers/1");
+    fs::create_directories(p.accountsRoot + "/notanid");
+    std::ofstream(p.accountsRoot + "/333") << "a file";
+    auto roots = pluginDataRoots(p);
+    std::sort(roots.begin(), roots.end());
+    CHECK(roots == std::vector<std::string>{accountPaths(p, 111).pluginDataRoot, accountPaths(p, 222).pluginDataRoot});
 }

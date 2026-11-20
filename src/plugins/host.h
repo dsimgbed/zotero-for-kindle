@@ -54,6 +54,11 @@ struct PluginHostDeps {
     PluginAccount account;
     // Where the engines find their data (zk.library.fullText opens its own engine).
     EngineEnv engineEnv;
+    // Tests: makes zk.library.fullText's engine instead of loadEngine (plugins/fulltext.h's EngineLoader).
+    std::function<std::unique_ptr<DocumentEngine>(DocType, const EngineEnv&, UserError*)> fullTextLoader;
+    // Every account's plugin data root (AccountPaths::pluginDataRoot): remove() deletes the plugin's
+    // <root>/<id> in each (removePluginData). Empty: only the account served.
+    std::function<std::vector<std::string>()> pluginDataRoots;
     // Names the plugin whose code is running (written before a plugin's code runs, removed when
     // the plugin thread goes idle). Empty: no marker.
     std::string crashMarker;
@@ -164,6 +169,11 @@ struct PluginStatus {
     std::string withdrawn;  // the catalog withdrew it: why ("" when it didn't); it is off and can't be turned on
 };
 
+// Removing a plugin: deletes <root>/<id> (its storage.db and data/) under each root. Ignored for an
+// id that isn't a plain plugin folder name ("", ".", "..", a path, a dot-name): nothing else in a
+// root is ever touched.
+void removePluginData(const std::vector<std::string>& roots, const std::string& id);
+
 class PluginHost {
 public:
     // Scans the plugins folder (nothing runs yet). If the crash marker names a plugin, the app
@@ -180,10 +190,11 @@ public:
     // Starts it for `account` (a running host is stopped first): the switch of accounts. Plugins
     // load afresh, so nothing of the account before is in them.
     void start(const PluginAccount& account);
-    // Interrupts whatever plugin code is running and joins the thread, then the full-text worker
-    // (a text being extracted is finished first) and zk.fetch's workers; the library connection is
-    // closed. Returns within 2 s but for that text. Calls cut short by stop() are not counted as
-    // failures. Commands asked while stopped are dropped (they were for the account before).
+    // Interrupts whatever plugin code is running and joins the thread, then zk.fetch's workers and
+    // the full-text worker (a text being extracted is cancelled at its next page or chapter, caching
+    // nothing); the library connection is closed. Returns within 2 s. Calls cut short by stop() are
+    // not counted as failures. Commands asked while stopped are dropped, remove() and resetData()
+    // included (they were for the account before; before the first start() they wait for it).
     // Idempotent; start() again after it.
     void stop();
     // Unloads and rescans; plugins that were loaded are loaded again at once.
@@ -262,7 +273,8 @@ public:
     // isn't a listed folder, and turning on for a folder with a problem (broken, incompatible).
     void setEnabled(const std::string& id, bool);
     // Settings → Plugins → Remove: off at once and no longer listed by status(); then, on the plugin
-    // thread, unloaded and its folder deleted (data, settings and all). What it remembered goes
+    // thread, unloaded and its folder deleted (settings and all), and its data in every account
+    // (deps.pluginDataRoots). What it remembered goes
     // too, so a copy put back is new again. Its changes for Zotero stay (pending ones are sent).
     void remove(const std::string& id);
     // Off at once and no longer listed, its state forgotten and its log closed; its files are left

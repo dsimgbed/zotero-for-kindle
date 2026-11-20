@@ -1510,11 +1510,15 @@ TEST_CASE("host: zk.storage and zk.files are the account's; restarted for B, A's
     host.stop();  // idempotent
 }
 
-TEST_CASE("host: resetData and remove empty the active account's plugin data, not another account's") {
+TEST_CASE("host: resetData empties the active account's plugin data; remove deletes it in every account, and only that plugin's") {
     FakePlugins fp;
     fp.add("a", R"(zk.on("syncFinished", async () => { await zk.storage.set("k", 1); await zk.files.write("f.txt", "x"); });)");
     const PluginAccount a = accountIn(fp, "1"), b = accountIn(fp, "2");
-    PluginHost host(fp.deps());
+    fp.write("accounts/1/plugins/other/storage.db", "another plugin's");
+    fp.write("accounts/2/plugins/other/data/keep.txt", "another plugin's");
+    auto deps = fp.deps();
+    deps.pluginDataRoots = [&] { return std::vector<std::string>{a.storageRoot, b.storageRoot}; };
+    PluginHost host(deps);
     host.setEnabled("a", true);
     for (const auto& acc : {a, b}) {
         host.start(acc);
@@ -1529,12 +1533,32 @@ TEST_CASE("host: resetData and remove empty the active account's plugin data, no
     CHECK_FALSE(fs::exists(b.storageRoot + "/a/data/f.txt"));
     CHECK(fs::exists(a.storageRoot + "/a/storage.db"));
     CHECK(fs::exists(a.storageRoot + "/a/data/f.txt"));
+    host.dispatch(kSync);  // B's data again
+    REQUIRE(host.waitIdle(5000));
+    REQUIRE(fs::exists(b.storageRoot + "/a/storage.db"));
     host.stop();
     host.start(a);
     host.remove("a");
     REQUIRE(host.waitIdle(5000));
     CHECK_FALSE(fs::exists(fp.path("a")));
     CHECK_FALSE(fs::exists(a.storageRoot + "/a"));
+    CHECK_FALSE(fs::exists(b.storageRoot + "/a"));  // the other account's too
+    CHECK(fp.read("accounts/1/plugins/other/storage.db") == "another plugin's");
+    CHECK(fp.read("accounts/2/plugins/other/data/keep.txt") == "another plugin's");
+}
+
+TEST_CASE("host: removePluginData never leaves the roots: an id that is a path is refused") {
+    FakePlugins fp;
+    fp.write("root/x/storage.db", "x");
+    fp.write("root/keep.txt", "k");
+    fp.write("outside.txt", "o");
+    for (const char* bad : {"", ".", "..", "../outside.txt", "x/../..", "/tmp", ".hidden"}) removePluginData({fp.path("root")}, bad);
+    CHECK(fp.exists("root/keep.txt"));
+    CHECK(fp.exists("root/x/storage.db"));
+    CHECK(fp.exists("outside.txt"));
+    removePluginData({fp.path("root"), fp.path("missing")}, "x");
+    CHECK_FALSE(fp.exists("root/x"));
+    CHECK(fp.exists("root/keep.txt"));
 }
 
 TEST_CASE("host: commands asked while the host is stopped for a switch are dropped, not run for the next account") {

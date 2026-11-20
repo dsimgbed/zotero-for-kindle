@@ -374,6 +374,7 @@ struct FullTextJob {
     AttachmentRecord attachment;
     std::string cacheDir;
     EngineEnv env;
+    EngineLoader loader;  // tests (PluginHostDeps::fullTextLoader); empty: loadEngine
     std::shared_ptr<Work> work;
 };
 
@@ -391,8 +392,9 @@ FullTextHold& fullTextHold() {
 }
 
 // Made at a host's first fullText call and owned by the host (fullTextSlot): PluginHost::stop()
-// drops it after the plugin thread, and the destructor joins the thread (a text being extracted
-// is finished first; jobs still queued are dropped, their calls gone with the plugins). Everything
+// drops it after the plugin thread, and the destructor joins the thread: a text being extracted is
+// cancelled (it stops at the next page or chapter, caching nothing); jobs still queued are dropped,
+// their calls gone with the plugins. A job whose call is stopped is cancelled the same way. Everything
 // a job needs is copied into it, so no plugin or host object is touched from here (Work::finish is
 // safe from any thread). Plugins take turns: the next job is another plugin's than the last one, if
 // any waits.
@@ -416,6 +418,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mu_);
             stopping_ = true;
+            if (current_) *current_ = true;  // the text being extracted stops at its next page
         }
         cv_.notify_all();
         thread_.join();
@@ -467,16 +470,18 @@ private:
                 job = std::move(*next);
                 jobs_.erase(next);
                 last_ = job.owner;
+                current_ = job.work->cancelFlag();
             }
             if (job.work->cancelled()) {  // its call was stopped while it waited
                 std::lock_guard<std::mutex> lock(mu_);
                 done(job.owner);
             } else {
                 UserError err;
-                auto out = extractFullText(job.attachment, job.cacheDir, job.env, &err);
+                auto out = extractFullText(job.attachment, job.cacheDir, job.env, &err, job.loader, job.work->cancelFlag().get());
                 {  // given back before the promise settles: its continuation may ask again at once
                     std::lock_guard<std::mutex> lock(mu_);
                     done(job.owner);
+                    current_.reset();
                 }
                 if (out) {
                     auto textPtr = std::make_shared<std::string>(std::move(*out));
@@ -496,6 +501,7 @@ private:
     std::map<std::string, int> pending_;  // owner → queued or running
     std::string last_;                    // whose job ran last
     bool held_ = false, stopping_ = false;
+    std::shared_ptr<std::atomic<bool>> current_;  // the running job's cancel flag
     std::thread thread_;  // last: started once the members above are made
 };
 
@@ -524,7 +530,8 @@ JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv)
     const PluginHostDeps& deps = depsOf(p);
     const std::string& cacheDir = accountOf(p).fullTextDir;
     if (!fullTextWorker(p).submit({p.manifest.id, std::move(*attachment),
-                                   cacheDir.empty() ? deps.pluginsDir + "/.cache/fulltext" : cacheDir, deps.engineEnv, work}))
+                                   cacheDir.empty() ? deps.pluginsDir + "/.cache/fulltext" : cacheDir, deps.engineEnv,
+                                   deps.fullTextLoader, work}))
         work->reject("zk.library.fullText: this plugin already has " + std::to_string(kFullTextMaxPending) +
                      " texts being read; await some before asking for more");
     return promise;

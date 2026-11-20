@@ -18,6 +18,7 @@
 // entries (same key, another md5). The cache holds at most kMaxFullTextCacheBytes: a hit marks its
 // entry used (its time), and writing an entry drops the least recently used others until it fits.
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -31,10 +32,12 @@ constexpr uint64_t kMaxFullTextCacheBytes = 64u << 20;
 
 // nullopt with *err set: the file isn't on the Kindle (not downloaded, or its file is gone), it
 // is a linked file or not an EPUB/PDF, the engine can't open it, or its text is over the limit.
-// `loader` replaces loadEngine (tests); never throws.
+// `loader` replaces loadEngine (tests); never throws. `cancel` (set from any thread) stops it at
+// the next page or chapter: nullopt, *err "Cancelled", and nothing written to the cache.
 using EngineLoader = std::function<std::unique_ptr<DocumentEngine>(DocType, const EngineEnv&, UserError*)>;
 std::optional<std::string> extractFullText(const AttachmentRecord&, const std::string& cacheDir, const EngineEnv&,
-                                           UserError* err, const EngineLoader& loader = {});
+                                           UserError* err, const EngineLoader& loader = {},
+                                           const std::atomic<bool>* cancel = nullptr);
 
 // Tests: while held, zk.library.fullText's workers (one per running host) start no job (they
 // queue), so what a plugin submits in one go is counted before any of it ends.

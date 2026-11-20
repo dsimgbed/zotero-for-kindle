@@ -20,6 +20,21 @@ namespace zk {
 using nlohmann::json;
 namespace fs = std::filesystem;
 
+std::vector<std::string> pluginDataRoots(const Paths& p) {
+    std::vector<std::string> roots;
+    std::error_code ec;
+    for (fs::directory_iterator it(p.accountsRoot, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        std::error_code e2;
+        if (name.empty() || name.size() > 18 || !it->is_directory(e2) ||
+            !std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            continue;
+        const int64_t userId = std::stoll(name);
+        if (userId > 0) roots.push_back(accountPaths(p, userId).pluginDataRoot);
+    }
+    return roots;
+}
+
 AccountPaths accountPaths(const Paths& p, int64_t userId) {
     AccountPaths a;
     a.root = p.accountsRoot + "/" + std::to_string(userId);

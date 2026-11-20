@@ -134,6 +134,7 @@ PluginHostDeps pluginHostDeps(const Paths& paths, const PluginAccount& account) 
     PluginHostDeps d;
     d.pluginsDir = paths.pluginsDir;
     d.account = account;
+    d.pluginDataRoots = [paths] { return pluginDataRoots(paths); };  // Remove deletes its data in every account
     d.engineEnv = kEngineEnv;
     d.crashMarker = paths.pluginsDir + "/.running";
     d.appVersion = appVersion();
@@ -608,6 +609,7 @@ int main(int argc, char** argv) {
     catalogConfig.wallMs = wallMs;
     catalogConfig.app = appVersion();
     catalogConfig.host = [&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; };
+    catalogConfig.pluginDataRoots = [paths] { return pluginDataRoots(paths); };
     CatalogService catalogService(catalogConfig);
     app.setCatalog(&catalogService);
     catalogService.start();

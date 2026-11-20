@@ -671,7 +671,7 @@ void appendParagraphs(const std::string& raw, std::string& out) {
 
 // The book's chapters (crengine's DocFragments) in order, paragraphs separated by a blank line.
 // The crengine lock is taken per chapter, so the reader's render worker can run in between.
-bool EpubEngine::fullText(std::string& out, UserError* err) {
+bool EpubEngine::fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) {
     out.clear();
     auto fail = [&] {
         out.clear();
@@ -717,6 +717,7 @@ bool EpubEngine::fullText(std::string& out, UserError* err) {
     }
     for (int i : fragments) {
         if (out.size() > kMaxFullTextBytes) break;
+        if (cancel && cancel->load()) return cancelledText(out, err);
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
         DocCacheOff cacheOff(textOnly_);
         if (!view_ || i >= (int)holder->getChildCount()) return fail();

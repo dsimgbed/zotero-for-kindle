@@ -3,6 +3,7 @@
 // (libzk-epub.so, libzk-pdf.so) so their freetype/harfbuzz never meet the firmware's (pango).
 // Nothing here throws across the module boundary; errors come back as UserError.
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -122,6 +123,13 @@ struct InkPlacement {
 // refuses the file).
 constexpr size_t kMaxFullTextBytes = 32u * 1024 * 1024;
 
+// What fullText() returns when its `cancel` flag stops it: `out` emptied, *err "Cancelled".
+inline bool cancelledText(std::string& out, UserError* err) {
+    out.clear();
+    if (err) *err = UserError{ErrorKind::Other, "Cancelled", "fullText cancelled"};
+    return false;
+}
+
 // Where an engine finds its data (crengine's hyphenation dictionaries and CSS, fonts, cache).
 struct EngineEnv {
     std::string dataDir;
@@ -168,7 +176,9 @@ public:
     // separated by "\n\n". PDF: each page's text, pages separated by "\f" (a page without text
     // layer is empty: a scan gives only form feeds, still a success). Stops (leaving more than
     // kMaxFullTextBytes in `out`) once over the limit. False with *err on a failure; never "".
-    virtual bool fullText(std::string& /*out*/, UserError* err) {
+    // `cancel` (any thread may set it): checked per page (PDF) or chapter (EPUB); once set, it
+    // stops with `out` empty and false ("Cancelled").
+    virtual bool fullText(std::string& /*out*/, UserError* err, const std::atomic<bool>* /*cancel*/ = nullptr) {
         if (err) *err = UserError{ErrorKind::Other, "This file's text can't be read.", "fullText not supported"};
         return false;
     }

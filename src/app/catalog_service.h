@@ -46,6 +46,8 @@ struct CatalogConfig {
     Version app;
     DownloadHooks hooks;  // freeSpace, probe (tests)
     std::function<PluginHost*()> host;  // the host of the moment (null while an app update installs)
+    // Every account's plugin data root: Remove deletes the plugin's data in each (removePluginData).
+    std::function<std::vector<std::string>()> pluginDataRoots;
 };
 
 class CatalogService {

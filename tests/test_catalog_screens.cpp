@@ -174,6 +174,7 @@ struct Rig {
     std::unique_ptr<CatalogService> svc;
     bool hostStarted = false;
     std::shared_ptr<std::atomic<int64_t>> now = std::make_shared<std::atomic<int64_t>>(kNow);
+    std::vector<std::string> accountRoots;  // every account's plugin data root (CatalogConfig::pluginDataRoots)
 
     Rig() {
         fillFixtureLibrary(lib, 12);
@@ -204,6 +205,7 @@ struct Rig {
         c.hooks.freeSpace = [](const std::string&) { return int64_t{1} << 40; };
         c.hooks.probe = [] { return NetState{}; };
         c.host = [this] { return host.get(); };
+        c.pluginDataRoots = [this] { return accountRoots; };
         svc = std::make_unique<CatalogService>(std::move(c));
         nav.catalogService = svc.get();
         svc->start();
@@ -556,6 +558,11 @@ TEST_CASE("catalog screens: Update all applies those that add nothing and leaves
 TEST_CASE("catalog screens: Remove asks first; Cancel keeps everything, yes deletes the files, storage and state") {
     Rig r;
     r.installFeed();
+    // What it saved for two accounts, and another plugin's data that must stay.
+    r.accountRoots = {r.dir.path("accounts/1/plugins"), r.dir.path("accounts/2/plugins")};
+    r.dir.write("accounts/1/plugins/feed/storage.db", "kv1");
+    r.dir.write("accounts/2/plugins/feed/data/notes.txt", "mine2");
+    r.dir.write("accounts/2/plugins/md/storage.db", "other");
     r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
     r.startHost();
     r.host->setEnabled("feed", true);
@@ -575,6 +582,7 @@ TEST_CASE("catalog screens: Remove asks first; Cancel keeps everything, yes dele
     r.settle();
     CHECK(page.question().empty());
     CHECK(r.dir.exists("feed/storage.db"));
+    CHECK(r.dir.exists("accounts/1/plugins/feed/storage.db"));
     CHECK(r.status("feed"));
 
     page.onGesture(tapAt(page.removeRect().center()), r.nav);
@@ -586,6 +594,9 @@ TEST_CASE("catalog screens: Remove asks first; Cancel keeps everything, yes dele
     CHECK(r.nav.toasts.back() == "Feed Riffle was removed.");
     CHECK_FALSE(r.dir.exists("feed"));
     CHECK_FALSE(r.dir.exists(".previous/feed"));
+    CHECK_FALSE(r.dir.exists("accounts/1/plugins/feed"));  // its data in every account
+    CHECK_FALSE(r.dir.exists("accounts/2/plugins/feed"));
+    CHECK(r.dir.read("accounts/2/plugins/md/storage.db") == "other");
     CHECK_FALSE(r.status("feed"));
     CHECK(r.dir.read(".state.json").find("\"feed\"") == std::string::npos);
     CHECK_FALSE(r.svc->state().cache.fromCatalog.count("feed"));

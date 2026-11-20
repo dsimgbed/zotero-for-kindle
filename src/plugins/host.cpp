@@ -2243,6 +2243,15 @@ void PluginHost::forgetState(const std::string& id) {
     ++impl_->version;
 }
 
+void removePluginData(const std::vector<std::string>& roots, const std::string& id) {
+    if (id.empty() || id[0] == '.' || id.find('/') != std::string::npos || id.find('\\') != std::string::npos) return;
+    for (const auto& root : roots) {
+        if (root.empty()) continue;
+        std::error_code ec;
+        fs::remove_all(fs::path(root) / id, ec);
+    }
+}
+
 void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
     Impl& h = *impl_;
     {
@@ -2264,7 +2273,8 @@ void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
         std::error_code ec;
         if (deleteFolder) {
             fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
-            fs::remove_all(h.storageDir(id), ec);  // its data in the account served (other accounts' stay)
+            fs::remove_all(h.storageDir(id), ec);  // its data in the account served
+            if (h.deps.pluginDataRoots) removePluginData(h.deps.pluginDataRoots(), id);  // and in every account
         }
         h.state.forget(id);  // what a call ending meanwhile recorded
     });

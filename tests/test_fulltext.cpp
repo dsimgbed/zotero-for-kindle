@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -136,7 +138,7 @@ namespace {
 
 struct FailingEngine : test::FakeEngine {
     bool throws = false;
-    bool fullText(std::string& out, UserError* err) override {
+    bool fullText(std::string& out, UserError* err, const std::atomic<bool>*) override {
         out = "partial";
         if (throws) throw std::bad_alloc();
         if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "fake"};
@@ -232,4 +234,60 @@ TEST_CASE("fulltext: the cache is the folder it is given (each account's own); a
     // B reads the same attachment: its own entry, extracted (A's isn't a hit for B).
     REQUIRE(extractFullText(pdf, b, env(), &err, failing(false)) == std::nullopt);
     CHECK_FALSE(fs::exists(b + "/ACCT0001-abc123.txt"));
+}
+
+namespace {
+
+// A book whose text takes `pages` × 10 ms, page by page, and stops at the cancel flag.
+struct SlowEngine : test::FakeEngine {
+    std::atomic<bool>* started = nullptr;
+    int slowPages = 3000;
+    bool fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) override {
+        if (started) *started = true;
+        out.clear();
+        for (int p = 0; p < slowPages; ++p) {
+            if (cancel && cancel->load()) {
+                out.clear();
+                if (err) *err = UserError{ErrorKind::Other, "Cancelled", "fake"};
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            out += "page\f";
+        }
+        return true;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("fulltext: a cancelled extraction stops at once and leaves nothing in the cache") {
+    const std::string dir = freshDir("cancel");
+    std::atomic<bool> started{false}, cancel{false};
+    EngineLoader slow = [&](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        auto e = std::make_unique<SlowEngine>();
+        e->started = &started;
+        return e;
+    };
+    std::optional<std::string> text = "unset";
+    UserError err;
+    std::thread t([&] { text = extractFullText(local("SLOW0001", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(dir), env(), &err, slow, &cancel); });
+    for (int i = 0; i < 500 && !started; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    REQUIRE(started);
+    const auto t0 = std::chrono::steady_clock::now();
+    cancel = true;
+    t.join();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 200);
+    CHECK_FALSE(text);
+    CHECK(cacheEmpty(dir));
+
+    // Cancelled before it starts: no engine is even loaded.
+    bool loaded = false;
+    EngineLoader counting = [&](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        loaded = true;
+        return std::make_unique<SlowEngine>();
+    };
+    CHECK_FALSE(extractFullText(local("SLOW0002", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(dir), env(), &err, counting, &cancel));
+    CHECK_FALSE(loaded);
+    CHECK(cacheEmpty(dir));
 }

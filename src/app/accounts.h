@@ -29,6 +29,11 @@ struct AccountPaths {
 
 AccountPaths accountPaths(const Paths&, int64_t userId);
 
+// Every account's plugin data root (AccountPaths::pluginDataRoot), for each account dir under
+// accountsRoot (a userID-named folder, listed in accounts.json or not; dot-dirs aren't accounts):
+// removing a plugin deletes its data in each.
+std::vector<std::string> pluginDataRoots(const Paths&);
+
 // Plain data; hashing and the backoff rules live elsewhere.
 struct PinHash {
     std::string salt, hash;  // base64

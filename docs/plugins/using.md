@@ -199,10 +199,11 @@ Nothing a plugin does needs a reinstall of the app to undo.
   `zotero/plugins/`. The app starts with every plugin off until you delete the file.
 - **A plugin's data is in a bad state.** On its page: **Reset its data**.
 - **Its queued changes are wrong.** On its page: **Discard unsent changes**.
-- **Remove it.** On its page: **Remove**. Or, over USB, delete its folder in `zotero/plugins/`;
-  at the next start the app also drops its kept previous version and what it remembered of it (a
-  copy put back is new, and off). That removes every trace of it except the changes already in
-  Zotero.
+- **Remove it.** On its page: **Remove**. That removes every trace of it, the data it saved for
+  every account included, except the changes already in Zotero. Or, over USB, delete its folder in
+  `zotero/plugins/`; at the next start the app also drops its kept previous version and what it
+  remembered of it (a copy put back is new, and off). What it saved for each account stays in
+  `zotero/accounts/<userID>/plugins/<id>/` then: delete those too.
 - **After an app update** a plugin made for an older plugin API is listed as *Incompatible* and
   isn't run, instead of failing. App updates and rollbacks never touch `zotero/plugins/`.
 

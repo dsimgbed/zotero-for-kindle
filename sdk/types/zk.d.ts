@@ -192,7 +192,7 @@ declare namespace zk {
     /** The plugin's version from `plugin.json`. */
     readonly version: string;
     /**
-     * Where its `data/` folder is on the device (e.g. `/mnt/us/zotero/plugins/<id>/data`). For
+     * Where its `data/` folder is on the device (e.g. `/mnt/us/zotero/accounts/<userID>/plugins/<id>/data`: the active account's). For
      * telling the user where an export went; files are read and written with {@link zk.files}.
      */
     readonly dataDir: string;

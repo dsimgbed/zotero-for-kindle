@@ -4,12 +4,14 @@
 #include <mach/mach.h>
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <filesystem>
 #include <thread>
 
 #include "test_paths.h"
+#include "fake_engine.h"
 #include "fake_plugins.h"
 #include "plugins/fulltext.h"
 #include "plugins/host.h"
@@ -1122,4 +1124,47 @@ TEST_CASE("library: stop() and start() 20 times leave no thread behind (plugin t
     for (size_t at = log.find(R"(OUT ["len",true])"); at != std::string::npos; at = log.find(R"(OUT ["len",true])", at + 1)) ++runs;
     CHECK(runs == 20);
     CHECK(threadCount() <= before);
+}
+
+TEST_CASE("library: stop() while a text is being extracted returns at once; nothing is cached") {
+    Env env;
+    fill(env.lib);
+    env.fp.add("a", pluginWith(R"(out(["len", (await zk.library.fullText("PDFPDFP1")).length]);)"), {"fulltext:read"});
+    std::atomic<bool> started{false};
+    PluginHostDeps d = env.deps();
+    d.handlerBudgetMs = 60000;
+    // A book whose text takes 30 s, page by page.
+    struct Slow : test::FakeEngine {
+        std::atomic<bool>* started = nullptr;
+        bool fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) override {
+            *started = true;
+            for (int p = 0; p < 3000; ++p) {
+                if (cancel && cancel->load()) {
+                    out.clear();
+                    if (err) *err = UserError{ErrorKind::Other, "Cancelled", "fake"};
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                out += "page\f";
+            }
+            return true;
+        }
+    };
+    d.fullTextLoader = [&](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        auto e = std::make_unique<Slow>();
+        e->started = &started;
+        return e;
+    };
+    const PluginAccount a = accountOf(env, "1", env.dbPath);
+    PluginHost host(d);
+    host.setEnabled("a", true);
+    host.start(a);
+    host.dispatch(kRun);
+    REQUIRE(eventually([&] { return started.load(); }));
+    const auto t0 = std::chrono::steady_clock::now();
+    host.stop();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 200);
+    CHECK(filesIn(a.fullTextDir) == 0);
+    CHECK_FALSE(contains(env.fp.log("a"), R"(OUT ["len")"));
 }
