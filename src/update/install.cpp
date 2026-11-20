@@ -254,7 +254,11 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     return true;
 }
 
-Confirmed confirmStartup(const InstallPaths& p, Version running) {
+namespace {
+
+// commit: the start is confirmed, the backups go. Not committed (the first screen): only what to
+// say, nothing deleted but the launcher's note of a rollback (shown once).
+Confirmed startupState(const InstallPaths& p, Version running, bool commit) {
     Confirmed c;
     if (p.appDir.empty()) return c;
     const fs::path update(p.updateDir());
@@ -286,10 +290,16 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
     };
     Version from, to;
     if (!fs::exists(update / "state", ec)) {  // a download never installed, or a clean-up cut short
-        clearAll();
+        if (commit) clearAll();
         return c;
     }
-    // Here the running version has drawn its first screen: it has confirmed its start. A state the
+    if (!commit) {
+        if (parseState(readLine(update / "state"), &word, &from, &to) && (word == "installed" || word == "tried") &&
+            to == running)
+            c = {StartupNote::Updated, from, to};
+        return c;
+    }
+    // Here the running version has confirmed its start. A state the
     // launcher acts on that names the running version (as either end) stays: from = a rollback the
     // launcher hasn't finished (it tries again at the next start), to = the confirmation below.
     const std::string line = readLine(update / "state");
@@ -316,6 +326,37 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
     return {StartupNote::Updated, from, to};
 }
 
+}  // namespace
+
+Confirmed confirmStartup(const InstallPaths& p, Version running) { return startupState(p, running, true); }
+
 Confirmed confirmStartup(const InstallPaths& p) { return confirmStartup(p, appVersion()); }
+
+UpdateConfirm::UpdateConfirm(InstallPaths p, Version running) : paths_(std::move(p)), running_(running) {}
+Confirmed UpdateConfirm::atFirstScreen() { return startupState(paths_, running_, false); }
+
+void UpdateConfirm::tick(int64_t nowMs, bool foreground) {
+    if (!pending_) return;
+    if (foreground && frontSince_ < 0) frontSince_ = nowMs;
+    if (!foreground && frontSince_ >= 0) {
+        frontMs_ += nowMs - frontSince_;
+        frontSince_ = -1;
+    }
+    if (frontMs_ + (frontSince_ >= 0 ? nowMs - frontSince_ : 0) >= kConfirmMs) confirm();
+}
+
+std::optional<int64_t> UpdateConfirm::wakeAt(int64_t) const {
+    if (!pending_ || frontSince_ < 0) return std::nullopt;
+    return frontSince_ + kConfirmMs - frontMs_;
+}
+
+void UpdateConfirm::cleanEnd() {
+    if (pending_) confirm();
+}
+
+void UpdateConfirm::confirm() {
+    pending_ = false;
+    confirmStartup(paths_, running_);
+}
 
 }  // namespace zk

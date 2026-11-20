@@ -192,6 +192,69 @@ TEST_CASE("update install: confirm after a good start cleans up and says Updated
     }
 }
 
+TEST_CASE("update confirm: the first screen says Updated but keeps the way back") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    UpdateConfirm confirm(k.paths, {0, 3, 0});
+    const Confirmed c = confirm.atFirstScreen();
+    CHECK(c.note == StartupNote::Updated);
+    CHECK(c.to == Version{0, 3, 0});
+    // A crash after the first frame (a plugin, a sync, a book) still finds the backup to go back to.
+    CHECK(fs::exists(k.app("update/state")));
+    CHECK(fs::exists(k.app("update/old/bin")));
+    CHECK(fs::exists(k.root / "var/config.json.old"));
+}
+
+TEST_CASE("update confirm: only 60 s in front confirm; time in the background doesn't count") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    UpdateConfirm confirm(k.paths, {0, 3, 0});
+    confirm.atFirstScreen();
+    confirm.tick(1'000, true);
+    CHECK(confirm.wakeAt(1'000) == 61'000);
+    confirm.tick(31'000, false);  // the screensaver after 30 s in front
+    CHECK_FALSE(confirm.wakeAt(31'000));  // nothing to wait for while asleep
+    confirm.tick(3'600'000, true);  // an hour later, awake again
+    confirm.tick(3'629'000, true);
+    CHECK(fs::exists(k.app("update/state")));
+    CHECK(confirm.pending());
+    CHECK(confirm.wakeAt(3'629'000) == 3'630'000);
+    confirm.tick(3'630'000, true);
+    CHECK_FALSE(confirm.pending());
+    CHECK_FALSE(fs::exists(k.app("update/state")));
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+    CHECK_FALSE(confirm.wakeAt(3'630'000));
+}
+
+TEST_CASE("update confirm: a clean end before 60 s confirms too") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    UpdateConfirm confirm(k.paths, {0, 3, 0});
+    confirm.atFirstScreen();
+    confirm.tick(1'000, true);
+    confirm.tick(10'000, true);
+    CHECK(fs::exists(k.app("update/state")));
+    confirm.cleanEnd();
+    CHECK_FALSE(fs::exists(k.app("update/state")));
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+}
+
+TEST_CASE("update confirm: after a rollback the first screen says so") {
+    Kindle k;
+    writeFile(k.app("update/rolled-back"), "0.2.0 0.3.0\n");
+    UpdateConfirm confirm(k.paths, {0, 2, 0});
+    const Confirmed c = confirm.atFirstScreen();
+    CHECK(c.note == StartupNote::RolledBack);
+    CHECK(c.to == Version{0, 3, 0});
+    CHECK_FALSE(fs::exists(k.app("update/rolled-back")));
+}
+
 TEST_CASE("update install: confirm while another version runs leaves the update alone") {
     Kindle k;
     writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");  // the launcher's job, not ours

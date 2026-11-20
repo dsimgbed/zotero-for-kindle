@@ -463,6 +463,8 @@ int main(int argc, char** argv) {
     // Updates (Plan 7): only when the user asks, from Settings. <appDir>/update-feed (one URL)
     // points at a test feed instead of GitHub.
     const InstallPaths installPaths{paths.appDir, paths.launcherPath, paths.configFile(), paths.dbPath};
+    // An update counts as good after 60 s in front or a clean end; until then the launcher can go back.
+    UpdateConfirm updateConfirm(installPaths, appVersion());
     UpdaterConfig updaterConfig;
     updaterConfig.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
     updaterConfig.publicKey = kReleasePublicKey;
@@ -576,6 +578,7 @@ int main(int argc, char** argv) {
         pluginEvents.poll(app);
         catalogService.poll();
         backgroundRound.tick(app.nowMs());
+        updateConfirm.tick(app.nowMs(), !app.inBackground());
         if (pluginWatch && plugins && pluginsRunning && !pluginsOff) {
             pluginWatch->poll(app.nowMs());
             app.wakeAt(app.nowMs() + 1000);  // the developer loop looks at main.js once a second
@@ -583,6 +586,7 @@ int main(int argc, char** argv) {
         // What waits for time here (the loop otherwise sleeps until input or a worker's wake):
         if (!startConfirmed) app.wakeAt(startedMs + kSafeModeConfirmMs);
         if (backgroundRound.holding()) app.wakeAt(backgroundRound.endsAt());
+        if (auto at = updateConfirm.wakeAt(app.nowMs())) app.wakeAt(*at);
     });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     updateNotice.alsoCheck([&] { catalogService.check(false); });
@@ -782,7 +786,7 @@ int main(int argc, char** argv) {
     app.start();
     plugins->setBackground(app.inBackground());
     if (!pluginsOff) plugins->start();  // after the first screen: plugins load lazily, at the first event
-    switch (const Confirmed c = confirmStartup(installPaths); c.note) {
+    switch (const Confirmed c = updateConfirm.atFirstScreen(); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
         case StartupNote::RolledBack:
             app.toast("The update to " + c.to.str() + " didn't start, so Zotero went back to " + c.from.str() + ".");
@@ -802,6 +806,7 @@ int main(int argc, char** argv) {
                 if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key)) flow.open(*row, app);
     const int rc = app.run();
     if (safeMode.counting) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
+    if (rc == 0) updateConfirm.cleanEnd();                          // for an update too
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     watchdog.beat("stopping plugins");

@@ -11,7 +11,7 @@
 #                  backup beside it, $ZK_CONFIG.old (kept off the USB drive, mode 0600)
 #   exit code 75   the app installed an update: start it again
 # installing: the swap was interrupted. tried: the new version ran and never confirmed (the app
-# confirms by deleting update/state once it has drawn its first screen). Both: roll back.
+# confirms by deleting update/state after 60 s in front, or at a clean exit). Both: roll back.
 ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
 ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
