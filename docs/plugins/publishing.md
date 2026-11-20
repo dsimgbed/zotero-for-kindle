@@ -10,7 +10,9 @@ How it works, in short:
   does not pass.
 - The list of plugins, the **registry**, is a signed file in
   [`ievlevpn/zotero-for-kindle-plugins`](https://github.com/ievlevpn/zotero-for-kindle-plugins).
-  Your first listing is one pull request. After that, updates need no pull request.
+  Your first listing is one pull request. After that, updates need no pull request. A Kindle
+  refuses a registry older than the one it has (by its `updated` stamp), so an old signed copy
+  can't bring back a withdrawn plugin or an old key.
 
 You need Node 22 or newer. The tool is [`sdk/zk-plugin.mjs`](../../sdk/zk-plugin.mjs); it needs no
 `npm install`.

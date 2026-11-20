@@ -6,7 +6,21 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
-## 0.10.0 (unreleased): a Home of your own
+## 0.10.2 (unreleased): fixes
+
+- A screen's failures: an `onEvent` that throws counts, and the `render` after it no longer clears
+  the count; only an event and its render that both go well do. A screen whose `onEvent` always
+  throws, or a Home body whose `render` fails on every show (its `open` event going well), is now
+  turned off after three in a row, as documented.
+- `zk.library.fullText`: at most 4 calls under way per plugin; a fifth rejects at once with
+  *this plugin already has 4 texts being read*. Plugins take turns on the one reader.
+- `zk.zotero`: permissions are also checked from what reaches the app (replacing
+  `JSON.stringify` no longer gets `createItem` past `zotero:collections` / `zotero:tags`).
+- Home's body: the tree kept for the next start is written at most every 30 s (and when Home
+  hides); a screen gone from its plugin no longer has its old tree drawn at the next start.
+- Catalog: a registry older than the one the Kindle has is refused; Roll back refuses a kept
+  version this app can't run, and one asking for more is turned off before it can load.
+
 
 - `zk.screen(id, { home: true, … })` offers a screen as the body of the app's Home; the user picks it
   in Settings → Home. The app keeps Home's frame (title, icons, search, banners, tab bar); the body

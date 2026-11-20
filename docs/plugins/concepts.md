@@ -151,6 +151,8 @@ for await (const item of zk.library.items({ tag: "to-read" })) console.log(item.
 Annotations belong to an attachment (the PDF or EPUB), not to the item: list
 `zk.library.attachments(item.key)`, then each one's `zk.library.annotations(attachment.key)`.
 `zk.library.fullText` reads a downloaded book's text with the app's own engines, off the screen.
+One reader serves every plugin, in turns; a plugin has at most 4 of these calls under way, and a
+fifth rejects at once.
 
 ## Writing to Zotero
 
@@ -314,7 +316,8 @@ so reading never waits for a plugin.
 **Failures.** An uncaught error in a handler, the background task or `main.js`, and every limit
 stop, is logged with its stack and counted. Three in a row turn the plugin off, with the note
 *Turned off — it stopped working* in Settings → Plugins, where its page shows the last three
-errors; a success resets the count. A plugin that
+errors; a success resets the count. On a screen, success is an `onEvent` and the `render` after it
+both going well: a render alone doesn't reset the count after a failed `onEvent`. A plugin that
 fails while loading isn't started again until it is reloaded or turned on again. A rejected
 promise nobody awaited is logged as a warning (`Uncaught (in promise) …`) and not counted.
 

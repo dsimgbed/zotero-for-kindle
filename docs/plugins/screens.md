@@ -145,7 +145,8 @@ While `onEvent` runs the screen stays drawn and taps queue; after 1 s the app sh
 - A `render` that throws, goes over 1 s, or returns an invalid or too large tree shows
   "<Plugin> can't show this screen right now" with Back, and counts as a failure.
 - An `onEvent` error shows in the result pop-up as "<Plugin> couldn't do that: <message>", and the
-  screen renders again. It counts as a failure too: three in a row turn the plugin off.
+  screen renders again. It counts as a failure too: three in a row turn the plugin off. The render
+  that follows doesn't clear it; only an event and its render that both go well do.
 
 ## Recipes
 
