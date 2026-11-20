@@ -618,6 +618,8 @@ declare namespace zk {
      * The text of a downloaded book or paper (PDF, EPUB, …), extracted by the app's own engines.
      * Rejects if the attachment isn't downloaded to the Kindle (see {@link Attachment.downloaded})
      * or isn't a document, or if its text is larger than 32 MB. Can take a few seconds for a long book.
+     * A plugin has at most 4 of these under way at once (plugins take turns on one reader): a fifth
+     * rejects at once; await some before asking for more.
      *
      * Format: an EPUB's paragraphs are separated by a blank line (`"\n\n"`), chapters in reading
      * order. A PDF's pages are in order, separated by a form feed (`"\f"`): `text.split("\f")[0]`

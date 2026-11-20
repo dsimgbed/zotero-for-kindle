@@ -697,6 +697,25 @@ TEST_CASE("library: fullText returns a downloaded PDF's text and rejects what is
     CHECK(contains(log, "OUT TypeError"));
 }
 
+TEST_CASE("library: a plugin has at most 4 fullText calls under way; more are refused, so it can't starve others") {
+    Env env;
+    fill(env.lib);
+    env.fp.add("a", pluginWith(R"(
+        const all = await Promise.allSettled([1, 2, 3, 4, 5, 6].map(() => zk.library.fullText("PDFPDFP1")));
+        out(["read", all.filter((r) => r.status === "fulfilled").length]);
+        const refused = all.filter((r) => r.status === "rejected");
+        out(["refused", refused.length]);
+        if (refused.length) out(refused[0].reason.message);
+        out(["after", (await zk.library.fullText("PDFPDFP1")).length > 0]);  // the slots are free again
+    )"), {"fulltext:read"});
+    const std::string log = env.run("a");
+    INFO(log);
+    CHECK(contains(log, R"(OUT ["read",4])"));
+    CHECK(contains(log, R"(OUT ["refused",2])"));
+    CHECK(contains(log, "OUT zk.library.fullText: this plugin already has 4 texts being read; await some before asking for more"));
+    CHECK(contains(log, R"(OUT ["after",true])"));
+}
+
 TEST_CASE("library: without a library database the calls fail plainly") {
     FakePlugins fp;
     fp.add("a", pluginWith(R"(try { await zk.library.tags(); out("no"); } catch (e) { out(e.name + ': ' + e.message); })"), {"library:read"});
