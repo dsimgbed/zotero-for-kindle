@@ -15,6 +15,8 @@ JavaScript plugins for Zotero for Kindle: what they are, how to use them, and ho
   work, limits.
 - [Screens and entry points](screens.md): actions in the reader and on items, screens of your own,
   the building blocks.
+- [Composing screens](composing.md): layouts built from the primitives (rows, boxes, covers,
+  grids), with the pieces of Reading Desk as recipes.
 - [Recipes](recipes.md): short complete plugins for common jobs.
 - [Debugging and testing](debugging.md): logs, the desktop loop, common errors.
 - [API reference](reference/README.md), generated from

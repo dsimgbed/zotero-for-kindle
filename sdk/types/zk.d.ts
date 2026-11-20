@@ -1674,7 +1674,7 @@ declare namespace zk {
       children: Child[];
       /** Default `"small"`. */
       gap?: Gap;
-      /** Default `"top"`. Needs app 0.12.0. */
+      /** Default `"center"` (as rows were before 0.12). Needs app 0.12.0. */
       align?: RowAlign;
       width?: Width;
     }
