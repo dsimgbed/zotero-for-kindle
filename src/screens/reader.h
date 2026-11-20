@@ -324,9 +324,12 @@ private:
     int remotePage_ = -1;
     bool unplaced_ = false;  // Zotero's position can't be placed here: reading on decides
     struct PositionQuestion {
-        int page = 0;
         std::string text;
     };
+    // A re-layout counts pages again: where Zotero's position falls is asked again once the new
+    // pages show (placingAgain_: only remotePage_ and the question's text change, nothing is answered).
+    void placeRemoteAgain();
+    bool placingAgain_ = false;
     std::optional<PositionQuestion> question_;
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
     // Areas.

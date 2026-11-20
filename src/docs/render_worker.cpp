@@ -28,7 +28,7 @@ int g_live = 0;
 
 struct RenderWorker::Impl {
     struct Target {
-        enum class Kind { None, Page, Position, Annotation } kind = Kind::None;
+        enum class Kind { None, Page, Position, Annotation, Zotero } kind = Kind::None;
         int page = 0;
         DocPosition position;
         AnnotationRecord annotation;
@@ -320,6 +320,9 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         int page = current;
         if (t.kind == Target::Kind::Page) page = t.page;
         else if (t.kind == Target::Kind::Position) page = engine->pageOf(t.position);
+        else if (t.kind == Target::Kind::Zotero) {
+            if (const int p = engine->pageOfZoteroPosition(t.position.value); p >= 0) page = p;
+        }
         else if (const int p = engine->pageOfAnnotation(t.annotation); p >= 0) page = p;
         current = std::clamp(page, 0, std::max(0, pageCount - 1));
         postCurrent = true;
@@ -453,6 +456,13 @@ void RenderWorker::show(int page) {
 void RenderWorker::showPosition(DocPosition pos) {
     request(*impl_, [&] {
         impl_->target = {Impl::Target::Kind::Position, 0, std::move(pos), {}};
+        ++impl_->generation;
+    });
+}
+
+void RenderWorker::showZotero(std::string position) {
+    request(*impl_, [&] {
+        impl_->target = {Impl::Target::Kind::Zotero, 0, {std::move(position)}, {}};
         ++impl_->generation;
     });
 }

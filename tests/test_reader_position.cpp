@@ -17,6 +17,13 @@ using namespace zk::test;
 
 namespace {
 
+// Zotero's EPUB positions name a place in the text (a CFI), not a page: here the fake's position
+// value, so a bigger font moves them to other pages, as it does every other position.
+struct FlowingEngine : FakeEngine {
+    std::string zoteroPosition(int page) override { return positionOfPage(page).value.substr(4); }
+    int pageOfZoteroPosition(const std::string& v) override { return pageOfPlaced({"pos:" + v}); }
+};
+
 struct Rig {
     Db db{Db::open(":memory:")};
     Library lib{db};
@@ -26,9 +33,11 @@ struct Rig {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");  // attachment EP000003
     }
-    std::unique_ptr<ReaderScreen> reader(DocType type = DocType::Epub) {
-        auto r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+    std::unique_ptr<ReaderScreen> reader(DocType type = DocType::Epub, bool flowing = false) {
+        auto r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [flowing] {
+            return std::make_unique<RenderWorker>([flowing](DocType) {
+                return std::unique_ptr<DocumentEngine>(flowing ? new FlowingEngine() : new FakeEngine());
+            });
         }, 6);
         nav.visible = r.get();
         return r;
@@ -242,4 +251,49 @@ TEST_CASE("reader position fix: the pen on the question's banner is a finger, no
     r->onPen(up, rig.nav);
     down.pos = {600, 900};  // the page below the banner still takes handwriting
     CHECK(r->onPen(down, rig.nav));
+}
+
+TEST_CASE("reader position fix: Go after a font change goes to the computer's place in the new pages") {
+    // Audit B1: the computer's place was kept as a page number of the old pages.
+    Rig rig;
+    rig.lib.saveReading(rig.row.key, "pos:1080", 0.1);  // page 13 at 9 pt
+    rig.lib.setLocalPosition("EP000003", "1080");
+    rig.lib.markPositionSent("EP000003", "1080", 5);
+    rig.lib.applyRemotePosition("EP000003", "5410", 9);  // in page 61 at 9 pt, page 46 at 12 pt
+    auto r = rig.reader(DocType::Epub, true);
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 12));
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    Layout bigger = r->layout();
+    bigger.sizePt = 12;
+    r->applyLayout(bigger, rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->ready() && !r->turning() && r->pageCount() == 75; }));
+    REQUIRE(r->positionQuestion());
+    r->onGesture(tapAt(ReaderScreen::positionGoRect().center()), rig.nav);
+    CHECK(rig.until(*r, [&] { return r->ready() && !r->turning() && r->page() != 9; }));
+    CHECK(r->page() == 45);
+    CHECK(rig.until(*r, [&] { return rig.lib.readingPosition("EP000003")->local == "5410"; }));
+}
+
+TEST_CASE("reader position fix: a font change on the computer's page keeps the computer's exact place") {
+    // Audit B1: after a re-layout the old page number of the computer's place was compared with the new pages.
+    Rig rig;
+    rig.lib.saveReading(rig.row.key, "pos:1080", 0.1);
+    rig.lib.setLocalPosition("EP000003", "1080");
+    rig.lib.markPositionSent("EP000003", "1080", 5);
+    rig.lib.applyRemotePosition("EP000003", "5410", 9);
+    auto r = rig.reader(DocType::Epub, true);
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    r->onGesture(tapAt(ReaderScreen::positionGoRect().center()), rig.nav);
+    REQUIRE(rig.waitPage(*r, 60));
+    Layout bigger = r->layout();
+    bigger.sizePt = 12;
+    r->applyLayout(bigger, rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->ready() && !r->turning() && r->pageCount() == 75; }));
+    CHECK(r->page() == 45);
+    CHECK(rig.until(*r, [&] { return rig.lib.readingPosition("EP000003")->local == "5410"; }));
+    auto p = rig.lib.readingPosition("EP000003");
+    CHECK(p->local == "5410");
+    CHECK_FALSE(p->dirty);
 }

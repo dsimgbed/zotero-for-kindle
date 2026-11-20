@@ -60,6 +60,7 @@ public:
     void show(int page);
     void showPosition(DocPosition);
     void showAnnotation(AnnotationRecord);  // the page the annotation is on (ignored if it can't be placed)
+    void showZotero(std::string position);  // a Zotero position, placed in the pages as they are then (ignored if it can't be)
     uint64_t search(std::string query);     // results come back with this request id
     void highlightsFor(std::vector<AnnotationRecord>);
     // Text between two points on `page`; only the latest request is answered.

@@ -448,20 +448,32 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Placed: {
                 if (e.requestId != placeId_) break;
                 placeId_ = 0;
+                const bool again = std::exchange(placingAgain_, false);  // after a re-layout: nothing to compare
                 if (e.page < 0) {  // can't be placed here: nothing is sent until the reader reads on
-                    unplaced_ = true;
+                    if (!again) unplaced_ = true;
                     break;
                 }
                 remotePage_ = e.page / std::max(1, e.viewsPerPage);  // a PDF page, whatever the View
+                const int pct = static_cast<int>(std::lround(e.progress * 100));
+                const std::string text = (type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
+                                                                : "Your computer is at " + std::to_string(pct) + "%" +
+                                                                      (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".") +
+                                         "\nGo there?";
+                if (again) {
+                    if (question_ && question_->text != text) {  // the new pages' percentage and chapter
+                        question_->text = text;
+                        if (visible && !menus_) nav.damage(positionBannerRect(), Waveform::Ui);
+                    }
+                    // The re-layout's page named its start: on Zotero's page, Zotero's exact place it is.
+                    if (remotePage_ == page_ / views_ && !web_ && !preview_)
+                        nav.library().setLocalPosition(row_.attachmentKey, remoteValue_);
+                    break;
+                }
                 if (remotePage_ == page_ / views_) {  // the page we're on: agreed, nothing to ask
                     nav.library().answerRemotePosition(row_.attachmentKey, true, remoteVersion_);
                     break;
                 }
-                const int pct = static_cast<int>(std::lround(e.progress * 100));
-                std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
-                                                         : "Your computer is at " + std::to_string(pct) + "%" +
-                                                               (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".";
-                question_ = PositionQuestion{remotePage_, text + "\nGo there?"};
+                question_ = PositionQuestion{text};
                 if (visible) nav.damage(positionBannerRect(), Waveform::Ui);
                 break;
             }
@@ -567,7 +579,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     // (Also while Zotero's position is still being placed, or can't be.)
     if (question_) {
         answerPosition(false, nav);
-    } else if (unplaced_ || placeId_ || !placeAfterFirstPage_.empty()) {
+    } else if (!placingAgain_ && (unplaced_ || placeId_ || !placeAfterFirstPage_.empty())) {
         unplaced_ = false;
         placeId_ = 0;
         placeAfterFirstPage_.clear();
@@ -623,7 +635,21 @@ void ReaderScreen::onResize(Nav& nav) {
     if (!worker_) return;
     layoutPending_ = true;
     for (auto& b : back_) b.page = -1;  // turned: pages are counted again
+    placeRemoteAgain();
     worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+}
+
+void ReaderScreen::placeRemoteAgain() {
+    if (remoteValue_.empty() || !placeAfterFirstPage_.empty()) return;  // asked once the new pages show anyway
+    if (placeId_) {  // its answer counts the old pages: ask again (as what it was, first or again)
+        placeId_ = 0;
+        placeAfterFirstPage_ = remoteValue_;
+        return;
+    }
+    if (remotePage_ < 0) return;
+    remotePage_ = -1;
+    placingAgain_ = true;
+    placeAfterFirstPage_ = remoteValue_;
 }
 
 void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
@@ -646,6 +672,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     layoutPending_ = true;
     layout_ = l;
     for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
+    placeRemoteAgain();
     if (!preview_) saveLayout(nav.library(), row_.key, l);  // a preview's lasts while it is open
     worker_->setLayout(l, position_);
 }
@@ -1440,7 +1467,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
         dropArea();
         markJumpOrigin();
         turning_ = true;
-        worker_->show(question_->page * views_);  // its first view (PDF column view)
+        worker_->showZotero(remoteValue_);  // placed in the pages as they are now (a PDF page: its first view)
     }
     question_.reset();
     nav.damage(positionBannerRect(), Waveform::Ui);
