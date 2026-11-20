@@ -317,7 +317,9 @@ so reading never waits for a plugin.
 stop, is logged with its stack and counted. Three in a row turn the plugin off, with the note
 *Turned off — it stopped working* in Settings → Plugins, where its page shows the last three
 errors; a success resets the count. On a screen, success is an `onEvent` and the `render` after it
-both going well: a render alone doesn't reset the count after a failed `onEvent`. A plugin that
+both going well (or an `onEvent` that closes its screen): after a screen's `onEvent` failed, only
+that screen's next event going well, or a success outside screens, resets the count, not a
+render alone (of that screen or another). A plugin that
 fails while loading isn't started again until it is reloaded or turned on again. A rejected
 promise nobody awaited is logged as a warning (`Uncaught (in promise) …`) and not counted.
 

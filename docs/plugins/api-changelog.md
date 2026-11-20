@@ -9,7 +9,8 @@ first, with what to do about it.
 ## 0.10.2 (unreleased): fixes
 
 - A screen's failures: an `onEvent` that throws counts, and the `render` after it no longer clears
-  the count; only an event and its render that both go well do. A screen whose `onEvent` always
+  the count; only that screen's next event going well (with its render, or closing the screen)
+  does, or a success outside screens. A screen whose `onEvent` always
   throws, or a Home body whose `render` fails on every show (its `open` event going well), is now
   turned off after three in a row, as documented.
 - `zk.library.fullText`: at most 4 calls under way per plugin; a fifth rejects at once with
