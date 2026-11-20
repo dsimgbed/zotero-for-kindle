@@ -16,9 +16,11 @@ fit is left out from the end (first the passage, then inbox lines, then the row 
   each kind not marked read, its cover, title, authors, a bar and "13% · today". A book is item
   type `book` or `bookSection`, or an EPUB file; everything else is a paper. A kind with nothing
   opened shows its first pin never opened and not read, **UP NEXT**, "Not started". A kind with
-  nothing at all: the other side takes the whole width; neither: no pair.
+  nothing at all: the other side takes the whole width; neither: no pair. A Paperwhite or a basic
+  Kindle turned: smaller covers and titles in 2 lines, so the row of pins fits under the pair.
 - **Pinned** — **All n ›** (every pin) and one row of covers in pin order, minus the pair: 5 on a
-  Paperwhite or a basic Kindle, 7 on a Scribe. A bar under a cover once it was opened.
+  Paperwhite, 4 on a basic Kindle, 8 on a Scribe (covers are about as wide on every Kindle, so a
+  wider screen holds more). A bar under a cover once it was opened.
 - **Inbox · n new** — **All ›** and the newest unread items of the inbox collection as lines:
   title, "authors · year", and when it was added ("today", "yesterday", "Mon", "Nov 12"). 2 lines,
   3 on a Scribe; minus the pair (n counts every unread item, as Your desk's Inbox n). At most the newest 100 are looked at ("99+").
@@ -36,8 +38,8 @@ has no All › (no pins in the row, no inbox band), a quiet **Your desk ›** un
 ## Your desk
 
 A switch **Reading · Pinned · Inbox n** (Inbox only with an inbox), on the tab of the All ›
-tapped, over a grid of covers that pages: each with its bar once opened, its title and "author ·
-42%" ("Read" once marked read).
+tapped, over a grid of covers that pages (4 a row, 6 on a Scribe): each with its bar once opened,
+its title and "author · 42%" ("Read" once marked read).
 
 - **Reading**: opened and not marked read, books and papers together, most recent first (60).
 - **Pinned**: every pin, in pin order.

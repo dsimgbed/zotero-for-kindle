@@ -1,11 +1,27 @@
 // The pieces Reading Desk is composed of, each from the app's primitives (zk.ui): a section
 // label, a heading with a link, an item beside its cover (the pair's side), a row of covers, a
 // list of text lines, a segmented switch, and a grid of captioned covers. The app draws them in
-// its own type and greys; nothing here is a pixel.
+// its own type and greys. The one place pixels enter is sizing (below): a cover is about as wide
+// on every Kindle, so a Scribe holds more of them rather than bigger ones.
 
 import { ref } from "./data";
 
 type Block = zk.ui.Block;
+
+/** The app's page margin and medium and large gaps, in zk.display's pixels (300 ppi). */
+const MARGIN = 60;
+export const MEDIUM = 36;
+export const LARGE = 60;
+
+/** The page's width inside its margins. */
+export const pageWidth = () => zk.display.width - 2 * MARGIN;
+
+/** `px` as a share of a row `width` wide with two children at a medium gap (a percent is of what the gap leaves). */
+export const share = (px: number, width: number): zk.ui.Percent =>
+  `${Math.min(100, Math.max(1, Math.round((100 * px) / (width - MEDIUM))))}%`;
+
+/** How many tiles of about `px` a row `width` wide holds at `gap` pixels between them. */
+export const perRow = (px: number, width: number, gap: number) => Math.max(1, Math.round((width + gap) / (px + gap)));
 
 /** A section label: small sans caps, tracked, secondary ("PINNED", "BOOK"). */
 export const label = (text: string) => zk.ui.text(text, { style: "label", caps: true });
@@ -32,10 +48,17 @@ export function heading(text: string, link?: { id: string; text: string }): Bloc
 
 /**
  * The pair's side: a kicker over the item's cover, and beside it the title (up to 3 lines), the
- * authors, and at the bottom the bar (once started) and a meta line. `wide`: the side has the
- * whole width, so its cover takes a smaller share of it.
+ * authors, and at the bottom the bar (once started) and a meta line. `cover`: the cover's share
+ * of the side; `titleLines`: where the title is cut.
  */
-export function pair(side: { kicker: string; item: zk.Item; authors: string; meta: string; wide: boolean }): Block {
+export function pair(side: {
+  kicker: string;
+  item: zk.Item;
+  authors: string;
+  meta: string;
+  cover: zk.ui.Percent;
+  titleLines: number;
+}): Block {
   const { item } = side;
   return zk.ui.column([
     label(side.kicker),
@@ -43,10 +66,10 @@ export function pair(side: { kicker: string; item: zk.Item; authors: string; met
       ref(item),
       zk.ui.row(
         [
-          zk.ui.cover(ref(item), { width: side.wide ? "18%" : "37%" }),
+          zk.ui.cover(ref(item), { width: side.cover }),
           zk.ui.column(
             [
-              title(item.title, "body", 3),
+              title(item.title, "body", side.titleLines),
               side.authors && meta(side.authors, "small", 2),
               zk.ui.spacer(),
               item.progress !== null && zk.ui.progress(item.progress),
@@ -62,15 +85,15 @@ export function pair(side: { kicker: string; item: zk.Item; authors: string; met
 }
 
 /**
- * One row of small covers (never more: what doesn't fit isn't drawn), each an item with a bar
- * under it once it was opened; no captions. `minWidth`: the narrowest a tile gets.
+ * One row of `columns` small covers (never more: what doesn't fit isn't drawn), each an item with
+ * a bar under it once it was opened; no captions.
  */
-export function shelfRow(items: zk.Item[], minWidth: zk.ui.Percent): Block {
+export function shelfRow(items: zk.Item[], columns: number): Block {
   return zk.ui.grid(
     items.map((i) =>
       zk.ui.item(ref(i), zk.ui.column([zk.ui.cover(ref(i)), i.progress !== null && zk.ui.progress(i.progress)])),
     ),
-    { columns: "auto", minWidth, rows: 1, gap: "medium" },
+    { columns, rows: 1, gap: "medium" },
   );
 }
 
@@ -118,8 +141,8 @@ const barSlot = (item: zk.Item) =>
     { gap: "none", align: "top" },
   );
 
-/** Covers in a grid that pages, each with its bar once opened, its title and a caption under it. */
-export function coverGrid(cells: { item: zk.Item; caption: string }[]): Block {
+/** Covers in a grid of `columns` that pages, each with its bar once opened, its title and a caption under it. */
+export function coverGrid(cells: { item: zk.Item; caption: string }[], columns: number): Block {
   return zk.ui.grid(
     cells.map(({ item, caption }) =>
       zk.ui.item(
@@ -131,6 +154,6 @@ export function coverGrid(cells: { item: zk.Item; caption: string }[]): Block {
         ]),
       ),
     ),
-    { columns: "auto", minWidth: "22%", gap: "large" },
+    { columns, gap: "large" },
   );
 }

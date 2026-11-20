@@ -14,7 +14,7 @@ import {
   percentOf,
   pinnedItems,
 } from "./data";
-import { coverGrid, segmented } from "./pieces";
+import { LARGE, coverGrid, pageWidth, perRow, segmented } from "./pieces";
 
 type Tab = "reading" | "pinned" | "inbox";
 const TABS: Tab[] = ["reading", "pinned", "inbox"];
@@ -24,6 +24,9 @@ const EMPTY: Record<Tab, string> = {
   pinned: "Nothing pinned yet. Long-press an item → More… → Pin to Home / Unpin.",
   inbox: "Nothing new in the inbox.",
 };
+
+/** A tile about 220 px wide: 4 a row on a Paperwhite or a basic Kindle, 6 on a Scribe. */
+const columns = () => perRow(220, pageWidth(), LARGE);
 
 /** "Austen · 42%", "Austen · Read", "Austen" (never opened). */
 function caption(i: zk.Item): string {
@@ -53,7 +56,7 @@ export function registerDesk() {
         [
           segmented(segments, `tab-${tab}`),
           items.length > 0
-            ? coverGrid(items.map((item) => ({ item, caption: caption(item) })))
+            ? coverGrid(items.map((item) => ({ item, caption: caption(item) })), columns())
             : zk.ui.text(EMPTY[tab], { tone: "secondary" }),
         ],
         { gap: "large" },

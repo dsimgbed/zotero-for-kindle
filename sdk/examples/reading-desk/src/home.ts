@@ -6,8 +6,9 @@
 //   INBOX · 4 NEW                              All ›       text lines            (or the passage)
 //
 // What doesn't fit is left out from the end, which is the order of sacrifice wanted: the passage,
-// then inbox lines, then the pinned row. zk.display only decides what trimming can't: how many
-// covers a row holds, and whether a Scribe's extra room takes a third line and the passage.
+// then inbox lines, then the pinned row. zk.display only decides what trimming can't: covers about
+// as wide on every Kindle (so how many a row holds), and whether a Scribe's extra room takes a
+// third line and the passage.
 
 import {
   authorsOf,
@@ -27,17 +28,19 @@ import {
   same,
   whenOf,
 } from "./data";
-import { endLink, heading, lines, pair, shelfRow } from "./pieces";
+import { MEDIUM, endLink, heading, lines, pageWidth, pair, perRow, share, shelfRow } from "./pieces";
 
-/** Covers a row passes the app (it draws what fits: 5 on a Paperwhite, 7 on a Scribe). */
-const PINS_SHOWN = 8;
+/** A cover's width in the pair and the pinned row, in pixels: a Paperwhite's, on every Kindle. */
+const COVER = 190;
+/** A Paperwhite or a basic Kindle turned is short: the pair is lower (a smaller cover, titles in 2 lines) so the pins fit under it. */
+const COVER_TURNED = 160;
 
 /** A Scribe's height: room for a third inbox line and the passage under the inbox. */
 const tall = () => zk.display.height >= 2000;
-/** Between the bands: closer on a basic Kindle's short screen, so the inbox keeps a line. */
+/** Between the bands: closer on a short screen (a basic Kindle, a Kindle turned). */
 const bandGap = (): zk.ui.Gap => (zk.display.height < 1400 ? "medium" : "large");
-/** About 200 px a cover: 5 on a Paperwhite or a basic Kindle, 7 on a Scribe. */
-const coverMinWidth = (): zk.ui.Percent => (zk.display.width >= 1600 ? "14%" : "17%");
+/** Pins in the row: 5 on a Paperwhite, 4 on a basic Kindle, 8 on a Scribe. */
+const pinsPerRow = () => perRow(COVER, pageWidth(), MEDIUM);
 
 const FIRST_USE =
   "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press → More… → Pin to Home.";
@@ -73,20 +76,30 @@ export function registerHome() {
       };
       const sides = [side(opened.book, "Book", true), side(opened.paper, "Paper", false)].filter((s): s is Side => !!s);
       const inPair = (i: zk.Item) => sides.some((s) => same(ref(s.item), ref(i)));
-      const wide = sides.length === 1;
+      // The side's width: the page's, or half of it less the gap.
+      const turned = zk.display.landscape && zk.display.height < 1400;
+      const sideWidth = sides.length === 1 ? pageWidth() : (pageWidth() - MEDIUM) / 2;
       const pairBand =
         sides.length > 0 &&
         zk.ui.row(
           sides.map((s) =>
-            pair({ kicker: s.kicker, item: s.item, authors: authorsOf(s.item, { most: 2, full: true }), meta: sideMeta(s), wide }),
+            pair({
+              kicker: s.kicker,
+              item: s.item,
+              authors: authorsOf(s.item, { most: 2, full: true }),
+              meta: sideMeta(s),
+              cover: share(turned ? COVER_TURNED : COVER, sideWidth),
+              titleLines: turned ? 2 : 3,
+            }),
           ),
           { align: "top", gap: "medium" },
         );
 
-      const shelf = pinned.filter((i) => !inPair(i)).slice(0, PINS_SHOWN);
+      const columns = pinsPerRow();
+      const shelf = pinned.filter((i) => !inPair(i)).slice(0, columns);
       const pinnedBand =
         shelf.length > 0 &&
-        zk.ui.column([heading("Pinned", { id: "all-pinned", text: `All ${pinned.length} ›` }), shelfRow(shelf, coverMinWidth())]);
+        zk.ui.column([heading("Pinned", { id: "all-pinned", text: `All ${pinned.length} ›` }), shelfRow(shelf, columns)]);
 
       const fresh = (unread ?? []).filter((i) => !inPair(i));
       const inboxBand =

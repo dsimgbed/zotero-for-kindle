@@ -139,6 +139,12 @@ async function openPassage() {
 }
 
 // examples/reading-desk/src/pieces.ts
+var MARGIN = 60;
+var MEDIUM = 36;
+var LARGE = 60;
+var pageWidth = () => zk.display.width - 2 * MARGIN;
+var share = (px, width) => `${Math.min(100, Math.max(1, Math.round(100 * px / (width - MEDIUM))))}%`;
+var perRow = (px, width, gap) => Math.max(1, Math.round((width + gap) / (px + gap)));
 var label = (text) => zk.ui.text(text, { style: "label", caps: true });
 var title = (text, size, lines2) => zk.ui.text(text || "Untitled", { font: "serif", weight: "bold", size, lines: lines2 });
 var meta = (text, size = "small", lines2 = 1) => zk.ui.text(text, { font: "sans", size, tone: "secondary", lines: lines2 });
@@ -157,10 +163,10 @@ function pair(side) {
       ref(item),
       zk.ui.row(
         [
-          zk.ui.cover(ref(item), { width: side.wide ? "18%" : "37%" }),
+          zk.ui.cover(ref(item), { width: side.cover }),
           zk.ui.column(
             [
-              title(item.title, "body", 3),
+              title(item.title, "body", side.titleLines),
               side.authors && meta(side.authors, "small", 2),
               zk.ui.spacer(),
               item.progress !== null && zk.ui.progress(item.progress),
@@ -174,12 +180,12 @@ function pair(side) {
     )
   ]);
 }
-function shelfRow(items, minWidth) {
+function shelfRow(items, columns2) {
   return zk.ui.grid(
     items.map(
       (i) => zk.ui.item(ref(i), zk.ui.column([zk.ui.cover(ref(i)), i.progress !== null && zk.ui.progress(i.progress)]))
     ),
-    { columns: "auto", minWidth, rows: 1, gap: "medium" }
+    { columns: columns2, rows: 1, gap: "medium" }
   );
 }
 function lines(rows) {
@@ -216,7 +222,7 @@ var barSlot = (item) => zk.ui.row(
   [item.progress !== null && zk.ui.progress(item.progress), zk.ui.box(zk.ui.spacer(), { pad: "xsmall", width: "1%" })],
   { gap: "none", align: "top" }
 );
-function coverGrid(cells) {
+function coverGrid(cells, columns2) {
   return zk.ui.grid(
     cells.map(
       ({ item, caption: caption2 }) => zk.ui.item(
@@ -228,7 +234,7 @@ function coverGrid(cells) {
         ])
       )
     ),
-    { columns: "auto", minWidth: "22%", gap: "large" }
+    { columns: columns2, gap: "large" }
   );
 }
 
@@ -239,6 +245,7 @@ var EMPTY = {
   pinned: "Nothing pinned yet. Long-press an item \u2192 More\u2026 \u2192 Pin to Home / Unpin.",
   inbox: "Nothing new in the inbox."
 };
+var columns = () => perRow(220, pageWidth(), LARGE);
 function caption(i) {
   return [authorsOf(i, { most: 1 }), i.read ? "Read" : percentOf(i)].filter(Boolean).join(" \xB7 ");
 }
@@ -260,7 +267,7 @@ function registerDesk() {
       return zk.ui.column(
         [
           segmented(segments, `tab-${tab}`),
-          items.length > 0 ? coverGrid(items.map((item) => ({ item, caption: caption(item) }))) : zk.ui.text(EMPTY[tab], { tone: "secondary" })
+          items.length > 0 ? coverGrid(items.map((item) => ({ item, caption: caption(item) })), columns()) : zk.ui.text(EMPTY[tab], { tone: "secondary" })
         ],
         { gap: "large" }
       );
@@ -276,10 +283,11 @@ function registerDesk() {
 }
 
 // examples/reading-desk/src/home.ts
-var PINS_SHOWN = 8;
+var COVER = 190;
+var COVER_TURNED = 160;
 var tall = () => zk.display.height >= 2e3;
 var bandGap = () => zk.display.height < 1400 ? "medium" : "large";
-var coverMinWidth = () => zk.display.width >= 1600 ? "14%" : "17%";
+var pinsPerRow = () => perRow(COVER, pageWidth(), MEDIUM);
 var FIRST_USE = "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press \u2192 More\u2026 \u2192 Pin to Home.";
 function sideMeta(s) {
   if (!s.started) return "Not started";
@@ -302,15 +310,24 @@ function registerHome() {
       };
       const sides = [side(opened.book, "Book", true), side(opened.paper, "Paper", false)].filter((s) => !!s);
       const inPair = (i) => sides.some((s) => same(ref(s.item), ref(i)));
-      const wide = sides.length === 1;
+      const turned = zk.display.landscape && zk.display.height < 1400;
+      const sideWidth = sides.length === 1 ? pageWidth() : (pageWidth() - MEDIUM) / 2;
       const pairBand = sides.length > 0 && zk.ui.row(
         sides.map(
-          (s) => pair({ kicker: s.kicker, item: s.item, authors: authorsOf(s.item, { most: 2, full: true }), meta: sideMeta(s), wide })
+          (s) => pair({
+            kicker: s.kicker,
+            item: s.item,
+            authors: authorsOf(s.item, { most: 2, full: true }),
+            meta: sideMeta(s),
+            cover: share(turned ? COVER_TURNED : COVER, sideWidth),
+            titleLines: turned ? 2 : 3
+          })
         ),
         { align: "top", gap: "medium" }
       );
-      const shelf = pinned.filter((i) => !inPair(i)).slice(0, PINS_SHOWN);
-      const pinnedBand = shelf.length > 0 && zk.ui.column([heading("Pinned", { id: "all-pinned", text: `All ${pinned.length} \u203A` }), shelfRow(shelf, coverMinWidth())]);
+      const columns2 = pinsPerRow();
+      const shelf = pinned.filter((i) => !inPair(i)).slice(0, columns2);
+      const pinnedBand = shelf.length > 0 && zk.ui.column([heading("Pinned", { id: "all-pinned", text: `All ${pinned.length} \u203A` }), shelfRow(shelf, columns2)]);
       const fresh = (unread ?? []).filter((i) => !inPair(i));
       const inboxBand = fresh.length > 0 && zk.ui.column(
         [
