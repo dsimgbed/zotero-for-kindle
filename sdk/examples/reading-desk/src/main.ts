@@ -462,6 +462,7 @@ zk.screen("settings", {
             id: pinId(p),
             title: items[n]?.title || "An item no longer on the Kindle",
             subtitle: items[n] ? authorsOf(items[n]) : undefined,
+            meta: "Unpin…",  // a tap asks first
             selected: pinId(p) === unpinAsk,
           })),
           empty: "Nothing pinned. Long-press an item → More… → Pin to Home / Unpin.",
