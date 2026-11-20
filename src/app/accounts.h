@@ -33,7 +33,7 @@ AccountPaths accountPaths(const Paths&, int64_t userId);
 struct PinHash {
     std::string salt, hash;  // base64
     int iterations = 3;      // Argon2i passes
-    int memoryKiB = 1;
+    int memoryKiB = 1024;  // 1 MiB
 };
 struct PinBackoff {
     int misses = 0;

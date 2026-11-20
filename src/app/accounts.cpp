@@ -33,41 +33,64 @@ AccountPaths accountPaths(const Paths& p, int64_t userId) {
     return a;
 }
 
+namespace {
+
+bool hasDuplicates(const std::vector<AccountEntry>& v) {
+    for (size_t i = 0; i < v.size(); ++i)
+        for (size_t k = i + 1; k < v.size(); ++k)
+            if (v[i].userId == v[k].userId) return true;
+    return false;
+}
+
+}  // namespace
+
 std::optional<AccountsState> readAccounts(const std::string& file) {
     std::ifstream in(file, std::ios::binary);
     if (!in) return std::nullopt;
     std::stringstream ss;
     ss << in.rdbuf();
-    json j = json::parse(ss.str(), nullptr, false);
-    if (!j.is_object() || !j.contains("accounts") || !j["accounts"].is_array()) return std::nullopt;
-    AccountsState s;
-    s.version = j.value("version", 1);
-    s.active = j.value("active", int64_t{0});
-    for (const json& a : j["accounts"]) {
-        if (!a.is_object() || !a.contains("userId") || !a["userId"].is_number_integer()) return std::nullopt;
-        AccountEntry e;
-        e.userId = a["userId"].get<int64_t>();
-        e.name = a.value("name", std::string{});
-        e.order = a.value("order", 0);
-        e.lockOnSleep = a.value("lockOnSleep", false);
-        if (a.contains("pin") && a["pin"].is_object()) {
-            const json& p = a["pin"];
-            e.pin = PinHash{p.value("salt", std::string{}), p.value("hash", std::string{}), p.value("iterations", 3),
-                            p.value("memoryKiB", 1)};
+    try {
+        json j = json::parse(ss.str(), nullptr, false);
+        if (!j.is_object() || !j.contains("accounts") || !j["accounts"].is_array()) return std::nullopt;
+        AccountsState s;
+        s.version = j.value("version", 1);
+        s.active = j.value("active", int64_t{0});
+        for (const json& a : j["accounts"]) {
+            if (!a.is_object() || !a.contains("userId") || !a["userId"].is_number_integer()) return std::nullopt;
+            AccountEntry e;
+            e.userId = a["userId"].get<int64_t>();
+            e.name = a.value("name", std::string{});
+            e.order = a.value("order", 0);
+            e.lockOnSleep = a.value("lockOnSleep", false);
+            if (a.contains("pin") && a["pin"].is_object()) {
+                const json& p = a["pin"];
+                e.pin = PinHash{p.value("salt", std::string{}), p.value("hash", std::string{}), p.value("iterations", 3),
+                                p.value("memoryKiB", 1024)};
+            }
+            if (a.contains("backoff") && a["backoff"].is_object()) {
+                e.backoff.misses = a["backoff"].value("misses", 0);
+                e.backoff.waitUntilMs = a["backoff"].value("waitUntilMs", int64_t{0});
+            }
+            s.accounts.push_back(std::move(e));
         }
-        if (a.contains("backoff") && a["backoff"].is_object()) {
-            e.backoff.misses = a["backoff"].value("misses", 0);
-            e.backoff.waitUntilMs = a["backoff"].value("waitUntilMs", int64_t{0});
+        if (s.accounts.size() > kMaxAccounts || hasDuplicates(s.accounts)) {
+            log(LogLevel::Error, "accounts: %s lists too many or duplicate accounts; ignored", file.c_str());
+            return std::nullopt;
         }
-        s.accounts.push_back(std::move(e));
+        return s;
+    } catch (const json::exception& ex) {
+        log(LogLevel::Error, "accounts: %s is malformed (%s); ignored", file.c_str(), ex.what());
+        return std::nullopt;
     }
-    if (s.accounts.size() > kMaxAccounts) return std::nullopt;
-    return s;
 }
 
 bool writeAccounts(const std::string& file, const AccountsState& s) {
     if (s.accounts.size() > kMaxAccounts) {
         log(LogLevel::Error, "accounts: refusing to write %zu accounts (max %zu)", s.accounts.size(), kMaxAccounts);
+        return false;
+    }
+    if (hasDuplicates(s.accounts)) {
+        log(LogLevel::Error, "accounts: refusing to write duplicate user ids");
         return false;
     }
     json list = json::array();

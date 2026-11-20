@@ -161,3 +161,58 @@ TEST_CASE("accounts: repair drops an entry without its dir and keeps an orphan d
     CHECK(t.accounts.empty());
     CHECK(t.active == 0);
 }
+
+TEST_CASE("accounts: wrong-typed or malformed files read as nothing and never throw") {
+    Root r;
+    const std::string f = (r.path / "accounts.json").string();
+    for (const char* body : {"{\"accounts\":[{\"userId\":1,\"name\":5}]}",
+                             "{\"accounts\":[{\"userId\":1,\"pin\":{\"iterations\":\"x\"}}]}",
+                             "{\"active\":\"a\",\"accounts\":[]}",
+                             "{\"accounts\":[{\"userId\":1,\"backoff\":{\"misses\":\"m\"}}]}",
+                             "{\"accounts\":[{\"userId\":1,\"lockOnSleep\":3}]}",
+                             "{\"accounts\": [", "[]", ""}) {
+        std::ofstream(f, std::ios::trunc) << body;
+        CHECK_NOTHROW(readAccounts(f));
+        CHECK_FALSE(readAccounts(f));
+    }
+}
+
+TEST_CASE("accounts: duplicate user ids are refused on read and on write") {
+    Root r;
+    const std::string f = (r.path / "accounts.json").string();
+    AccountsState s;
+    s.accounts = {entry(1, 0, false), entry(1, 1, false)};
+    CHECK_FALSE(writeAccounts(f, s));
+    CHECK_FALSE(fs::exists(f));
+    std::ofstream(f) << "{\"accounts\":[{\"userId\":1},{\"userId\":1}]}";
+    CHECK_FALSE(readAccounts(f));
+}
+
+TEST_CASE("accounts: a PIN hash defaults to 1 MiB of Argon2i memory") {
+    PinHash h;
+    CHECK(h.memoryKiB == 1024);
+    CHECK(h.iterations == 3);
+    Root r;
+    const std::string f = (r.path / "accounts.json").string();
+    std::ofstream(f) << "{\"accounts\":[{\"userId\":1,\"pin\":{\"salt\":\"s\",\"hash\":\"h\"}}]}";
+    auto back = readAccounts(f);
+    REQUIRE(back);
+    CHECK(back->accounts[0].pin->memoryKiB == 1024);
+}
+
+TEST_CASE("accounts: credentials under another id's name are rejected; orphan credentials are logged") {
+    Root r;
+    Paths p = r.paths();
+    REQUIRE(saveCredentials(p, cred(21)));
+    fs::copy_file(p.credentialsFile(21), p.credentialsFile(22));
+    CHECK_FALSE(loadCredentials(p, 22));
+    fs::create_directories(accountPaths(p, 5).root);
+    saveCredentials(p, cred(5));
+    AccountsState s;
+    s.active = 5;
+    s.accounts = {entry(5, 0, false)};
+    auto log = repairAccounts(p, s);
+    bool orphan = false;
+    for (auto& l : log) orphan = orphan || l.find("orphan credentials") != std::string::npos;
+    CHECK(orphan);
+}
