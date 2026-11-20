@@ -1874,7 +1874,9 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std
                               ", coalesce(i.key, ''), coalesce(i.title, '') FROM annotations n "
                               "LEFT JOIN attachments a ON a.key = n.parentKey "
                               "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
-                              "WHERE n.deletedHere = 0" + shownLib("n.") +
+                              // Only an item that is there: one trashed in Zotero leaves its files and
+                              // their highlights behind (rows with no title that open nothing).
+                              "WHERE n.deletedHere = 0 AND i.key IS NOT NULL" + notTrashed("i.key") + shownLib("n.") +
                               (tag.empty() ? std::string() : std::string(" AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?4)")) +
                               (fts.empty() ? std::string(" ORDER BY n.dateModified DESC, n.key")
                                            : std::string(" AND n.rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?3) "
@@ -1900,6 +1902,8 @@ int64_t Library::countAnnotations(const std::string& query, const std::string& t
     if (!query.empty() && fts.empty()) return 0;
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations n WHERE deletedHere = 0") + shownLib("n.") +
+                              " AND EXISTS (SELECT 1 FROM attachments a JOIN items i ON i.key = CASE WHEN a.parentKey = '' "
+                              "THEN a.key ELSE a.parentKey END WHERE a.key = n.parentKey" + notTrashed("i.key") + ")" +
                               (fts.empty() ? "" : " AND rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?1)") +
                               (tag.empty() ? "" : " AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?2)"));
         if (!fts.empty()) st.bind(1, fts);
@@ -1929,10 +1933,14 @@ void Library::markOpened(const std::string& itemKey, const std::string& attachme
 
 std::optional<ReadingState> Library::lastOpened() {
     return guarded([&]() -> std::optional<ReadingState> {
+        // The item (not trashed) and its file still there: otherwise the next most recent.
         Stmt st = db_.prepare(
             "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state WHERE openedMs > 0 "
             "AND coalesce((SELECT lib FROM items WHERE key = reading_state.itemKey), 0) IN "
-            "(SELECT 0 UNION SELECT id FROM libraries WHERE enabled = 1 AND gone = 0) ORDER BY openedMs DESC LIMIT 1");
+            "(SELECT 0 UNION SELECT id FROM libraries WHERE enabled = 1 AND gone = 0) "
+            "AND EXISTS (SELECT 1 FROM items i WHERE i.key = reading_state.itemKey" + notTrashed("i.key") + ") "
+            "AND (attachmentKey = '' OR EXISTS (SELECT 1 FROM attachments a WHERE a.key = reading_state.attachmentKey)) "
+            "ORDER BY openedMs DESC LIMIT 1");
         if (!st.step()) return std::nullopt;
         return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
     });

@@ -102,6 +102,11 @@ TEST_CASE("notes: a version 6 database gains the table and keeps its data") {
         it.key = "BOOK0001";
         it.title = "Kept";
         lib.upsertItem(it);
+        AttachmentRecord f;
+        f.key = "EPUB0001";
+        f.parentKey = "BOOK0001";
+        f.contentType = "application/epub+zip";
+        lib.upsertAttachment(f);
         AnnotationRecord a;
         a.key = "UNSENT01";
         a.parentKey = "EPUB0001";
