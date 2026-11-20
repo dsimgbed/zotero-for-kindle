@@ -66,6 +66,7 @@ const TABS: Tab[] = ["books", "papers", "pinned", "new"];
 /** At most this many pins (the action refuses more), and opened items looked at. */
 const MAX_PINS = 50;
 const MAX_OPENED = 30;
+const INBOX_CAP = 100;
 
 const loadPins = async () => ((await zk.storage.get<Pin[]>("pins")) ?? []).slice(0, MAX_PINS);
 const loadPrefs = async () => (await zk.storage.get<Prefs>("prefs")) ?? {};
@@ -108,10 +109,13 @@ async function pinnedItems(pins: Pin[]): Promise<zk.Item[]> {
   return out;
 }
 
-/** The inbox's unread items, newest added first. Walked once a render (the New tab's count). */
+/**
+ * The inbox's newest unread items, at most INBOX_CAP: the walk is the app's order, newest added
+ * first, and stops there, so a big inbox costs a render no more than a small one ("New 99+").
+ */
 async function inboxItems(inbox: CollectionRef): Promise<zk.Item[]> {
   const unread: zk.Item[] = [];
-  const query: zk.ItemsQuery = { collection: inbox.key, read: false };
+  const query: zk.ItemsQuery = { collection: inbox.key, read: false, limit: INBOX_CAP };
   if (inbox.library !== undefined) query.library = inbox.library;
   for await (const item of zk.library.items(query)) unread.push(item);
   // ISO 8601 strings of one format sort as text.
@@ -135,13 +139,38 @@ function hash(s: string): number {
 }
 
 /**
- * The day's passage: a highlight of 40–400 characters from the newest 300, picked by the date.
- * Picked once a day and kept in storage, so a render costs one storage read.
+ * The passage a render shows: the one kept in storage (one read). When it isn't today's, today's
+ * is picked off the render (a timer) and the screen refreshed; until then the kept one shows, so
+ * the page doesn't jump twice.
  */
-async function passageOfTheDay(): Promise<Passage["pick"]> {
-  const day = today();
+async function keptPassage(): Promise<Passage["pick"]> {
   const kept = await zk.storage.get<Passage>("passage");
-  if (kept?.day === day) return kept.pick;
+  if (kept?.day !== today()) pickLater();
+  return kept?.pick;
+}
+
+let picking = false;
+function pickLater() {
+  if (picking) return;
+  picking = true;
+  setTimeout(async () => {
+    try {
+      await pickPassage();
+      zk.ui.refresh();
+    } catch (err) {
+      console.warn("the passage couldn't be picked:", err);
+    } finally {
+      picking = false;
+    }
+  }, 0);
+}
+
+/**
+ * Today's passage: a highlight of 40–400 characters from the newest 300, picked by the date (so
+ * the same all day), and kept in storage.
+ */
+async function pickPassage(): Promise<void> {
+  const day = today();
   const candidates: zk.Annotation[] = [];
   for await (const a of zk.library.recentAnnotations({ limit: 300 })) {
     const text = a.text?.trim() ?? "";
@@ -157,7 +186,6 @@ async function passageOfTheDay(): Promise<Passage["pick"]> {
     pick = { key: a.key, itemKey: a.itemKey, library: a.libraryId, text: a.text!.trim(), source };
   }
   await zk.storage.set("passage", { day, pick } satisfies Passage);
-  return pick;
 }
 
 // ───────────────────────────── Pins ─────────────────────────────
@@ -297,7 +325,10 @@ zk.screen("desk", {
       { id: "books", title: "Books" },
       { id: "papers", title: "Papers" },
       { id: "pinned", title: "Pinned" },
-      unread && { id: "new", title: newCount > 0 ? `New ${newCount}` : "New" },
+      unread && {
+        id: "new",
+        title: unread.length >= INBOX_CAP ? `New ${INBOX_CAP - 1}+` : newCount > 0 ? `New ${newCount}` : "New",
+      },
     ].filter((c): c is { id: Tab; title: string } => !!c);
 
     const reading = opened.filter(notHero);
@@ -320,7 +351,8 @@ zk.screen("desk", {
       units = shelfRows(all.length);
     } else if (tab === "papers") {
       const papers = reading.filter((i) => !isBook(i));
-      const next = (await pinnedNow()).filter((i) => !isBook(i) && !inProgressKeys.has(i.key) && notHero(i));
+      // Up next: pinned papers not started (never opened here) and not read.
+      const next = (await pinnedNow()).filter((i) => !isBook(i) && i.progress === null && !i.read && notHero(i));
       if (papers.length === 0 && next.length === 0) {
         content = [zk.ui.items({ id: "papers", style: "row", items: [], empty: "Papers you open or pin show up here." })];
       } else if (papers.length > 0 && next.length > 0) {
@@ -370,7 +402,7 @@ zk.screen("desk", {
     // The passage, last: under the content when it fits there; when the content pages, the app
     // keeps the passage in place and pages the content above it, or (no room for that) it comes
     // after the content. Left out when it would cost a page.
-    const pick = prefs.passage === false ? undefined : await passageOfTheDay();
+    const pick = prefs.passage === false ? undefined : await keptPassage();
     const showPassage =
       !!pick && pagesFor(fixed, units, passageH(pick.text) + gapPx()) <= pagesFor(fixed, units);
     return zk.ui.column(
@@ -390,14 +422,27 @@ zk.screen("desk", {
       const kept = await zk.storage.get<Passage>("passage");
       const pick = kept?.pick;
       if (!pick) return;
+      const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
       try {
         await zk.library.open({ key: pick.itemKey, library: pick.library }, { annotation: pick.key });
       } catch (err) {
-        // The highlight was deleted since the morning: pick another next time, open the item.
-        if (String(err).includes("Annotation not found")) {
+        const reason = why(err);
+        if (reason.includes("Cancelled")) return; // the user cancelled the download
+        if (reason.includes("Item not found") || reason.includes("Annotation not found")) {
+          // Gone since the morning: the next render picks another.
           await zk.storage.delete("passage");
+          zk.ui.refresh();
+        }
+        if (!reason.includes("Annotation not found")) {
+          if (!reason.includes("Item not found")) console.warn("the passage didn't open:", reason);
+          return;
+        }
+        // The highlight went, the item didn't: open it where it was left.
+        try {
           await zk.library.open({ key: pick.itemKey, library: pick.library });
-        } else throw err;
+        } catch (again) {
+          if (!why(again).includes("Cancelled")) console.warn("the passage's item didn't open:", why(again));
+        }
       }
     }
   },

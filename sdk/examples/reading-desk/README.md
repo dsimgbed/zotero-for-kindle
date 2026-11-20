@@ -14,17 +14,22 @@ screens, the `items` block (cards, rows and the shelf), `zk.ui.quote`, `zk.displ
   row, so a shelf row and the passage fit under it. Nothing opened yet: **START HERE** with the
   newest unread pin; no pins either: nothing.
 - **Tabs** — chips; the one you pick is kept.
-  - **Books**: a shelf of the books in progress (most recent first), then pinned books not
-    started.
-  - **Papers**: rows of the papers in progress, then **UP NEXT**: pinned papers not started. When
-    the two would page, they are one list (rows say "42%" or "new").
+  - **Books**: a shelf of the books in progress (most recent first), then your other pinned
+    books.
+  - **Papers**: rows of the papers in progress, then **UP NEXT**: pinned papers never opened on
+    this Kindle and not marked read. When the two would page, they are one list (rows say "42%"
+    or "new").
   - **Pinned**: a shelf of every pin, in the order pinned.
-  - **New n**: unread items of the inbox collection, newest added first. Only with an inbox.
+  - **New n**: unread items of the inbox collection, newest added first. Only with an inbox. At
+    most the newest 100 are looked at ("New 99+"), so a big inbox doesn't slow Home down.
 
   "Now reading" is never listed again below it. "Unread" is the read mark, never progress: a
   book at 100% stays until you mark it read.
 - **A passage** — one of your highlights (40–400 characters, from the newest 300), picked once a
-  day and the same all day. Tap it: the reader opens at that highlight. It goes under the tab's
+  day and the same all day. The pick runs after Home has drawn (it then refreshes), never inside
+  a render; until it has run, yesterday's passage shows. Tap it: the reader opens at that
+  highlight; if the highlight was deleted the item opens where you left it, and if the item is
+  gone another passage is picked. It goes under the tab's
   content when that fits, and is left out of a render where it would cost a page (it never pushes
   your items onto a second page). Off in the settings.
 

@@ -2,6 +2,7 @@
 var TABS = ["books", "papers", "pinned", "new"];
 var MAX_PINS = 50;
 var MAX_OPENED = 30;
+var INBOX_CAP = 100;
 var loadPins = async () => (await zk.storage.get("pins") ?? []).slice(0, MAX_PINS);
 var loadPrefs = async () => await zk.storage.get("prefs") ?? {};
 var savePrefs = (change) => zk.storage.update("prefs", (p = {}) => ({ ...p, ...change }));
@@ -27,7 +28,7 @@ async function pinnedItems(pins) {
 }
 async function inboxItems(inbox) {
   const unread = [];
-  const query = { collection: inbox.key, read: false };
+  const query = { collection: inbox.key, read: false, limit: INBOX_CAP };
   if (inbox.library !== void 0) query.library = inbox.library;
   for await (const item of zk.library.items(query)) unread.push(item);
   return unread.sort((a, b) => a.addedAt < b.addedAt ? 1 : a.addedAt > b.addedAt ? -1 : 0);
@@ -42,10 +43,28 @@ function hash(s) {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;
 }
-async function passageOfTheDay() {
-  const day = today();
+async function keptPassage() {
   const kept = await zk.storage.get("passage");
-  if (kept?.day === day) return kept.pick;
+  if (kept?.day !== today()) pickLater();
+  return kept?.pick;
+}
+var picking = false;
+function pickLater() {
+  if (picking) return;
+  picking = true;
+  setTimeout(async () => {
+    try {
+      await pickPassage();
+      zk.ui.refresh();
+    } catch (err) {
+      console.warn("the passage couldn't be picked:", err);
+    } finally {
+      picking = false;
+    }
+  }, 0);
+}
+async function pickPassage() {
+  const day = today();
   const candidates = [];
   for await (const a of zk.library.recentAnnotations({ limit: 300 })) {
     const text = a.text?.trim() ?? "";
@@ -60,7 +79,6 @@ async function passageOfTheDay() {
     pick = { key: a.key, itemKey: a.itemKey, library: a.libraryId, text: a.text.trim(), source };
   }
   await zk.storage.set("passage", { day, pick });
-  return pick;
 }
 zk.itemAction({
   id: "pin",
@@ -158,7 +176,10 @@ zk.screen("desk", {
       { id: "books", title: "Books" },
       { id: "papers", title: "Papers" },
       { id: "pinned", title: "Pinned" },
-      unread && { id: "new", title: newCount > 0 ? `New ${newCount}` : "New" }
+      unread && {
+        id: "new",
+        title: unread.length >= INBOX_CAP ? `New ${INBOX_CAP - 1}+` : newCount > 0 ? `New ${newCount}` : "New"
+      }
     ].filter((c) => !!c);
     const reading = opened.filter(notHero);
     const inProgressKeys = new Set(opened.map((i) => i.key));
@@ -179,7 +200,7 @@ zk.screen("desk", {
       units = shelfRows(all.length);
     } else if (tab === "papers") {
       const papers = reading.filter((i) => !isBook(i));
-      const next = (await pinnedNow()).filter((i) => !isBook(i) && !inProgressKeys.has(i.key) && notHero(i));
+      const next = (await pinnedNow()).filter((i) => !isBook(i) && i.progress === null && !i.read && notHero(i));
       if (papers.length === 0 && next.length === 0) {
         content = [zk.ui.items({ id: "papers", style: "row", items: [], empty: "Papers you open or pin show up here." })];
       } else if (papers.length > 0 && next.length > 0) {
@@ -221,7 +242,7 @@ zk.screen("desk", {
       content = [zk.ui.items({ id: "papers", style: "row", items: all })];
       fixed -= extra;
     }
-    const pick = prefs.passage === false ? void 0 : await passageOfTheDay();
+    const pick = prefs.passage === false ? void 0 : await keptPassage();
     const showPassage = !!pick && pagesFor(fixed, units, passageH(pick.text) + gapPx()) <= pagesFor(fixed, units);
     return zk.ui.column(
       [
@@ -240,13 +261,25 @@ zk.screen("desk", {
       const kept = await zk.storage.get("passage");
       const pick = kept?.pick;
       if (!pick) return;
+      const why = (err) => err instanceof Error ? err.message : String(err);
       try {
         await zk.library.open({ key: pick.itemKey, library: pick.library }, { annotation: pick.key });
       } catch (err) {
-        if (String(err).includes("Annotation not found")) {
+        const reason = why(err);
+        if (reason.includes("Cancelled")) return;
+        if (reason.includes("Item not found") || reason.includes("Annotation not found")) {
           await zk.storage.delete("passage");
+          zk.ui.refresh();
+        }
+        if (!reason.includes("Annotation not found")) {
+          if (!reason.includes("Item not found")) console.warn("the passage didn't open:", reason);
+          return;
+        }
+        try {
           await zk.library.open({ key: pick.itemKey, library: pick.library });
-        } else throw err;
+        } catch (again) {
+          if (!why(again).includes("Cancelled")) console.warn("the passage's item didn't open:", why(again));
+        }
       }
     }
   }

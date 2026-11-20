@@ -593,7 +593,8 @@ struct Desk {
     std::unique_ptr<PluginHost> host;
     std::deque<PluginHostEvent> got;
 
-    Desk(const std::string& settings) {
+    // renderBudgetMs: the app's own is 1000; tests that don't measure speed give room.
+    explicit Desk(const std::string& settings, int renderBudgetMs = 5000) {
         fs::copy("tests/data/plugins/examples/reading-desk", fp.path("reading-desk"), fs::copy_options::recursive);
         if (!settings.empty()) fp.write("reading-desk/settings.json", settings);
         lib.upsertCollection({"COLLINBX", "Inbox", "", 1});
@@ -613,7 +614,7 @@ struct Desk {
         PluginHostDeps d = fp.deps();
         d.dbPath = fp.path("library.db");
         d.handlerBudgetMs = 5000;
-        d.renderBudgetMs = 5000;
+        d.renderBudgetMs = renderBudgetMs;
         d.actionBudgetMs = 10000;
         host = std::make_unique<PluginHost>(d);
         host->setEnabled("reading-desk", true);
@@ -690,6 +691,32 @@ struct Desk {
         REQUIRE(r);
         REQUIRE(r->kind == PluginHostEvent::Kind::ActionResult);
         return r->value["text"].get<std::string>();
+    }
+    // The passage is picked off the render (a timer, then a quiet refresh, merged to one a
+    // second): the trees that follow, until one whose quote satisfies `ok`.
+    DeskTree passage(const std::function<bool(const json&)>& ok, int ms = 6000) {
+        DeskTree t = render();
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (!ok(t.quote) && std::chrono::steady_clock::now() < end)
+            if (auto more = next(PluginHostEvent::Kind::ScreenTree, inst, 200)) t = DeskTree(more->value);
+        return t;
+    }
+    DeskTree withPassage() { return passage([](const json& q) { return !q.is_null(); }); }
+    // What the passage's tap did: the ItemOpen it asked for, answered with `error` ("" opened).
+    json tapPassage(const std::string& error) {
+        host->screenEvent(inst, {{"kind", "tap"}, {"id", "passage"}});
+        auto open = next(PluginHostEvent::Kind::ItemOpen, inst);
+        REQUIRE(open);
+        host->answerReader(open->requestId, error);
+        return open->value;
+    }
+    std::optional<json> stored(const std::string& key) {
+        REQUIRE(host->waitIdle(8000));
+        Db s = Db::open(fp.path("reading-desk/storage.db"));
+        auto st = s.prepare("SELECT value FROM kv WHERE key = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return json::parse(st.text(0));
     }
     DeskTree tab(const std::string& id) { return event({{"kind", "chips"}, {"id", "tabs"}, {"chip", id}, {"selected", {id}}}); }
 };
@@ -793,6 +820,14 @@ TEST_CASE("example: Reading Desk — Papers: papers in progress, most recent fir
     d.pin("PAPR0002");  // in progress: listed above, not under Up next
     d.pin("BOOK0003");  // a book: not here
     d.pin("INBX0002");
+    d.pin("INBX0004");  // read: not up next
+    d.lib.markOpened("EPUB0001", "FPUB0001", 500);
+    d.lib.markRead("EPUB0001", true);
+    deskItem(d.lib, "PAPR0003", "journalArticle", "Started, then read", "2024-01-05T00:00:00Z", "", "application/pdf");
+    d.lib.markOpened("PAPR0003", "FAPR0003", 600);
+    d.lib.saveReading("PAPR0003", "", 0.5);
+    d.lib.markRead("PAPR0003", true);
+    d.pin("PAPR0003");  // started (and read): not up next
     t = d.render();
     CHECK(t.at("next") == Keys{{"INBX0003", ""}, {"INBX0002", ""}});
     const std::vector<std::string> order = {"tabs", "papers", "label:UP NEXT", "next"};
@@ -856,7 +891,7 @@ TEST_CASE("example: Reading Desk — the settings screen picks the inbox (over s
     CHECK(d.render().tabs.back() == "New 3");
 
     // The passage: on by default; the settings' row turns it off.
-    CHECK_FALSE(d.render().quote.is_null());
+    CHECK_FALSE(d.withPassage().quote.is_null());
     d.host->screenEvent(settings, {{"kind", "select"}, {"id", "prefs"}, {"row", "passage"}});
     shown = d.text(settings);
     CHECK(shown.find("A passage each day Off") != std::string::npos);
@@ -894,7 +929,7 @@ TEST_CASE("example: Reading Desk — the passage: a highlight of 40 to 400 chara
                  "", "12", "00001|000100|00100");
     addHighlight(d.lib, "ANNOPAPR", "FAPR0001", "Another passage, from a paper this time, also long enough to be picked.",
                  "", "", "00001|000200|00200");
-    DeskTree t = d.render();
+    DeskTree t = d.withPassage();
     REQUIRE_FALSE(t.quote.is_null());
     const std::string text = t.quote["text"];
     const bool book = text.rfind("A passage long enough", 0) == 0;
@@ -919,9 +954,77 @@ TEST_CASE("example: Reading Desk — the passage: a highlight of 40 to 400 chara
                  {"pick", {{"key", "ANNOPAPR"}, {"itemKey", "PAPR0001"}, {"library", 0}, {"text", "Kept for today."}, {"source", "A Paper"}}}};
     d.store("passage", kept);
     CHECK(d.render().quote["text"] == "Kept for today.");
+    // Yesterday's pick shows until today's is picked, off the render.
     kept["day"] = "2000-01-01";
     d.store("passage", kept);
-    CHECK(d.render().quote["text"] != "Kept for today.");
+    t = d.passage([](const json& q) { return !q.is_null() && q["text"] != "Kept for today."; });
+    CHECK(t.quote["text"] != "Kept for today.");
+}
+
+TEST_CASE("example: Reading Desk — a tapped passage that can't open: the item gone re-picks, the highlight gone opens the item, Cancelled is quiet") {
+    ScopedMetrics tall(kScribe);
+    Desk d("");
+    addHighlight(d.lib, "ANNOLONG", "FOOK0001", "A passage long enough to be shown under the desk, every day of the week.",
+                 "", "12", "00001|000100|00100");
+    REQUIRE_FALSE(d.withPassage().quote.is_null());
+
+    // Cancelled (the download): nothing more, no error, the pick kept.
+    CHECK(d.tapPassage("Cancelled")["annotation"] == "ANNOLONG");
+    d.tree(d.inst);
+    CHECK(d.stored("passage").has_value());
+
+    // Today's pick, as kept (its text marks it): a pick that can't open is dropped and picked again.
+    const json kept = {{"day", localToday()},
+                       {"pick", {{"key", "ANNOLONG"}, {"itemKey", "BOOK0001"}, {"library", 0}, {"text", "Kept for today."}, {"source", "A Book"}}}};
+    auto repicked = [&] { return d.passage([](const json& q) { return !q.is_null() && q["text"] != "Kept for today."; }); };
+
+    // The highlight was deleted: the item opens where it was left, and the pick is dropped.
+    d.store("passage", kept);
+    CHECK(d.render().quote["text"] == "Kept for today.");
+    CHECK(d.tapPassage("Annotation not found")["annotation"] == "ANNOLONG");
+    auto again = d.next(PluginHostEvent::Kind::ItemOpen, d.inst);
+    REQUIRE(again);
+    CHECK(again->value["key"] == "BOOK0001");
+    CHECK_FALSE(again->value.contains("annotation"));
+    d.host->answerReader(again->requestId, "");
+    d.tree(d.inst);
+    CHECK(repicked().quote["text"] != "Kept for today.");
+
+    // The item is gone (trashed): no error pop-up, and the pick is dropped too.
+    d.store("passage", kept);
+    CHECK(d.render().quote["text"] == "Kept for today.");
+    d.tapPassage("Item not found");
+    d.tree(d.inst);
+    CHECK(repicked().quote["text"] != "Kept for today.");
+    for (const auto& e : d.got) CHECK(e.kind != PluginHostEvent::Kind::ScreenActionError);
+}
+
+TEST_CASE("example: Reading Desk — a big inbox stays inside the app's 1 s render: the walk stops at 100, New 99+") {
+    ScopedMetrics short_(kPw5);
+    Desk d(R"({"inbox":"COLLINBX"})", 1000);
+    {
+        auto tx = d.lib.begin();
+        for (int i = 0; i < 1500; ++i) {
+            char key[16], added[32];
+            std::snprintf(key, sizeof key, "BIG%05d", i);
+            std::snprintf(added, sizeof added, "2025-%02d-%02dT%02d:00:00Z", 1 + i / 500, 1 + i % 500 / 20, i % 20);  // rising
+            deskItem(d.lib, key, "journalArticle", std::string("Inbox paper ") + key, added, "COLLINBX", "application/pdf");
+        }
+        tx.commit();
+    }
+    for (int i = 0; i < 40; ++i) d.pin("BIG" + std::string(i < 10 ? "0000" : "000") + std::to_string(i));
+    d.store("tab", "new");
+    for (int round = 0; round < 3; ++round) {
+        const auto t0 = std::chrono::steady_clock::now();
+        DeskTree t = d.render();
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        MESSAGE("render with a 1,500-item inbox: " << ms << " ms");
+        CHECK(ms < 1000);
+        CHECK(t.tabs.back() == "New 99+");
+        CHECK(t.at("new").size() == 100);
+        CHECK(t.at("new").front().first == "BIG01499");  // newest added first
+    }
+    for (const auto& e : d.got) CHECK(e.kind != PluginHostEvent::Kind::ScreenError);
 }
 
 TEST_CASE("example: Reading Desk — the passage never costs a page: left out where the content would page because of it") {
@@ -931,7 +1034,7 @@ TEST_CASE("example: Reading Desk — the passage never costs a page: left out wh
     d.store("tab", "new");
     {
         ScopedMetrics short_(kKt4);  // nothing opened: the tabs, 3 rows and the passage fit
-        DeskTree t = d.render();
+        DeskTree t = d.withPassage();
         CHECK(t.at("new").size() == 3);
         CHECK_FALSE(t.quote.is_null());
     }
@@ -941,7 +1044,7 @@ TEST_CASE("example: Reading Desk — the passage never costs a page: left out wh
         CHECK(d.render().quote.is_null());
     }
     ScopedMetrics tall(kScribe);  // room for all of it
-    DeskTree t = d.render();
+    DeskTree t = d.withPassage();
     CHECK(t.at("new").size() == 3);
     CHECK_FALSE(t.quote.is_null());
 }
