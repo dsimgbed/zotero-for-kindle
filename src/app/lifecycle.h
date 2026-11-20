@@ -1,7 +1,9 @@
 #pragma once
 // Background/foreground and storage watch (spec §7.8): while the Kindle sleeps no periodic sync
-// runs; on wake the screen gets a full refresh and, with Wi-Fi up, a sync if the last one is
-// older than 2 minutes (or failed) — the worker waits for Wi-Fi. If the app's storage goes away (USB storage mode), the app quits.
+// runs, nor while the reader is in front ("rests while you read": edits still go out, and Sync
+// taps still sync); on wake the screen gets a full refresh and, with Wi-Fi up, a sync if the last
+// one is older than 2 minutes (or failed) — the worker waits for Wi-Fi. With Sync every Off there
+// is no sync on wake either. If the app's storage goes away (USB storage mode), the app quits.
 
 #include <functional>
 
@@ -23,6 +25,7 @@ public:
     void setOnForeground(std::function<void()> f) { onForegroundExtra_ = std::move(f); }
     void onBackground();
     void onForeground(int64_t nowMs);
+    void onReading(bool reading);  // the reader (or one of its panels) shows, or stopped showing
     bool watch();  // every few seconds while in front, and on the way back: is the app's storage still there?
 
 private:
@@ -32,6 +35,8 @@ private:
     std::function<bool()> storage_;
     std::function<void()> onBackgroundExtra_;
     std::function<void()> onForegroundExtra_;
+    bool background_ = false, reading_ = false;
+    void applyInterval();  // the setting's, unless asleep or reading (then none)
 };
 
 }  // namespace zk

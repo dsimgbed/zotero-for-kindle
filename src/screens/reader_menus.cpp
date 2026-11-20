@@ -494,7 +494,10 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (picker_) return onPickerTap(g.pos, nav);  // over everything: a tap outside only closes it
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
-        if (!reader_.preview()) nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
+        if (!reader_.preview()) {  // closing the book: send what was changed in it, and get Zotero's news
+            if (loadSettings(nav.library()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
+            else nav.sync().syncNow();
+        }
         nav.pop();
         return;
     }

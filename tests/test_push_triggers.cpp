@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include "app/settings_store.h"
 #include "docs/render_worker.h"
 #include "fake_engine.h"
 #include "fake_nav.h"
@@ -237,6 +238,33 @@ TEST_CASE("push triggers: the reader asks for a push after a highlight and a syn
     reader.onGesture(tapAt(ReaderMenus::backRect().center()), nav);  // ‹ Library
     CHECK(nav.pops == 1);
     CHECK(nav.syncFake.syncs == syncs + 1);
+}
+
+TEST_CASE("push triggers: with Sync every Off, closing the book sends the changes but syncs nothing more") {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    fillFixtureLibrary(lib, 10);
+    AppSettings off = loadSettings(lib);
+    off.syncIntervalMinutes = 0;
+    saveSettings(lib, off);
+    ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+    }, 6);
+    nav.visible = &reader;
+    reader.onShow(nav);
+    for (int i = 0; i < 400 && !reader.ready(); ++i) {
+        reader.onTick(nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(reader.ready());
+    reader.onGesture(tapAt({600, 900}), nav);  // menus
+    REQUIRE(reader.menusOpen());
+    const int syncs = nav.syncFake.syncs, pushes = nav.syncFake.pushes;
+    reader.onGesture(tapAt(ReaderMenus::backRect().center()), nav);  // ‹ Library
+    CHECK(nav.pops == 1);
+    CHECK(nav.syncFake.syncs == syncs);
+    CHECK(nav.syncFake.pushes == pushes + 1);  // what was changed in the book still goes (after the push delay)
 }
 
 TEST_CASE("push triggers: a sync sends the reading position even with no highlight to send") {

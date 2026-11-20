@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "app/settings_store.h"
 #include "fake_nav.h"
 #include "fixture_library.h"
 #include "golden.h"
@@ -191,6 +192,22 @@ TEST_CASE("home: showing Home asks for a sync when the last one is old") {
     rig.nav.now += 3 * 60'000;
     rig.home.onShow(rig.nav);
     CHECK(rig.nav.syncFake.syncs == 2);
+}
+
+TEST_CASE("home: with Sync every Off, showing Home never syncs by itself") {
+    Rig rig;
+    AppSettings off = loadSettings(rig.lib);
+    off.syncIntervalMinutes = 0;
+    saveSettings(rig.lib, off);
+    const int before = rig.nav.syncFake.syncs;
+    rig.nav.now += 3 * 60'000;
+    rig.home.onShow(rig.nav);
+    SyncEvent failed;
+    failed.kind = SyncEvent::Kind::SyncFinished;
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", ""};
+    rig.status.onEvent(failed, rig.nav.now);
+    rig.home.onShow(rig.nav);
+    CHECK(rig.nav.syncFake.syncs == before);
 }
 
 TEST_CASE("home: very long Latin and Cyrillic titles stay inside the card and rows") {

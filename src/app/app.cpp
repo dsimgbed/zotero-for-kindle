@@ -161,6 +161,10 @@ void App::showTop() {
     }
     lastVisible_ = visibleTop();
     Screen* s = visibleTop();
+    if (const bool reading = s && s->isReading(); reading != reading_) {
+        reading_ = reading;
+        if (readingHook_) readingHook_(reading);
+    }
     if (!s) return;
     if (s->wantsKeyboard()) keyboard_.show();
     else keyboard_.hide();

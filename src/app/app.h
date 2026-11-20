@@ -68,6 +68,9 @@ public:
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
+    // Told when reading (Screen::isReading: the reader or its panels) starts or stops being what
+    // shows: the periodic sync rests while the reader reads (app/lifecycle.h).
+    void setReadingHook(std::function<void(bool reading)> f) { readingHook_ = std::move(f); }
     // Told what each part of a step is doing (the stall watchdog's beat).
     void setHeartbeat(std::function<void(const char* doing)> f) { heartbeat_ = std::move(f); }
     // Whether reading screens turn to landscape (the user's setting; read whenever it matters).
@@ -161,6 +164,8 @@ private:
     // Screens removed during a step; destroyed after it, so a screen may pop itself and return.
     std::vector<std::unique_ptr<Screen>> graveyard_;
     std::function<void(bool)> lifecycle_;
+    std::function<void(bool)> readingHook_;
+    bool reading_ = false;  // the visible screen is reading's (as last told to readingHook_)
     std::function<bool()> watchdog_;
     int64_t watchdogPeriodMs_ = 0, lastWatchdogMs_ = 0;
     std::string toast_, lastToast_;

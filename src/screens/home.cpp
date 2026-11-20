@@ -1,6 +1,7 @@
 #include "screens/home.h"
 
 #include "app/catalog_service.h"
+#include "app/settings_store.h"
 
 #include "screens/item_details.h"
 #include "screens/plugin_body.h"
@@ -181,6 +182,7 @@ void HomeScreen::onShow(Nav& nav) {
             tickBody(nav);  // the kept tree (drawn in this first frame), or what came while Home was hidden
         }
     }
+    if (loadSettings(nav.library()).syncIntervalMinutes == 0) return;  // Sync every Off: only what the reader asks for
     if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
 }
 
