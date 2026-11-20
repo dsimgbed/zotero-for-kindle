@@ -77,7 +77,7 @@ struct Rig {
 
     void start(const std::string& id = "riffle") {
         PluginHostDeps d = fp.deps();
-        d.dbPath = dbPath;
+        d.account.dbPath = dbPath;
         host = std::make_unique<PluginHost>(d);
         host->setEnabled(id, true);
         host->start();

@@ -216,6 +216,8 @@ zotero/plugins/              on the Kindle's USB drive (/mnt/us/zotero/plugins)
   <id>/
     plugin.json  main.js     the plugin
     settings.json            your settings for it (if it has any)
+    plugin.log               its log
+zotero/accounts/<userID>/plugins/<id>/   what it keeps for that Zotero account
     data/                    files it wrote, e.g. exports to copy off
-    storage.db  plugin.log   what it keeps, and its log
+    storage.db               what it keeps
 ```

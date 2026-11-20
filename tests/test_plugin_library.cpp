@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -52,7 +56,7 @@ struct Env {
 
     PluginHostDeps deps() {
         PluginHostDeps d = fp.deps();
-        d.dbPath = dbPath;
+        d.account.dbPath = dbPath;
         d.engineEnv = {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir("-plugin-lib")};
         return d;
     }
@@ -1015,4 +1019,107 @@ TEST_CASE("library open: without an annotation, the item or the file asked for, 
     CHECK(t->row.exactFile);
     CHECK_FALSE(itemToOpen(lib, {item, std::nullopt, ""}, std::string("NOSUCHFI"), std::nullopt, &why));
     CHECK(why == "Item not found");
+}
+
+// ---- Accounts: full text and the library are the account's; the host restarts cleanly -----------
+
+namespace {
+
+// Threads of this process now (macOS: the Mach task's; Linux: /proc/self/task).
+size_t threadCount() {
+#if defined(__APPLE__)
+    thread_act_array_t list = nullptr;
+    mach_msg_type_number_t n = 0;
+    if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return 0;
+    for (mach_msg_type_number_t i = 0; i < n; ++i) mach_port_deallocate(mach_task_self(), list[i]);
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), n * sizeof(thread_act_t));
+    return n;
+#else
+    size_t n = 0;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it("/proc/self/task", ec), end; !ec && it != end; it.increment(ec)) ++n;
+    return n;
+#endif
+}
+
+PluginAccount accountOf(const Env& env, const std::string& user, const std::string& dbPath) {
+    PluginAccount a;
+    a.dbPath = dbPath;
+    a.storageRoot = env.fp.path("accounts/" + user + "/plugins");
+    a.fullTextDir = env.fp.path("accounts/" + user + "/cache/fulltext");
+    return a;
+}
+
+size_t filesIn(const std::string& dir) {
+    size_t n = 0;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) ++n;
+    return n;
+}
+
+}  // namespace
+
+TEST_CASE("library: full text is cached in the account's own folder; another account's cache doesn't see it") {
+    Env env;
+    fill(env.lib);
+    env.fp.add("a", pluginWith(R"(out(["len", (await zk.library.fullText("PDFPDFP1")).length > 0]);)"), {"fulltext:read"});
+    const PluginAccount a = accountOf(env, "1", env.dbPath), b = accountOf(env, "2", env.dbPath);
+    PluginHost host(env.deps());
+    host.setEnabled("a", true);
+    host.start(a);
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(8000));
+    host.stop();
+    CHECK(contains(env.fp.log("a"), R"(OUT ["len",true])"));
+    CHECK(std::filesystem::exists(a.fullTextDir + "/PDFPDFP1-abc123.txt"));
+    CHECK(filesIn(b.fullTextDir) == 0);
+    CHECK_FALSE(std::filesystem::exists(env.fp.path(".cache/fulltext")));  // never the device's plugin folder
+
+    host.start(b);  // the same attachment (a group both belong to): B extracts into its own cache
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(8000));
+    host.stop();
+    CHECK(std::filesystem::exists(b.fullTextDir + "/PDFPDFP1-abc123.txt"));
+    CHECK(filesIn(a.fullTextDir) == 1);
+}
+
+TEST_CASE("library: zk.library reads the account's database; restarted for another account it reads that one") {
+    Env env;
+    fill(env.lib);
+    const std::string other = env.fp.path("other.db");
+    { Db empty = Db::open(other); }
+    env.fp.add("a", pluginWith(R"(out(["item", (await zk.library.item("AAAAAAA1")) !== null]);)"), {"library:read"});
+    PluginHost host(env.deps());
+    host.setEnabled("a", true);
+    host.start(accountOf(env, "1", env.dbPath));
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(8000));
+    host.stop();
+    CHECK(contains(env.fp.log("a"), R"(OUT ["item",true])"));
+    host.start(accountOf(env, "2", other));
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(8000));
+    host.stop();
+    CHECK(contains(env.fp.log("a"), R"(OUT ["item",false])"));
+}
+
+TEST_CASE("library: stop() and start() 20 times leave no thread behind (plugin thread, full-text worker)") {
+    Env env;
+    fill(env.lib);
+    env.fp.add("a", pluginWith(R"(out(["len", (await zk.library.fullText("PDFPDFP1")).length > 0]);)"), {"fulltext:read"});
+    PluginHost host(env.deps());
+    host.setEnabled("a", true);
+    const size_t before = threadCount();
+    REQUIRE(before > 0);
+    for (int i = 0; i < 20; ++i) {
+        host.start(accountOf(env, std::to_string(1 + i % 2), env.dbPath));
+        host.dispatch(kRun);
+        REQUIRE(host.waitIdle(8000));
+        host.stop();
+    }
+    const std::string log = env.fp.log("a");
+    size_t runs = 0;
+    for (size_t at = log.find(R"(OUT ["len",true])"); at != std::string::npos; at = log.find(R"(OUT ["len",true])", at + 1)) ++runs;
+    CHECK(runs == 20);
+    CHECK(threadCount() <= before);
 }

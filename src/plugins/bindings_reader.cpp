@@ -60,7 +60,7 @@ JSValue jsReaderOpen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
     if (url) {
         const std::string u = url->get<std::string>();
-        if (auto e = checkFetchUrl(p.manifest, u, depsOf(p).webdavHost)) {
+        if (auto e = checkFetchUrl(p.manifest, u, webdavHostOf(p))) {
             if (e->kind == FetchError::Kind::Permission) return throwPermissionError(p, e->detail, "zk.reader.open(\"" + u + "\")");
             std::string m = e->what();
             if (m.rfind("zk.fetch", 0) == 0) m = "zk.reader.open" + m.substr(8);

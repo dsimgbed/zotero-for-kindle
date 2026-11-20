@@ -34,10 +34,24 @@ struct PluginCtx;
 void lowerThreadPriority();
 }
 
+// The account the host serves while it runs (spec: multiple accounts, Plugins): the library its
+// plugins read, where their zk.storage and zk.files live (<storageRoot>/<pluginId>/storage.db and
+// data/; AccountPaths::pluginDataRoot), the full-text cache (<fullTextDir>/<attKey>-<md5>.txt) and
+// the WebDAV server zk.fetch refuses. Plugins themselves (code, on/off, state, logs) are the device's.
+struct PluginAccount {
+    std::string dbPath;       // "" or missing: zk.library isn't available
+    // <storageRoot>/<pluginId>/storage.db and data/; "": <pluginsDir>/<pluginId>/ (no account: the
+    // desktop's screenshot tools, tests, before Setup)
+    std::string storageRoot;
+    std::string fullTextDir;  // "": <pluginsDir>/.cache/fulltext (as storageRoot)
+    std::string webdavHost;   // the account's WebDAV server (host or URL), "" for none; later: setWebdavHost
+};
+
 struct PluginHostDeps {
-    std::string pluginsDir;
-    // The library database. Plugins open their own connection (on the plugin thread), like the sync worker.
-    std::string dbPath;
+    std::string pluginsDir;  // the device's plugins: <pluginsDir>/<id>/ (code, settings.json, plugin.log), .state.json
+    // The account start() serves (start(PluginAccount) replaces it). Plugins open their own
+    // connection to its library database (on the plugin thread), like the sync worker.
+    PluginAccount account;
     // Where the engines find their data (zk.library.fullText opens its own engine).
     EngineEnv engineEnv;
     // Names the plugin whose code is running (written before a plugin's code runs, removed when
@@ -45,7 +59,6 @@ struct PluginHostDeps {
     std::string crashMarker;
     Version appVersion;
     std::function<std::unique_ptr<Http>()> makeHttp;
-    std::string webdavHost;  // the configured WebDAV server (host or URL); later: setWebdavHost
     std::function<int64_t()> clock;  // wall clock, ms since the epoch (log times); default: system
     // The desktop developer loop (--plugins-dir): start() loads every enabled plugin at once, and
     // reload(id) loads an enabled plugin that wasn't loaded yet. Off: plugins load lazily, at their
@@ -160,11 +173,18 @@ public:
     PluginHost(const PluginHost&) = delete;
     PluginHost& operator=(const PluginHost&) = delete;
 
-    // Starts the plugin thread (with deps.loadEagerly, loading every enabled plugin). Plugins load lazily: each enabled plugin when the first event or
-    // background run is due. Commands queued before start() wait for it.
+    // Starts the plugin thread for the account it served last (deps.account at first), with
+    // deps.loadEagerly loading every enabled plugin. Plugins load lazily: each enabled plugin when
+    // the first event or background run is due. Commands queued before the first start() wait for it.
     void start();
-    // Interrupts whatever plugin code is running and joins the thread; returns within 2 s. Calls
-    // cut short by stop() are not counted as failures.
+    // Starts it for `account` (a running host is stopped first): the switch of accounts. Plugins
+    // load afresh, so nothing of the account before is in them.
+    void start(const PluginAccount& account);
+    // Interrupts whatever plugin code is running and joins the thread, then the full-text worker
+    // (a text being extracted is finished first) and zk.fetch's workers; the library connection is
+    // closed. Returns within 2 s but for that text. Calls cut short by stop() are not counted as
+    // failures. Commands asked while stopped are dropped (they were for the account before).
+    // Idempotent; start() again after it.
     void stop();
     // Unloads and rescans; plugins that were loaded are loaded again at once.
     void reload();

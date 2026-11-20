@@ -12,8 +12,9 @@
 // read before the pass, so a commit during it only makes the next call rebuild. A rebuild is about
 // one JSON parse per item, which a library of several thousand does in well under a second.
 //
-// fullText is host work: the engine takes seconds on a book, so one worker thread (shared by all
-// plugins, started at the first use) extracts while the plugin thread serves others. Jobs run one
+// fullText is host work: the engine takes seconds on a book, so one worker thread (shared by the
+// host's plugins, started at the first use, joined by PluginHost::stop()) extracts while the plugin
+// thread serves others. Jobs run one
 // at a time (crengine serialises engines anyway); a job whose call was already stopped is skipped.
 
 #include <algorithm>
@@ -54,7 +55,7 @@ struct LibState {
 LibState* openState(PluginCtx& p) {
     auto& slot = librarySlot(p);
     if (!slot) {
-        const std::string& path = depsOf(p).dbPath;
+        const std::string& path = accountOf(p).dbPath;
         std::error_code ec;
         if (path.empty() || !fs::exists(path, ec)) return nullptr;
         auto st = std::make_shared<LibState>();
@@ -362,30 +363,66 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     return JS_ThrowTypeError(c, "zk.library: unknown call");
 }
 
-// ---- Full text: one worker for every plugin ------------------------------------------------
+// ---- Full text: one worker per running host -----------------------------------------------
 
 // A plugin's fullText calls queued or running: more are refused, so one plugin that doesn't await
 // its calls can't fill the queue in front of everyone else's (whose budgets would run out waiting).
 constexpr int kFullTextMaxPending = 4;
 
 struct FullTextJob {
-    std::string owner;  // the plugin (its folder: plugins of two hosts never share a count)
+    std::string owner;  // the plugin
     AttachmentRecord attachment;
-    std::string pluginsDir;
+    std::string cacheDir;
     EngineEnv env;
     std::shared_ptr<Work> work;
 };
 
-// Started at the first use and never stopped: the thread sleeps between jobs, and a job in flight
-// at exit is the process's own business. Everything a job needs is copied into it, so no plugin
-// or host object is touched from here (Work::finish is safe from any thread, and a no-op once the
-// host is gone). Plugins take turns: the next job is another plugin's than the last one, if any waits.
+class FullTextWorker;
+
+// holdFullTextWorker (tests): every worker alive sees it.
+struct FullTextHold {
+    std::mutex mu;
+    bool held = false;
+    std::set<FullTextWorker*> workers;
+};
+FullTextHold& fullTextHold() {
+    static FullTextHold* h = new FullTextHold;
+    return *h;
+}
+
+// Made at a host's first fullText call and owned by the host (fullTextSlot): PluginHost::stop()
+// drops it after the plugin thread, and the destructor joins the thread (a text being extracted
+// is finished first; jobs still queued are dropped, their calls gone with the plugins). Everything
+// a job needs is copied into it, so no plugin or host object is touched from here (Work::finish is
+// safe from any thread). Plugins take turns: the next job is another plugin's than the last one, if
+// any waits.
 class FullTextWorker {
 public:
-    static FullTextWorker& get() {
-        static FullTextWorker* w = new FullTextWorker;
-        return *w;
+    FullTextWorker() {
+        {
+            auto& h = fullTextHold();
+            std::lock_guard<std::mutex> lock(h.mu);
+            h.workers.insert(this);
+            held_ = h.held;
+        }
+        thread_ = std::thread([this] { run(); });
     }
+    ~FullTextWorker() {
+        {
+            auto& h = fullTextHold();
+            std::lock_guard<std::mutex> lock(h.mu);
+            h.workers.erase(this);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+    }
+    FullTextWorker(const FullTextWorker&) = delete;
+    FullTextWorker& operator=(const FullTextWorker&) = delete;
+
     // False (nothing queued) when the plugin already has kFullTextMaxPending under way.
     bool submit(FullTextJob job) {
         {
@@ -405,8 +442,15 @@ public:
         return true;
     }
 
+    void hold(bool on) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            held_ = on;
+        }
+        cv_.notify_all();
+    }
+
 private:
-    FullTextWorker() { std::thread([this] { run(); }).detach(); }
     void done(const std::string& owner) {
         if (--pending_[owner] <= 0) pending_.erase(owner);
     }
@@ -416,7 +460,8 @@ private:
             FullTextJob job;
             {
                 std::unique_lock<std::mutex> lock(mu_);
-                cv_.wait(lock, [this] { return !jobs_.empty() && !held_; });
+                cv_.wait(lock, [this] { return stopping_ || (!jobs_.empty() && !held_); });
+                if (stopping_) return;
                 auto next = std::find_if(jobs_.begin(), jobs_.end(), [this](const FullTextJob& j) { return j.owner != last_; });
                 if (next == jobs_.end()) next = jobs_.begin();
                 job = std::move(*next);
@@ -428,7 +473,7 @@ private:
                 done(job.owner);
             } else {
                 UserError err;
-                auto out = extractFullText(job.attachment, job.pluginsDir, job.env, &err);
+                auto out = extractFullText(job.attachment, job.cacheDir, job.env, &err);
                 {  // given back before the promise settles: its continuation may ask again at once
                     std::lock_guard<std::mutex> lock(mu_);
                     done(job.owner);
@@ -450,17 +495,16 @@ private:
     std::deque<FullTextJob> jobs_;
     std::map<std::string, int> pending_;  // owner → queued or running
     std::string last_;                    // whose job ran last
-    bool held_ = false;
-
-public:
-    void hold(bool on) {
-        {
-            std::lock_guard<std::mutex> lock(mu_);
-            held_ = on;
-        }
-        cv_.notify_all();
-    }
+    bool held_ = false, stopping_ = false;
+    std::thread thread_;  // last: started once the members above are made
 };
+
+// The host's worker, made at the first use.
+FullTextWorker& fullTextWorker(PluginCtx& p) {
+    auto& slot = fullTextSlot(p);
+    if (!slot) slot = std::make_shared<FullTextWorker>();
+    return *static_cast<FullTextWorker*>(slot.get());
+}
 
 JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     PluginCtx& p = ctxOf(c);
@@ -478,7 +522,9 @@ JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv)
         return promise;
     }
     const PluginHostDeps& deps = depsOf(p);
-    if (!FullTextWorker::get().submit({deps.pluginsDir + "/" + p.manifest.id, std::move(*attachment), deps.pluginsDir, deps.engineEnv, work}))
+    const std::string& cacheDir = accountOf(p).fullTextDir;
+    if (!fullTextWorker(p).submit({p.manifest.id, std::move(*attachment),
+                                   cacheDir.empty() ? deps.pluginsDir + "/.cache/fulltext" : cacheDir, deps.engineEnv, work}))
         work->reject("zk.library.fullText: this plugin already has " + std::to_string(kFullTextMaxPending) +
                      " texts being read; await some before asking for more");
     return promise;
@@ -657,4 +703,9 @@ void installLibrary(PluginCtx& p) {
 
 }  // namespace zk::plugins
 
-void zk::holdFullTextWorker(bool held) { zk::plugins::FullTextWorker::get().hold(held); }
+void zk::holdFullTextWorker(bool held) {
+    auto& h = zk::plugins::fullTextHold();
+    std::lock_guard<std::mutex> lock(h.mu);
+    h.held = held;
+    for (auto* w : h.workers) w->hold(held);
+}

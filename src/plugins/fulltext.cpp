@@ -67,7 +67,7 @@ void prune(const fs::path& dir, const fs::path& keep) {
 
 namespace {
 
-std::optional<std::string> extract(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
+std::optional<std::string> extract(const AttachmentRecord& a, const std::string& cacheDir, const EngineEnv& env,
                                    UserError* err, const EngineLoader& loader) {
     if (a.linkMode == "linked_file" || a.linkMode == "linked_url")
         return fail(err, "This is a linked file, which the Kindle doesn't have, so its text can't be read.", "linkMode " + a.linkMode),
@@ -82,8 +82,8 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
         return fail(err, "This file isn't on the Kindle - open it once to download it.", "no local file for " + a.key), std::nullopt;
 
     // Without a checksum there is nothing to tell a changed file by: no cache.
-    const bool cacheable = safeName(a.key) && safeName(a.md5);
-    const fs::path dir = fs::path(pluginsDir) / ".cache" / "fulltext";
+    const bool cacheable = !cacheDir.empty() && safeName(a.key) && safeName(a.md5);
+    const fs::path dir = cacheDir;
     const fs::path entry = dir / (a.key + "-" + a.md5 + ".txt");
     if (cacheable) {
         if (auto hit = readAll(entry); hit && hit->size() <= kMaxFullTextBytes) {
@@ -138,10 +138,10 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
 
 }  // namespace
 
-std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
+std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& cacheDir, const EngineEnv& env,
                                            UserError* err, const EngineLoader& loader) {
     try {
-        return extract(a, pluginsDir, env, err, loader);
+        return extract(a, cacheDir, env, err, loader);
     } catch (const std::exception& e) {
         fail(err, "The app failed reading this file's text.", e.what());
     } catch (...) {

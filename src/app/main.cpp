@@ -24,6 +24,7 @@
 #include <vector>
 #include <thread>
 
+#include "app/accounts.h"
 #include "app/app.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
@@ -110,16 +111,33 @@ std::string gShotPluginsDir;              // --screenshot plugin:… (desktop): 
 std::string gShotTitle;                   // --screenshot preview:… --title T: the previewed document's title
 std::string gShotHome;                    // --screenshot home --home ID/SCREEN (desktop): the plugin body to draw
 
+// The account the plugin host serves: its library, plugin data and full-text cache (AccountPaths).
+// With no account yet (before Setup), and in the developer loop (--plugins-dir: the author's own
+// folder, docs/plugins/getting-started.md), plugin data stays in the plugins' own folders.
+// The account session (Task 6) takes this over.
+PluginAccount pluginAccount(const Paths& paths, int64_t userId, const std::optional<Config>& config) {
+    PluginAccount a;
+    a.webdavHost = config ? config->webdavUrl : "";  // zk.fetch never reaches it (setWebdavHost on changes)
+    if (userId <= 0 || gPluginDevLoop) {
+        a.dbPath = paths.dbPath;
+        return a;
+    }
+    const AccountPaths ap = accountPaths(paths, userId);
+    a.dbPath = ap.dbPath;
+    a.storageRoot = ap.pluginDataRoot;
+    a.fullTextDir = ap.fullTextDir;
+    return a;
+}
+
 // The plugin host's settings for this run (safe mode decides whether start() is called at all).
-PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
+PluginHostDeps pluginHostDeps(const Paths& paths, const PluginAccount& account) {
     PluginHostDeps d;
     d.pluginsDir = paths.pluginsDir;
-    d.dbPath = paths.dbPath;
+    d.account = account;
     d.engineEnv = kEngineEnv;
     d.crashMarker = paths.pluginsDir + "/.running";
     d.appVersion = appVersion();
     d.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
-    d.webdavHost = config ? config->webdavUrl : "";  // zk.fetch never reaches it (setWebdavHost on changes)
     d.loadEagerly = gPluginDevLoop;
     if (gPluginDevLoop)
         d.logSink = [](const std::string& id, const std::string& line) {
@@ -505,8 +523,8 @@ int main(int argc, char** argv) {
     Updater updater(updaterConfig);
     // Plugins: one thread for all of them (src/plugins/host.h), started once the first screen is
     // drawn and stopped before the app exits. Its events are routed every loop iteration.
-    // An update's install stops it (the library is backed up meanwhile); a host can't start again,
-    // so a failed install makes a new one.
+    // An update's install stops it (the library is backed up meanwhile); a failed install makes a
+    // new one.
     // Safe mode (plugins/safe_mode.h): decided before the host reads its state. Off: the host still
     // scans (Settings → Plugins lists what is installed) but never starts, so no plugin code runs.
     const SafeModeDecision safeMode = decideSafeMode(paths.pluginsDir, envFlag("ZK_NO_PLUGINS"));
@@ -514,7 +532,7 @@ int main(int argc, char** argv) {
     if (pluginsOff)
         log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
     catalog::repairInterrupted(paths.pluginsDir);  // a swap the app was killed in: before the host scans
-    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
+    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, pluginAccount(paths, *activeAccount, config)));
     if (gPluginDevLoop) {  // say what is on, and why each other plugin won't run
         for (const auto& line : enablePluginsForDev(*plugins, gEnablePlugins)) std::fprintf(stderr, "%s\n", line.c_str());
         for (const auto& line : devLoopNotes(plugins->status(), appVersion())) std::fprintf(stderr, "%s\n", line.c_str());
@@ -693,7 +711,7 @@ int main(int argc, char** argv) {
                 catalogService.cancel();  // a plugin download in flight ends now...
                 catalogService.wait();    // ...and its worker may still use the old host
                 plugins.reset();
-                plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
+                plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, pluginAccount(paths, *activeAccount, config)));
                 pluginEvents.rebind(plugins.get(), app);
                 plugins->setBackground(app.inBackground());  // a new host starts as the app is
                 if (!pluginsOff) plugins->start();

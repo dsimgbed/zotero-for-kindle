@@ -20,7 +20,7 @@ type-checks them against the API, so they can't go stale.
 
 Each time you highlight a book on the Kindle, its highlights and comments are written to
 `<citation key or title>.md` in the plugin's `data/` folder. Copy them off over USB from
-`zotero/plugins/<id>/data/`.
+`zotero/accounts/<userID>/plugins/<id>/data/`.
 
 Highlights that arrive with a sync come in one event that may list hundreds, too many for a
 handler's 5 seconds, so this recipe leaves them out. The example plugin

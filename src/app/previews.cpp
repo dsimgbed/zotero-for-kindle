@@ -96,7 +96,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
     Library lib(db);
     PluginHostDeps d;
     d.pluginsDir = pluginsDir;
-    d.dbPath = dbPath;
+    d.account.dbPath = dbPath;  // no account: plugin data in the plugins' own folders
     d.engineEnv = env;
     d.appVersion = version;
     d.loadEagerly = true;
@@ -174,7 +174,7 @@ int homeScreenshot(const std::string& pluginsDir, const std::string& dbPath, con
     Library lib(db);
     PluginHostDeps d;
     d.pluginsDir = pluginsDir;
-    d.dbPath = dbPath;
+    d.account.dbPath = dbPath;  // no account: plugin data in the plugins' own folders
     d.engineEnv = env;
     d.appVersion = version;
     d.loadEagerly = true;

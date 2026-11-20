@@ -1,5 +1,6 @@
-// zk.storage (a private key-value store in <plugin>/storage.db) and zk.files (text files in
-// <plugin>/data/). Both are fast local I/O, done right inside the native on the plugin thread.
+// zk.storage (a private key-value store in storage.db) and zk.files (text files in data/), both in
+// the plugin's folder of the account served (PluginCtx::storageDir: <account>/plugins/<id>/).
+// Both are fast local I/O, done right inside the native on the plugin thread.
 //
 // The natives are plain and synchronous; the JavaScript below is what plugins see: promises, and
 // the one per-plugin queue every storage write goes through (set, delete, update), in the order
@@ -53,8 +54,8 @@ Db& dbOf(PluginCtx& p) {
     StorageState& st = stateOf(p);
     if (!st.db) {
         std::error_code ec;
-        fs::create_directories(p.dir, ec);
-        auto db = std::make_unique<Db>(Db::open(p.dir + "/storage.db"));
+        fs::create_directories(p.storageDir, ec);
+        auto db = std::make_unique<Db>(Db::open(p.storageDir + "/storage.db"));
         db->exec("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
         st.db = std::move(db);
         st.total = -1;
@@ -98,7 +99,7 @@ int64_t& filesTotalOf(PluginCtx& p) {
 // The partition is nearly full: a plugin's writes must not take the last of it.
 bool lowOnSpace(PluginCtx& p) {
     const auto& probe = depsOf(p).freeSpace;
-    return (probe ? probe(p.dir) : freeBytesAt(p.dir)) < kMinFree;
+    return (probe ? probe(p.storageDir) : freeBytesAt(p.storageDir)) < kMinFree;
 }
 
 std::string sanitised(const char* s, size_t n) { return sanitisedUtf8(s, n); }
@@ -558,7 +559,7 @@ void installStorage(PluginCtx& p) {
     JS_SetPropertyStr(c, p.zk.raw(), "files", JS_DupValue(c, files.raw()));
 }
 
-void resetPluginData(const std::string& pluginDir, PluginCtx* loaded) {
+void resetPluginData(const std::string& storageDir, PluginCtx* loaded) {
     if (loaded) {
         StorageState& st = stateOf(*loaded);
         ++st.gen;
@@ -566,8 +567,8 @@ void resetPluginData(const std::string& pluginDir, PluginCtx* loaded) {
         st.files = -1;
     }
     std::error_code ec;
-    for (const char* suffix : {"", "-wal", "-shm", "-journal"}) fs::remove(pluginDir + "/storage.db" + suffix, ec);
-    const fs::path data = fs::path(pluginDir) / "data";
+    for (const char* suffix : {"", "-wal", "-shm", "-journal"}) fs::remove(storageDir + "/storage.db" + suffix, ec);
+    const fs::path data = fs::path(storageDir) / "data";
     if (fs::is_symlink(data, ec)) {
         fs::remove(data, ec);  // the link itself; never what it points to
     } else if (fs::is_directory(data, ec))
