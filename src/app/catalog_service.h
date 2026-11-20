@@ -111,7 +111,8 @@ public:
 private:
     void run(Op op, std::string id, std::string text, std::function<bool(std::string& error)> work);
     void set(const std::function<void(State&)>& change);
-    bool swap(const std::string& id, PluginHost* host, const std::function<bool(UserError*)>& files, std::string& error);
+    bool swap(const std::string& id, PluginHost* host, const std::function<bool(UserError*)>& files, std::string& error,
+              const std::function<void()>& whileHeld = {});
     void refresh(State& s);  // kept versions, cache (worker)
     std::vector<std::string> installedIds(PluginHost*) const;
     void recount();

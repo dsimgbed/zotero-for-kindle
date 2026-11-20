@@ -868,6 +868,30 @@ TEST_CASE("catalog screens: with no catalog published yet, Get plugins says so c
     CHECK(list.rows().size() == 2);
 }
 
+TEST_CASE("catalog screens: a roll back to a version that can do more never runs it, not even briefly") {
+    Rig r;
+    // The kept version (1.2.0, asking for more) logs when its code runs; plugins load at once.
+    addPlugin(r.dir, "feed", "Feed Riffle", "\"library:read\",\"net:x.example.com\"", "", "console.log('the kept version ran');");
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+    PluginHostDeps d = r.dir.deps();
+    d.loadEagerly = true;
+    r.host = std::make_unique<PluginHost>(d);
+    r.host->start();
+    r.hostStarted = true;
+    r.startCatalog();
+    r.checkNow();
+    r.svc->update("feed");
+    r.settle();
+    r.host->setEnabled("feed", true);
+    REQUIRE(r.host->waitIdle(3000));
+    r.svc->rollBack("feed");
+    r.settle();
+    REQUIRE(r.host->waitIdle(3000));
+    CHECK(r.version("feed") == "1.2.0");
+    CHECK_FALSE(r.status("feed")->enabled);
+    CHECK(r.dir.log("feed").find("the kept version ran") == std::string::npos);
+}
+
 TEST_CASE("catalog screens: Install, Update and Roll back tapped while a check runs wait for it, showing so at once") {
     Rig r;
     r.installFeed();
