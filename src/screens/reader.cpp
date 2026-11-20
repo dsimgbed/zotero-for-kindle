@@ -1893,14 +1893,16 @@ void ReaderScreen::flushInk(Nav& nav, int64_t timeoutMs) {
     if (inkFlushGaveUp_) timeoutMs = 0;
     using clock = std::chrono::steady_clock;
     const auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+    // Areas and notes just made are placed by the worker too: lost the same way if not waited for.
+    auto waiting = [&] { return inkSent_.size() + areaSent_.size() + noteSent_.size(); };
     pumpEvents(nav, false);
-    while (!inkSent_.empty() && clock::now() < deadline) {
+    while (waiting() > 0 && clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        pumpEvents(nav, false);  // the Ink answers make the annotations
+        pumpEvents(nav, false);  // the Ink and Area answers make the annotations
     }
-    if (!inkSent_.empty()) {
+    if (waiting() > 0) {
         inkFlushGaveUp_ = true;
-        log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
+        log(LogLevel::Warn, "reader: handwriting, areas or notes not placed in time, %zu request(s) lost", waiting());
     }
 }
 

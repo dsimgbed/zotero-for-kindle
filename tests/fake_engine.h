@@ -28,6 +28,7 @@ public:
     bool throwOnRender = false;
     bool throwOnSelect = false;
     bool selectRoundTrips = true;
+    int placeDelayMs = 0;  // areaPosition, notePosition: a slow placing (the book closing meanwhile)
     Rect box;  // pageBox(): where the page is drawn (empty: all of it)
     std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
     std::atomic<int> renders{0};
@@ -192,6 +193,7 @@ public:
 
     // Areas: the device rect as drawn, {"fake": page, "rect": [x, y, w, h]}.
     std::optional<InkPlacement> areaPosition(int page, Rect r) override {
+        if (placeDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(placeDelayMs));
         char sort[32];
         std::snprintf(sort, sizeof sort, "%05d|%08d", page, r.y);
         return InkPlacement{nlohmann::json{{"fake", page}, {"rect", {r.x, r.y, r.w, r.h}}}.dump(), sort, std::to_string(page)};
@@ -199,6 +201,7 @@ public:
 
     // Notes: the tap as drawn, {"fake": page, "note": [x, y]}.
     std::optional<InkPlacement> notePosition(int page, Point at) override {
+        if (placeDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(placeDelayMs));
         char sort[32];
         std::snprintf(sort, sizeof sort, "%05d|%08d", page, at.y);
         return InkPlacement{nlohmann::json{{"fake", page}, {"note", {at.x, at.y}}}.dump(), sort, std::to_string(page)};

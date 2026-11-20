@@ -192,7 +192,7 @@ public:
     void setPenWrites(bool on, Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
-    // commitInk, then waits (at most `timeoutMs`) until every stroke is an annotation: before
+    // commitInk, then waits (at most `timeoutMs`) until every stroke, area and note is an annotation: before
     // the book closes. Back in the menus and onClose call it; after one wait has given up, the
     // next doesn't wait again (the UI would freeze twice for the same strokes).
     void flushInk(Nav&, int64_t timeoutMs = kInkFlushMs);
