@@ -1,5 +1,6 @@
 #include "sync/config.h"
 
+#include "app/paths.h"
 #include "core/log.h"
 
 #include <nlohmann/json.hpp>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -50,20 +52,41 @@ std::string trim(const std::string& s) {
 
 }  // namespace
 
+static bool writeConfigFile(const std::string& dir, const std::string& path, const Config& c);
+
 std::optional<Config> loadConfig(const std::string& dir) {
     auto text = readFile(dir + "/config.json");
     return text ? parse(*text) : std::nullopt;
 }
 
+std::optional<Config> loadCredentials(const Paths& p, int64_t userId) {
+    auto text = readFile(p.credentialsFile(userId));
+    auto c = text ? parse(*text) : std::nullopt;
+    if (c && c->userId != userId) return std::nullopt;  // a file under another account's name is not this account's
+    return c;
+}
+
+bool saveCredentials(const Paths& p, const Config& c) {
+    if (c.userId <= 0) return false;
+    return writeConfigFile(p.configDir + "/accounts", p.credentialsFile(c.userId), c);
+}
+
 bool saveConfig(const std::string& dir, const Config& c) {
+    return writeConfigFile(dir, dir + "/config.json", c);
+}
+
+static bool writeConfigFile(const std::string& dir, const std::string& path, const Config& c) {
     const json j = {{"userId", c.userId}, {"apiKey", c.apiKey}, {"webdavUrl", c.webdavUrl},
                     {"webdavUser", c.webdavUser}, {"webdavPassword", c.webdavPassword}};
     const std::string text = j.dump(2) + "\n";
-    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
-        log(LogLevel::Error, "config: can't create %s: %s", dir.c_str(), std::strerror(errno));
+    std::error_code mkec;
+    const bool existed = std::filesystem::exists(dir);
+    std::filesystem::create_directories(dir, mkec);
+    if (!mkec && !existed) ::chmod(dir.c_str(), 0700);
+    if (mkec) {
+        log(LogLevel::Error, "config: can't create %s: %s", dir.c_str(), mkec.message().c_str());
         return false;
     }
-    const std::string path = dir + "/config.json";
     const std::string tmp = path + ".tmp";
     int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {

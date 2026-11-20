@@ -73,6 +73,7 @@ test_sources = files(
   'test_pdf_annotation_kinds.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
+  'test_accounts.cpp',
   'test_power.cpp',
   'test_keysym.cpp',
   'test_library_screens.cpp',
