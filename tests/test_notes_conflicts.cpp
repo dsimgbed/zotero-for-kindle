@@ -89,6 +89,25 @@ TEST_CASE("notes conflicts: Re-apply makes the Kindle's version a change to send
     CHECK(rig.nav.pushed.empty());  // the button, not the row's "open the book"
 }
 
+TEST_CASE("notes conflicts: Re-apply while Zotero's copy is still to come says so and syncs; the conflict stays") {
+    Rig rig;
+    AnnotationRecord c = rig.make("CONFLIC1", "my version", "2026-11-07T10:00:00Z");
+    c.conflict = true;
+    c.createdHere = true;
+    c.conflictOf = "ANNO0001";  // removed here when its file was replaced; not fetched again yet
+    rig.lib.upsertAnnotation(c);
+    rig.lib.queueRefetch("ANNO0001", kMyLibrary);
+    rig.show();
+    auto row = rig.rectOf("CONFLIC1");
+    REQUIRE(row);
+    rig.notes.onGesture(tapAt(noteRowButtonRect(*row, 0).center()), rig.nav);  // Re-apply
+    CHECK(rig.lib.conflicts().size() == 1);
+    CHECK(rig.lib.dirtyAnnotations().empty());
+    REQUIRE(rig.nav.toasts.size() == 1);
+    CHECK(rig.nav.toasts[0] == "Getting Zotero's copy first. Try again after this sync.");
+    CHECK(rig.nav.syncFake.syncs == 1);
+}
+
 TEST_CASE("notes conflicts: Discard asks first, then removes the conflict; Cancel keeps it") {
     Rig rig;
     AnnotationRecord c = rig.make("CONFLIC1", "my version", "2026-11-07T10:00:00Z");

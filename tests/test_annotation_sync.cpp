@@ -315,6 +315,38 @@ TEST_CASE("annotations: re-applying a conflict whose original was deleted on the
     CHECK(rig.server.items[key]["data"]["annotationComment"] == "kindle thoughts");
 }
 
+TEST_CASE("annotations: Zotero's copy to fetch again after a replaced file survives a failed pull and a restart; no duplicate") {
+    Rig rig(tempDb("zk-annotations-refetch.db"));
+    auto a = *rig.lib->annotation("ANNO0001");
+    a.comment = "kindle thoughts";
+    rig.lib->editAnnotation(a);
+    rig.server.put(FakeZotero::attachment("EPUB0001", "BOOK0001", "md5-two"));  // the file was replaced
+    rig.server.failWhen = [](const HttpRequest& r) {  // the line drops just as Zotero's copy is fetched
+        return r.method == "GET" && r.url.find("itemKey=ANNO0001") != std::string::npos;
+    };
+    CHECK(rig.pull().error);
+    REQUIRE(rig.lib->conflicts().size() == 1);
+    CHECK_FALSE(rig.lib->annotation("ANNO0001"));
+    rig.open();  // the app restarts
+    // "Use mine" before Zotero's copy is back: refused, not made into a second highlight.
+    auto conflict = rig.lib->conflicts().at(0);
+    CHECK(rig.lib->reapplyConflict(conflict.key).empty());
+    CHECK(rig.lib->conflicts().size() == 1);
+    CHECK(rig.lib->awaitingZoteroCopy(conflict.key));
+    rig.server.failWhen = nullptr;
+    CHECK_FALSE(rig.push().error);
+    CHECK_FALSE(rig.pull().error);  // Zotero's copy comes back
+    REQUIRE(rig.lib->annotation("ANNO0001"));
+    CHECK(rig.lib->annotation("ANNO0001")->comment == "");
+    CHECK_FALSE(rig.lib->awaitingZoteroCopy(conflict.key));
+    CHECK(rig.lib->reapplyConflict(conflict.key) == "ANNO0001");
+    CHECK_FALSE(rig.push().error);
+    int annotations = 0;
+    for (const auto& [k, o] : rig.server.items) annotations += o["data"].value("itemType", "") == "annotation";
+    CHECK(annotations == 1);
+    CHECK(rig.server.items["ANNO0001"]["data"]["annotationComment"] == "kindle thoughts");
+}
+
 TEST_CASE("annotations: discarding a conflict removes it and sends nothing") {
     Rig rig;
     auto a = *rig.lib->annotation("ANNO0001");

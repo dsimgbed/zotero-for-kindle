@@ -86,7 +86,9 @@ private:
     bool foreign(const std::string& key);  // held by another library: skipped (logged)
     void scope();                            // the API's library: this engine's
     void removeKey(const std::string& key, SyncReport&);
-    int conflictUnsynced(const std::string& attachmentKey);
+    // The file's unsent annotation edits become conflicts; refetch: Zotero's copies of those on
+    // Zotero are queued to come again (not when the file itself is gone).
+    int conflictUnsynced(const std::string& attachmentKey, bool refetch = true);
     bool pushOnce(SyncReport&, bool& preconditionFailed);
     bool pushDeletions(SyncReport&, bool& preconditionFailed);
     void pullPositions(SyncReport&);
@@ -107,7 +109,6 @@ private:
     std::function<bool()> pluginEventsWanted_;
     bool annotationEvents_ = true;  // false while annotations are only caught up on
     std::set<std::string> refetched_;  // Zotero's copies fetched again after a replaced file: not new to plugins
-    std::vector<std::string> refetch_;  // annotations to download again at the end of this pull
 };
 
 }  // namespace zk

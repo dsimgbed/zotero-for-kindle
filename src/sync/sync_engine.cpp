@@ -193,7 +193,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (listing->notModified) {
             rep.toVersion = from;
             const bool catchUp = lib_.backfillPending(libId_, "notes") || lib_.backfillPending(libId_, "attachmentTitles") ||
-                                 !refetch_.empty() || (allOffline && lib_.annotationsVersion(libId_) < from);
+                                 !lib_.refetchQueue(libId_).empty() || (allOffline && lib_.annotationsVersion(libId_) < from);
             if (!catchUp) return;  // nothing changed: no further requests
             // Something of its own to catch up on: the listings as usual (without the condition).
             listing = api_.versions(kind, phase.since, &err, phase.itemType);
@@ -242,11 +242,12 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         lib_.clearBackfill(libId_, "attachmentTitles");
     }
 
-    if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
-        std::vector<std::string> keys;
-        keys.swap(refetch_);
+    // Zotero's copies of annotations whose Kindle edits became conflicts; off the queue only once
+    // they are in (one deleted on Zotero meanwhile simply doesn't come).
+    if (const std::vector<std::string> keys = lib_.refetchQueue(libId_); !keys.empty()) {
         refetched_.insert(keys.begin(), keys.end());
         if (!fetchAndApply("items", "annotations", keys, rep, progress)) return;
+        lib_.refetchDone(keys);
     }
     auto gone = api_.deleted(from, &err);
     if (!gone) return void(rep.error = err);
@@ -547,7 +548,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
     lib_.setObjectVersion(key, version);
 }
 
-int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
+int SyncEngine::conflictUnsynced(const std::string& attachmentKey, bool refetch) {
     int n = 0;
     for (auto a : lib_.annotationsFor(attachmentKey)) {
         if (!a.dirty || a.conflict) continue;
@@ -564,7 +565,7 @@ int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
             lib_.upsertAnnotation(mine);
             lib_.removeObject("annotation", a.key);
             lib_.setObjectVersion(a.key, 0);
-            refetch_.push_back(a.key);
+            if (refetch) lib_.queueRefetch(a.key, libId_);
         } else {
             a.dirty = false;
             a.conflict = true;
@@ -601,8 +602,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         return;
     }
     if (auto att = lib_.attachment(key)) {
-        rep.conflicts += conflictUnsynced(key);
-        refetch_.clear();  // the file is gone from Zotero, and its annotations with it
+        rep.conflicts += conflictUnsynced(key, false);  // the file is gone from Zotero, and its annotations with it
         for (const auto& a : lib_.annotationsFor(key))
             if (!a.conflict) {
                 if (collecting_) pulled_.annotationRemoved(plugins::annotationRef(lib_, a));
@@ -617,6 +617,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         }
         return;
     }
+    lib_.refetchDone({key});  // an annotation still to come again, deleted on Zotero meanwhile
     const bool known = lib_.objectVersion(key) > 0;
     if (lib_.zoteroNote(key)) lib_.removeObject("note", key);  // also one a plugin is deleting
     if (known) ++rep.itemsRemoved;  // notes count too; they share the key space

@@ -2202,6 +2202,7 @@ void Library::discardConflict(const std::string& key) {
 std::string Library::reapplyConflict(const std::string& key) {
     auto copy = annotation(key);
     if (!copy || !copy->conflict) return {};
+    if (awaitingZoteroCopy(key)) return {};  // its original is on Zotero, not back here yet
     auto tx = begin();
     removeObject("annotation", key);
     std::string result;
@@ -2216,6 +2217,41 @@ std::string Library::reapplyConflict(const std::string& key) {
     }
     tx.commit();
     return result;
+}
+
+namespace {
+constexpr const char* kRefetchMeta = "refetchAnnotations";  // {annotationKey: lib}
+}
+
+void Library::queueRefetch(const std::string& annotationKey, int64_t lib) {
+    auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
+    if (!j.is_object()) j = json::object();
+    j[annotationKey] = lib;
+    setMetaValue(kRefetchMeta, j.dump());
+}
+
+std::vector<std::string> Library::refetchQueue(int64_t lib) {
+    std::vector<std::string> out;
+    const auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
+    if (!j.is_object()) return out;
+    for (const auto& [key, l] : j.items())
+        if (l.is_number_integer() && l.get<int64_t>() == lib) out.push_back(key);
+    return out;
+}
+
+void Library::refetchDone(const std::vector<std::string>& annotationKeys) {
+    auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
+    if (!j.is_object()) return;
+    size_t erased = 0;
+    for (const auto& k : annotationKeys) erased += j.erase(k);
+    if (erased) setMetaValue(kRefetchMeta, j.dump());
+}
+
+bool Library::awaitingZoteroCopy(const std::string& conflictKey) {
+    auto copy = annotation(conflictKey);
+    if (!copy || !copy->conflict || copy->conflictOf.empty() || annotation(copy->conflictOf)) return false;
+    const auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
+    return j.is_object() && j.contains(copy->conflictOf);
 }
 
 // ---- Libraries -----------------------------------------------------------------------------
