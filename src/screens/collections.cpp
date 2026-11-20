@@ -300,22 +300,36 @@ void CollectionScreen::load(Library& lib) {
         starts_.push_back(start);
         start += c.count;
     }
-    // Paging counts lines; one "line" per subcollection or item, ~6 per page.
-    const int perPage = (contentArea().h - kPageIndicatorH) / kRowH;
-    const int64_t offset = pager_.offset();
-    pager_ = Pager(static_cast<int64_t>(subs_.size()) + items, perPage);
-    while (pager_.offset() < offset && pager_.next()) {
-    }
-    page_.clear();
-    int64_t i = pager_.offset();
-    int used = 0;
+    // Pages are filled greedily, subcollections (kLineH) then items (kRowH): where each starts
+    // follows from that fill, so every line is on exactly one page.
     const int room = contentArea().h - kPageIndicatorH;
-    for (; i < static_cast<int64_t>(subs_.size()) && used + kLineH <= room; ++i, used += kLineH)
-        page_.push_back({true, subs_[static_cast<size_t>(i)], {}});
-    if (used + kRowH <= room) {
-        const int itemSlots = (room - used) / kRowH;
-        q.offset = static_cast<int>(std::max<int64_t>(0, i - static_cast<int64_t>(subs_.size())));
-        q.limit = itemSlots;
+    const int64_t nSubs = static_cast<int64_t>(subs_.size()), total = nSubs + items;
+    std::vector<int64_t> pageStarts = {0};
+    int used = 0;
+    auto place = [&](int64_t line, int h) {
+        if (used > 0 && used + h > room) {
+            pageStarts.push_back(line);
+            used = 0;
+        }
+        used += h;
+    };
+    for (int64_t i = 0; i < nSubs; ++i) place(i, kLineH);
+    if (items > 0) {  // the first item, those fitting after it, then whole pages of items
+        place(nSubs, kRowH);
+        const int64_t perPage = std::max(1, room / kRowH);
+        for (int64_t line = nSubs + 1 + std::max(0, room - used) / kRowH; line < total; line += perPage)
+            pageStarts.push_back(line);
+    }
+    const int64_t offset = pager_.offset();
+    pager_ = Pager(total, 1);
+    pager_.setStarts(total, std::move(pageStarts));
+    pager_.goTo(pager_.pageOf(offset));
+    page_.clear();
+    const int64_t from = pager_.offset(), to = from + pager_.rowsOnPage();
+    for (int64_t i = from; i < std::min(to, nSubs); ++i) page_.push_back({true, subs_[static_cast<size_t>(i)], {}});
+    if (to > nSubs) {
+        q.offset = static_cast<int>(std::max(from, nSubs) - nSubs);
+        q.limit = static_cast<int>(to - std::max(from, nSubs));
         for (auto& r : lib.rows(q)) page_.push_back({false, {}, std::move(r)});
     }
 }
