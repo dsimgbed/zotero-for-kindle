@@ -18,6 +18,7 @@ ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
 ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
 ZK_PIDFILE=${ZK_PIDFILE:-/tmp/zotero.pid}  # the running app's pid; /tmp is emptied at boot
+ZK_LOCK=${ZK_LOCK:-/tmp/zotero.lock}       # a link to the pid of the launcher that runs the app
 cd "$ZK_HOME" || exit 1
 mkdir -p log
 U=update
@@ -37,6 +38,39 @@ running_pid() {
     fi
     echo "$pid"
 }
+# One launcher at a time, for its whole loop: between two runs of the app (a restart, a rollback)
+# there is no app pid to find, and a second launcher there would start a second copy over a
+# half-restored install. The lock is a symlink naming the holder's pid, made in one step; one
+# whose launcher is gone (a power cut, a kill) is taken over.
+launcher_alive() {
+    kill -0 "$1" 2>/dev/null || return 1
+    if [ -r "/proc/$1/cmdline" ]; then
+        tr '\0' ' ' < "/proc/$1/cmdline" | grep -q 'Zotero.sh' || return 1
+    fi
+}
+take_lock() {
+    mkdir -p "$(dirname "$ZK_LOCK")"
+    ln -s "$$" "$ZK_LOCK" 2>/dev/null && return 0
+    holder=$(readlink "$ZK_LOCK" 2>/dev/null)
+    [ -n "$holder" ] && launcher_alive "$holder" && return 1
+    rm -f "$ZK_LOCK"
+    ln -s "$$" "$ZK_LOCK" 2>/dev/null
+}
+if ! take_lock; then
+    if pid=$(running_pid); then
+        kill -WINCH "$pid" 2>/dev/null
+        note "already running (pid $pid): brought to the front, no second copy"
+    else
+        note "another launcher (pid $holder) is starting the app: no second copy"
+    fi
+    exit 0
+fi
+release_lock() {
+    [ "$(readlink "$ZK_LOCK" 2>/dev/null)" = "$$" ] && rm -f "$ZK_LOCK"
+    return 0
+}
+trap release_lock EXIT
+
 if pid=$(running_pid); then
     # SIGWINCH asks the app to come to the front. An older app ignores it (the signal's default),
     # where SIGUSR1 would kill it: a new launcher can meet an old app around updates and rollbacks.

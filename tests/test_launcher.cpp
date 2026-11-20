@@ -83,11 +83,12 @@ struct Kindle {
                                 ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
                                 (root / "var/config.json").string() + "' ZK_DISPLAY=none ZK_INK_MARK='" +
-                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' sh '" +
+                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' ZK_LOCK='" + lock().string() + "' sh '" +
                                 (root / "documents/Zotero.sh.src").string() + "'";
         return std::system(cmd.c_str());
     }
     fs::path pidfile() const { return root / "run/zotero.pid"; }
+    fs::path lock() const { return root / "run/zotero.lock"; }
     std::string runs() const { return readFile(home / "runs"); }
     std::string file(const fs::path& rel) const { return readFile(root / rel); }
     void checkRolledBack() const {
@@ -151,6 +152,27 @@ TEST_CASE("launcher: while the app runs, another start brings it to the front in
     for (int i = 0; i < 50 && !fs::exists(k.home / "raised"); i++) usleep(100 * 1000);
     CHECK(k.file("zotero/raised") == "raised\n");
     shell("kill " + pid);
+}
+
+TEST_CASE("launcher: a second start while the first is between runs of the app starts no second copy") {
+    // The window where no app runs but a launcher is busy (after an exit 75, during a rollback): the
+    // pid file is gone. The stand-in plays that window by removing it and tapping again (once).
+    Kindle k(std::string("#!/bin/sh\nif [ ! -f tapped ]; then : > tapped; rm -f \"$ZK_PIDFILE\"\n"
+                         "  sh ../documents/Zotero.sh.src; fi\necho '0.2.0 0' >> runs\n"));
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(readFile(k.home / "log/zotero.log").find("another launcher") != std::string::npos);
+    CHECK_FALSE(fs::exists(k.lock()));  // released at the end
+}
+
+TEST_CASE("launcher: a lock left by a launcher that is gone does not stop a start") {
+    Kindle k;
+    const std::string gone = shell("sh -c 'echo $$'");
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(gone, k.lock());
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK_FALSE(fs::is_symlink(k.lock()));
 }
 
 TEST_CASE("launcher: a pid file left by an app that is gone does not stop a start") {
