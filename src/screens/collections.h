@@ -97,6 +97,7 @@ public:
     // A group library's own list: its top-level collections, then all its items.
     CollectionScreen(const LibraryInfo& group, std::function<void(const ItemRow&)> openItem, StatusFn status = {});
     int64_t group() const { return group_; }  // 0: a collection's list
+    const CollectionEntry& entry() const { return entry_; }
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;

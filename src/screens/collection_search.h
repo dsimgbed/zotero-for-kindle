@@ -1,6 +1,7 @@
 #pragma once
 // Collection search (from the Collections header): find a collection at any depth by part of
-// its name, any case (Cyrillic too); each result shows its path; tapping one opens it.
+// its name, any case (Cyrillic too); each result shows its path; tapping one opens it. Results
+// that don't fit above the keyboard are on further pages.
 
 #include <functional>
 #include <string>
@@ -29,11 +30,17 @@ public:
     bool showsTabBar() const override { return false; }
 
     const std::vector<Result>& results() const { return shown_; }
-    std::vector<Rect> resultRects() const;
+    // More results than fit above the keyboard: pages (swipe up and down), "2 / 3" under them.
+    std::vector<Rect> resultRects() const;  // this page's
+    size_t firstShown() const { return static_cast<size_t>(page_ * perPage()); }  // the result in resultRects()[0]
+    int page() const { return page_; }
+    int pages() const;
 
 private:
     void search(Nav&);
     void leave(Nav&);
+    int perPage() const;
+    Rect indicatorRect() const;
 
     std::function<void(const ItemRow&)> openItem_;
     StatusFn status_;
@@ -43,6 +50,7 @@ private:
     bool pending_ = false;
     int64_t lastKeyMs_ = 0;
     int bottom_;  // above the keyboard (the window's bottom without one)
+    int page_ = 0;
 };
 
 }  // namespace zk
