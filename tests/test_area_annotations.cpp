@@ -845,3 +845,17 @@ TEST_CASE("area fix: an area drawn just before the book closes is still saved") 
     rig.reader->onClose(rig.nav);  // Back, or the app closing
     CHECK(rig.areas().size() == 1);
 }
+
+TEST_CASE("area fix: an area the close can't wait for any longer is said to be lost") {
+    // Audit B fix round 1: it vanished with only a log line.
+    Rig rig(DocType::Pdf, 0, {}, 400);
+    rig.longPressDrag(kBlank, kBlankFar, false);
+    REQUIRE(rig.waitFor([&] { return rig.reader->drawnArea().has_value(); }));
+    rig.gesture(GestureType::DragEnd, kBlankFar, kBlank);
+    rig.reader->flushInk(rig.nav, 50);
+    REQUIRE_FALSE(rig.nav.toasts.empty());
+    CHECK(rig.nav.toasts.back() == "An area or note couldn't be saved.");
+    const size_t toasts = rig.nav.toasts.size();
+    rig.reader->onClose(rig.nav);  // the close's own flush, after the menus' Back: said once
+    CHECK(rig.nav.toasts.size() == toasts);
+}

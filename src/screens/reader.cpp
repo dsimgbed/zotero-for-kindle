@@ -1938,9 +1938,9 @@ void ReaderScreen::flushInk(Nav& nav, int64_t timeoutMs) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         pumpEvents(nav, false);  // the Ink and Area answers make the annotations
     }
-    if (waiting() > 0) {
-        inkFlushGaveUp_ = true;
+    if (waiting() > 0 && !std::exchange(inkFlushGaveUp_, true)) {  // said once: the close's second flush doesn't wait again
         log(LogLevel::Warn, "reader: handwriting, areas or notes not placed in time, %zu request(s) lost", waiting());
+        if (!areaSent_.empty() || !noteSent_.empty()) nav.toast("An area or note couldn't be saved.");  // as onArea's failures
     }
 }
 
