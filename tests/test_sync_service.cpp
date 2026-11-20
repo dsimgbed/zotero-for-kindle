@@ -891,7 +891,11 @@ TEST_CASE("kept: a file whose download stalls goes behind the others; it doesn't
     };
     rig.service->downloadKept();
     std::vector<std::string> others;
-    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    // The round ends with only that one left; the row says so (not nothing, as if all were in).
+    REQUIRE(rig.waitUntil([&] {
+        auto st = rig.service->keptStatus("SHELF001");
+        return st && st->stalled == 1;
+    }));
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     for (const char* k : {"ATTA0001", "ATTB0001", "ATTD0001"})
         if (k != first) others.push_back(k);

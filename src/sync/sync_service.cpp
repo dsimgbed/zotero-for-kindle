@@ -657,7 +657,15 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
         return stop(status);  // the next sync looks again
     };
     if (deps_.freeBytes() < kKeptMinFree) return paused();
-    if (w.keptStalledNow.count(w.keptQueue.front().att.key)) return stop({});  // only stalled ones left: the next sync
+    if (w.keptStalledNow.count(w.keptQueue.front().att.key)) {  // only stalled ones left: the next sync tries them
+        std::map<std::string, KeptStatus> left;
+        for (const auto& [key, total] : w.keptTotal) {
+            const int n = static_cast<int>(std::count_if(w.keptQueue.begin(), w.keptQueue.end(),
+                                                         [&](const Worker::KeptFile& f) { return f.collections.count(key) > 0; }));
+            if (n > 0) left[key] = {0, total, false, n};
+        }
+        return stop(std::move(left));
+    }
     setKept(status);
 
     const Worker::KeptFile next = w.keptQueue.front();

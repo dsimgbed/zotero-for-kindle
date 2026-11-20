@@ -74,6 +74,7 @@ void PinSheet::tap(Point p, Nav& nav) const {
 std::string keptNote(const std::optional<KeptStatus>& st) {
     if (!st) return {};
     if (st->paused) return "Paused — the Kindle is nearly full";
+    if (st->stalled > 0) return std::to_string(st->stalled) + (st->stalled == 1 ? " file" : " files") + " not downloaded — retrying";
     return "Downloading " + std::to_string(st->current) + " of " + std::to_string(st->total);
 }
 
