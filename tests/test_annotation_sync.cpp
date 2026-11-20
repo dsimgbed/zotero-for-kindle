@@ -256,6 +256,26 @@ TEST_CASE("annotations: edited here and on the desktop -> Zotero's version kept,
     CHECK(conflicts[0].conflictOf == "ANNO0001");
 }
 
+TEST_CASE("annotations: an edit Zotero applied although its answer was lost is not a conflict") {
+    Rig rig;
+    auto a = *rig.lib->annotation("ANNO0001");
+    a.comment = "kindle thoughts";
+    rig.lib->editAnnotation(a);
+    rig.desktopEdit("ANNO0001", "kindle thoughts");  // the PATCH landed (a new version); its answer never came
+    SyncReport rep = rig.pull();
+    CHECK_FALSE(rep.error);
+    CHECK(rep.conflicts == 0);
+    CHECK(rig.lib->conflicts().empty());
+    auto now = rig.lib->annotation("ANNO0001");
+    REQUIRE(now);
+    CHECK(now->comment == "kindle thoughts");
+    CHECK_FALSE(now->dirty);
+    CHECK(now->version == rig.server.libraryVersion);
+    rig.server.sent.clear();
+    CHECK_FALSE(rig.push().error);
+    CHECK(rig.server.count("POST", "/items") == 0);  // nothing left to send
+}
+
 TEST_CASE("annotations: re-applying an edit conflict puts the Kindle edit on the original highlight") {
     Rig rig;
     auto a = *rig.lib->annotation("ANNO0001");

@@ -503,7 +503,10 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                     ++rep.annotations;
                     break;
                 }
-                if (local->dirty && version > local->version) {
+                if (local->dirty && version > local->version && sameContent(*local, incoming)) {
+                    // Our edit landed although its answer was lost (or both sides made the same
+                    // change): Zotero's copy is ours already, nothing to keep or send.
+                } else if (local->dirty && version > local->version) {
                     // Edited on both sides: Zotero's version wins, the Kindle edit is kept as a conflict.
                     AnnotationRecord mine = *local;
                     mine.key = newLocalKey();
