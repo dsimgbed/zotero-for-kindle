@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "fake_plugins.h"
+#include "plugins/fulltext.h"
 #include "plugins/host.h"
 #include "plugins/identifiers.h"
 #include "store/library.h"
@@ -701,19 +702,58 @@ TEST_CASE("library: a plugin has at most 4 fullText calls under way; more are re
     Env env;
     fill(env.lib);
     env.fp.add("a", pluginWith(R"(
-        const all = await Promise.allSettled([1, 2, 3, 4, 5, 6].map(() => zk.library.fullText("PDFPDFP1")));
+        const calls = [1, 2, 3, 4, 5, 6].map(() => zk.library.fullText("PDFPDFP1"));
+        out("submitted");
+        const all = await Promise.allSettled(calls);
         out(["read", all.filter((r) => r.status === "fulfilled").length]);
         const refused = all.filter((r) => r.status === "rejected");
         out(["refused", refused.length]);
         if (refused.length) out(refused[0].reason.message);
         out(["after", (await zk.library.fullText("PDFPDFP1")).length > 0]);  // the slots are free again
     )"), {"fulltext:read"});
-    const std::string log = env.run("a");
+    PluginHostDeps d = env.deps();
+    d.handlerBudgetMs = 5000;
+    PluginHost host(d);
+    host.setEnabled("a", true);
+    host.start();
+    holdFullTextWorker(true);  // none ends before all six are asked
+    host.dispatch(kRun);
+    const bool submitted = eventually([&] { return contains(env.fp.log("a"), "OUT submitted"); });
+    holdFullTextWorker(false);
+    REQUIRE(submitted);
+    REQUIRE(host.waitIdle(8000));
+    const std::string log = env.fp.log("a");
     INFO(log);
     CHECK(contains(log, R"(OUT ["read",4])"));
     CHECK(contains(log, R"(OUT ["refused",2])"));
     CHECK(contains(log, "OUT zk.library.fullText: this plugin already has 4 texts being read; await some before asking for more"));
     CHECK(contains(log, R"(OUT ["after",true])"));
+}
+
+TEST_CASE("library: a plugin keeping 4 fullText calls under way (a new one as each ends) is never refused") {
+    Env env;
+    fill(env.lib);
+    env.fp.add("a", pluginWith(R"(
+        let started = 0, refused = 0;
+        const next = async () => {
+          while (started < 40) {
+            started++;
+            try { await zk.library.fullText("PDFPDFP1"); } catch (e) { refused++; }
+          }
+        };
+        await Promise.all([next(), next(), next(), next()]);
+        out(["refused", refused]);
+    )"), {"fulltext:read"});
+    PluginHostDeps d = env.deps();
+    d.handlerBudgetMs = 20000;
+    PluginHost host(d);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(25000));
+    const std::string log = env.fp.log("a");
+    INFO(log);
+    CHECK(contains(log, R"(OUT ["refused",0])"));
 }
 
 TEST_CASE("library: without a library database the calls fail plainly") {

@@ -416,16 +416,23 @@ private:
             FullTextJob job;
             {
                 std::unique_lock<std::mutex> lock(mu_);
-                cv_.wait(lock, [this] { return !jobs_.empty(); });
+                cv_.wait(lock, [this] { return !jobs_.empty() && !held_; });
                 auto next = std::find_if(jobs_.begin(), jobs_.end(), [this](const FullTextJob& j) { return j.owner != last_; });
                 if (next == jobs_.end()) next = jobs_.begin();
                 job = std::move(*next);
                 jobs_.erase(next);
                 last_ = job.owner;
             }
-            if (!job.work->cancelled()) {  // else its call was stopped while it waited
+            if (job.work->cancelled()) {  // its call was stopped while it waited
+                std::lock_guard<std::mutex> lock(mu_);
+                done(job.owner);
+            } else {
                 UserError err;
                 auto out = extractFullText(job.attachment, job.pluginsDir, job.env, &err);
+                {  // given back before the promise settles: its continuation may ask again at once
+                    std::lock_guard<std::mutex> lock(mu_);
+                    done(job.owner);
+                }
                 if (out) {
                     auto textPtr = std::make_shared<std::string>(std::move(*out));
                     job.work->finish([textPtr](JSContext* c) {
@@ -436,8 +443,6 @@ private:
                     job.work->reject(err.message.empty() ? "zk.library.fullText: the text can't be read" : err.message);
                 }
             }
-            std::lock_guard<std::mutex> lock(mu_);
-            done(job.owner);
         }
     }
     std::mutex mu_;
@@ -445,6 +450,16 @@ private:
     std::deque<FullTextJob> jobs_;
     std::map<std::string, int> pending_;  // owner → queued or running
     std::string last_;                    // whose job ran last
+    bool held_ = false;
+
+public:
+    void hold(bool on) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            held_ = on;
+        }
+        cv_.notify_all();
+    }
 };
 
 JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
@@ -637,3 +652,5 @@ void installLibrary(PluginCtx& p) {
 }
 
 }  // namespace zk::plugins
+
+void zk::holdFullTextWorker(bool held) { zk::plugins::FullTextWorker::get().hold(held); }
