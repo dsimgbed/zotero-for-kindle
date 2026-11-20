@@ -417,7 +417,11 @@ TEST_CASE("annotations: schema v2 databases gain the new columns without losing 
     Db db = Db::open(path);
     Library lib(db);
     CHECK(db.userVersion() == 12);
-    CHECK(lib.countAnnotations("mine") == 1);  // version 6: the highlights already there are searchable
+    {  // version 6: the highlights already there are searchable (this bare database has no items for Notes to list them under)
+        Stmt fts = db.prepare("SELECT count(*) FROM note_fts WHERE note_fts MATCH 'mine'");
+        REQUIRE(fts.step());
+        CHECK(fts.integer(0) == 1);
+    }
     lib.setLocalPosition("EPUB0001", "3");  // version 4's table is there too
     CHECK(lib.readingPosition("EPUB0001"));
     auto a = lib.annotation("UNSENT01");
