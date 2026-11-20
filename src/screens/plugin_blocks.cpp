@@ -467,8 +467,10 @@ int naturalW(const Block& b, int w) {
 std::vector<int> defaultWidths(const Block& row, int w);
 
 // The widths of a row's children (0.12): a percent of the room the gaps leave, an auto its natural
-// width, fill children share the rest. Percents and autos over the room: the percents shrink, in
-// proportion, to what the autos leave (autos alone over it: the longest are cut to share it).
+// width, fill children share the rest. Every fill child keeps at least kMinShare (or its equal share
+// of a narrow row), and a percent child as much of that as it asks for, so text beside a long auto
+// never wraps a character a line. Autos over what that leaves: the longest are cut to share it.
+// Percents over what the autos leave: they shrink, in proportion, to it.
 // Unsized, a button is auto and anything else fill; a row with no sized child is laid out as before
 // 0.12 (defaultWidths).
 std::vector<int> rowWidths(const Block& row, int w) {
@@ -490,17 +492,23 @@ std::vector<int> rowWidths(const Block& row, int w) {
             default: ++fills; break;
         }
     }
-    if (autos > room) {  // autos alone over the row: the short ones keep their width, the longest give way
+    constexpr int kMinShare = 120;
+    const int least = std::min(kMinShare, room / std::max(1, n));
+    int fillsKeep = fills * least, percentsKeep = 0;
+    for (int i = 0; i < n; ++i)
+        if (widthOf(row.children[i]) == Block::Width::Percent) percentsKeep += std::min(ws[i], least);
+    const int autoRoom = std::max(0, room - fillsKeep - percentsKeep);
+    if (autos > autoRoom) {  // the short autos keep their width, the longest give way
         std::vector<int> order;
         for (int i = 0; i < n; ++i)
             if (widthOf(row.children[i]) == Block::Width::Auto) order.push_back(i);
         std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return ws[a] < ws[b]; });
-        int left = room, m = static_cast<int>(order.size());
+        int left = autoRoom, m = static_cast<int>(order.size());
         for (int i : order) left -= ws[i] = std::min(ws[i], left / m--);
-        autos = room - left;
+        autos = autoRoom - left;
     }
-    if (percents > 0 && percents + autos > room) {
-        const int left = std::max(0, room - autos), wanted = percents;
+    if (percents > 0 && percents + autos > room - fillsKeep) {
+        const int left = std::max(0, room - fillsKeep - autos), wanted = percents;
         percents = 0;
         for (int i = 0; i < n; ++i)
             if (widthOf(row.children[i]) == Block::Width::Percent) percents += ws[i] = ws[i] * left / wanted;

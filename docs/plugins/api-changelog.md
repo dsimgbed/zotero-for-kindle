@@ -13,7 +13,8 @@ it. All additive: 0.11 trees parse, lay out and draw as before. Looks stay the a
 spacing and greys are named tokens, never pixels or colours. See [Composing screens](composing.md).
 
 - Row children take a `width`: `"fill"` (the default; buttons are `"auto"`), `"auto"` (natural
-  width) or `"<n>%"` of the row's inner width. A row holds up to 12 children (6 before).
+  width) or `"<n>%"` of the row's inner width; a long `"auto"` leaves a `"fill"` at least 120 px.
+  A row holds up to 12 children (6 before).
 - `zk.ui.row(children, { align })`: `"top"`, `"center"` (the default, as rows were), `"bottom"` or
   `"stretch"` (each child as tall as the row).
 - `zk.ui.spacer()`: flexible empty space; in a column inside a stretched row it takes the leftover

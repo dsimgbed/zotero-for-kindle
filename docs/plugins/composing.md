@@ -101,14 +101,15 @@ Two of these side by side are two `column`s in a `row`, each with a `width` of `
 ## A segmented switch
 
 A framed row of tappable boxes; the selected one is filled `"ink"` (its text is drawn white). A tap
-sends the box's `id`.
+sends the box's `id`. Only the frame is rounded: a rounded segment inside it would leave white
+slivers at the frame's corners, and an unrounded one meets its border.
 
 ```ts
 const segmented = (segs: { id: string; text: string }[], selected: string) =>
   zk.ui.box(
     zk.ui.row(segs.map((s) =>
       zk.ui.box(zk.ui.text(s.text, { align: "center", font: "sans", weight: "medium" }), {
-        id: s.id, pad: "small", fill: s.id === selected ? "ink" : "none", radius: "small",
+        id: s.id, pad: "small", fill: s.id === selected ? "ink" : "none",
       })), { gap: "none" }),
     { border: "thin", radius: "small" },
   );

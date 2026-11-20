@@ -39,6 +39,8 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
                     Align align = Align::Left);
 
 TextResult measureText(std::string_view utf8, const TextStyle& style, int width, int max_lines);
+// How many Pango layouts drawText/measureText have made so far (for tests: a bound on a painter's cost).
+long layoutsMade();
 
 // Long text page by page: the top of every line of `utf8` laid out `width` wide, and the bottom of
 // the last as the final entry ({0} for no text).

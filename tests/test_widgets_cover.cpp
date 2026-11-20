@@ -112,3 +112,33 @@ TEST_CASE("a cover never breaks a word: it shrinks, then cuts a word that still 
     p.title = "On Computable Numbers, with an Application to the Entscheidungsproblem";
     CHECK(check(p, 120) >= 1);
 }
+
+TEST_CASE("a spaceless title (a file name, a URL) is cut with a bounded number of layouts") {
+    // Covers are drawn at paint time, on every redraw: the cut must not lay out the word once per character.
+    ItemRow r = rowOf("FILE0001", "attachment", "PDF");
+    for (int i = 0; r.title.size() < 200; ++i) r.title += "2301.12345v" + std::to_string(i) + "_arxiv.org-abs-";
+    for (const int w : {100, 120, 194, 290}) {
+        CAPTURE(w);
+        const long before = layoutsMade();
+        const CoverTitle t = coverTitle(r, w);
+        const long made = layoutsMade() - before;
+        CHECK(made <= 16);
+        CHECK(t.pt == 6);
+        const std::string ell = "…";
+        REQUIRE(t.text.size() > ell.size());
+        CHECK(t.text.find(' ') == std::string::npos);
+        CHECK(t.text.compare(t.text.size() - ell.size(), ell.size(), ell) == 0);
+        const std::string head = t.text.substr(0, t.text.size() - ell.size());
+        CHECK(r.title.rfind(head, 0) == 0);
+        CHECK(measureText(t.text, {theme::kSerif, t.pt, 700}, 10000, 1).width <= w - 2 * t.pad);
+        // the longest cut: one more character would not fit
+        const std::string more = r.title.substr(0, head.size() + 1) + ell;
+        CHECK(measureText(more, {theme::kSerif, t.pt, 700}, 10000, 1).width > w - 2 * t.pad);
+    }
+    // A title of many words measures each word a bounded number of times, too.
+    ItemRow p = rowOf("PAPER002", "journalArticle", "PDF");
+    p.title = "Attention Is All You Need: Transformers for Sequence Transduction Without Recurrence or Convolutions";
+    const long before = layoutsMade();
+    coverTitle(p, 120);
+    CHECK(layoutsMade() - before <= 3 * 14);
+}

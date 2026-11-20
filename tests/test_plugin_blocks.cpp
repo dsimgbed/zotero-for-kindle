@@ -895,6 +895,52 @@ TEST_CASE("plugin primitives: percents over 100% scale down to fit; an auto keep
     CHECK(kids[2].rect.x + kids[2].rect.w <= area.x + area.w);
 }
 
+TEST_CASE("plugin primitives: autos that fill the row leave a fill or a percent child room to read, never 0 px") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const std::string link = "Everything in the inbox, newest first, with the ones already read and the ones not yet downloaded ›";
+        const json label = {{"kind", "text"}, {"text", "Inbox · 4 new"}, {"style", "label"}, {"caps", true}};
+        const json linkText = {{"kind", "text"}, {"text", link}, {"width", "auto"}};
+        const json pct = {{"kind", "text"}, {"text", "Ninety"}, {"width", "90%"}};
+        const json small = {{"kind", "text"}, {"text", "x"}, {"width", "1%"}};
+        const Rect area = blocksArea();
+        const int room = area.w - 18;
+        const int oneLine = measureText("Xg", kBodyText, 1000, 1).height;
+        // the heading-with-a-link recipe with a long link: the label keeps its line, the row stays low
+        {
+            const Laid l = layoutTree(rowTree(json::array({label, linkText})), area, 0);
+            const Laid& row = l.children.at(0);
+            REQUIRE(row.children.size() == 2);
+            CHECK(row.children[0].rect.w >= std::min(120, room / 2));
+            CHECK(row.children[0].rect.h <= 2 * oneLine);
+            CHECK(row.rect.h <= 4 * oneLine);
+            for (const Laid& c : row.children) CHECK(inside(c.rect, row.rect));
+            CHECK(row.children[1].rect.x + row.children[1].rect.w <= area.x + area.w);
+        }
+        // a percent child beside it keeps a minimum too; a percent smaller than that is not widened to it
+        {
+            const Laid l = layoutTree(rowTree(json::array({pct, small, linkText})), area, 0);
+            const Laid& row = l.children.at(0);
+            REQUIRE(row.children.size() == 3);
+            const int room3 = area.w - 2 * 18;
+            CHECK(row.children[0].rect.w >= std::min(120, room3 / 3));
+            CHECK(row.children[1].rect.w <= room3 / 100);
+            CHECK(row.rect.h <= 4 * oneLine);
+            for (const Laid& c : row.children) CHECK(inside(c.rect, area));
+        }
+        // and a fill beside a 100% child
+        {
+            const Laid l = layoutTree(rowTree(json::array({label, json{{"kind", "text"}, {"text", "All"}, {"width", "100%"}}})), area, 0);
+            const Laid& row = l.children.at(0);
+            CHECK(row.children.at(0).rect.w >= std::min(120, room / 2));
+            CHECK(row.rect.h <= 2 * oneLine);
+        }
+        checkFits(rowTree(json::array({label, linkText})));
+    }
+}
+
 TEST_CASE("plugin primitives: a stretched row — every child the row's height; a spacer pushes the last text to the bottom") {
     if (!fonts()) return;
     ScopedMetrics m(kPw5);
@@ -1099,8 +1145,8 @@ TEST_CASE("plugin primitives: golden on PW5 — boxes: borders, fills, radii, a 
     const Block t = tree(json::parse(R"({"kind":"column","gap":"medium","children":[
       {"kind":"box","border":"thin","radius":"small","child":{"kind":"row","gap":"none","children":[
         {"kind":"box","id":"reading","pad":"small","child":{"kind":"text","text":"Reading","align":"center","font":"sans","weight":"medium","size":"large"}},
-        {"kind":"box","id":"pinned","pad":"small","fill":"ink","child":{"kind":"text","text":"Pinned","align":"center","font":"sans","weight":"medium","size":"large"}},
-        {"kind":"box","id":"inbox","pad":"small","child":{"kind":"text","text":"Inbox 4","align":"center","font":"sans","weight":"medium","size":"large"}}]}},
+        {"kind":"box","id":"pinned","pad":"small","child":{"kind":"text","text":"Pinned","align":"center","font":"sans","weight":"medium","size":"large"}},
+        {"kind":"box","id":"inbox","pad":"small","fill":"ink","child":{"kind":"text","text":"Inbox 4","align":"center","font":"sans","weight":"medium","size":"large"}}]}},
       {"kind":"box","border":"thin","pad":"medium","child":{"kind":"text","text":"A thin border, medium padding"}},
       {"kind":"box","border":"thick","pad":"medium","radius":"small","child":{"kind":"text","text":"A thick border, small radius"}},
       {"kind":"box","fill":"light","pad":"medium","radius":"small","child":{"kind":"text","text":"A light fill"}},
@@ -1112,6 +1158,38 @@ TEST_CASE("plugin primitives: golden on PW5 — boxes: borders, fills, radii, a 
           "child":{"kind":"text","text":"nested"}}}}]}]})"));
     drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
     checkGolden(c, "tests/golden/plugin-primitives-box.png");
+}
+
+TEST_CASE("plugin primitives: a switch of unrounded segments in a rounded frame — the ink end segment meets the border, no sliver, nothing outside") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    const Block t = tree(json::parse(R"({"kind":"box","border":"thin","radius":"small","child":{"kind":"row","gap":"none","children":[
+        {"kind":"box","id":"a","pad":"small","child":{"kind":"text","text":"Reading","align":"center"}},
+        {"kind":"box","id":"b","pad":"small","fill":"ink","child":{"kind":"text","text":"Inbox","align":"center"}}]}})"));
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    drawTree(c.cr(), l, {});
+    const auto g = grayOf(c);
+    const Rect r = l.children.at(0).rect;
+    const auto at = [&](int x, int y) { return g[(size_t)y * c.width() + x]; };
+    // The top-right and bottom-right corners, 12 px square. The frame is stroked along a radius-8 curve
+    // centred 9 px in from the corner (its 2 px line 1 px in): beyond its outer edge stays white, and
+    // within its inner edge is the segment's ink (28) — no light sliver between the border and the fill.
+    int outsideInk = 0, insideLight = 0;
+    for (const bool bottom : {false, true})
+        for (int dy = 0; dy < 12; ++dy)
+            for (int dx = 0; dx < 12; ++dx) {
+                const int x = r.x + r.w - 1 - dx, y = bottom ? r.y + r.h - 1 - dy : r.y + dy;
+                const double px = x + 0.5, py = y + 0.5, cx = r.x + r.w - 9, cy = bottom ? r.y + r.h - 9 : r.y + 9;
+                const bool beyond = px > cx && (bottom ? py > cy : py < cy);  // in the curve's quarter
+                const double d = beyond ? std::hypot(px - cx, py - cy) : 0;
+                const bool outside = beyond && d > 9.5, inside = beyond ? d < 6.5 : dx >= 3 && dy >= 3;
+                if (outside && at(x, y) < 200) ++outsideInk;
+                if (inside && at(x, y) > 60) ++insideLight;
+            }
+    CHECK(outsideInk == 0);
+    CHECK(insideLight == 0);
 }
 
 // ---- primitives (0.12): covers, progress, item targets, grids, images -----------------------------

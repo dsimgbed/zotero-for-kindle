@@ -121,22 +121,41 @@ CoverTitle coverTitle(const ItemRow& item, int w) {
         if (end > at) words.push_back(title.substr(at, end - at));
         at = end + 1;
     }
+    // Drawn at paint time on every redraw, so measured sparingly: each word once at the starting size,
+    // the size chosen by scaling those widths (text widens in proportion to its size) and checked
+    // where a word comes near the room, and a cut found by halving rather than a character at a time.
     const int room = w - 2 * t.pad;
     const auto wide = [&](const std::string& word) { return measureText(word, {kSerif, t.pt, 700}, 10000, 1).width; };
-    const auto fits = [&] {
-        for (const auto& word : words)
-            if (wide(word) > room) return false;
-        return true;
-    };
-    while (t.pt > 6 && !fits()) t.pt -= 0.5;
-    for (auto& word : words) {
-        if (wide(word) <= room) continue;
-        std::string cut = word;
-        while (!cut.empty() && wide(cut + "…") > room) {
-            const char* prev = g_utf8_find_prev_char(cut.c_str(), cut.c_str() + cut.size());
-            cut.resize(prev ? static_cast<size_t>(prev - cut.c_str()) : 0);
+    const double pt0 = t.pt;
+    std::vector<int> at0;
+    for (const auto& word : words) at0.push_back(wide(word));
+    std::vector<int> now = at0;  // the words' widths at t.pt: measured, or scaled where far from the room
+    const auto sizeTo = [&](double pt) {
+        t.pt = pt;
+        for (size_t i = 0; i < words.size(); ++i) {
+            const double scaled = at0[i] * pt / pt0;
+            now[i] = pt == pt0 ? at0[i] : scaled < room * 0.9 ? static_cast<int>(scaled) : wide(words[i]);
         }
-        word = cut + "…";
+    };
+    const auto fits = [&] { return std::all_of(now.begin(), now.end(), [&](int x) { return x <= room; }); };
+    if (!fits()) {
+        const int widest = *std::max_element(at0.begin(), at0.end());
+        sizeTo(std::max(6.0, std::min(pt0, std::floor(pt0 * room / widest * 2) / 2)));
+        while (t.pt > 6 && !fits()) sizeTo(t.pt - 0.5);
+    }
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (now[i] <= room) continue;
+        // The longest start of the word that fits with "…": the character ends, then a binary search.
+        const std::string& word = words[i];
+        std::vector<size_t> ends{0};
+        for (const char* c = word.c_str(); *c; c = g_utf8_next_char(c)) ends.push_back(g_utf8_next_char(c) - word.c_str());
+        size_t lo = 0, hi = ends.size() - 2;  // ends[lo] fits (the empty start always counts), the whole word doesn't
+        while (lo < hi) {
+            const size_t mid = (lo + hi + 1) / 2;
+            if (wide(word.substr(0, ends[mid]) + "…") <= room) lo = mid;
+            else hi = mid - 1;
+        }
+        words[i] = word.substr(0, ends[lo]) + "…";
     }
     for (size_t i = 0; i < words.size(); ++i) t.text += (i ? " " : "") + words[i];
     return t;
