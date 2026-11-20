@@ -556,6 +556,10 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                                                       : 0;
                     turnTo(std::clamp(to, 0, std::max(0, pageCount_ - 1)));
                 }
+                if (bookmarkArriving_ && !turning_ && !layoutPending_ && !position_.value.empty()) {
+                    bookmarkArriving_ = false;
+                    if (!bookmarked()) toggleBookmark(nav);  // a tap made blind adds, never removes
+                }
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
                 if (turned && (++turns_ % flashEvery_ == 0 || chapterChanged)) w = Waveform::Full;
@@ -774,9 +778,12 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
-        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
-            !layoutPending_ && !position_.value.empty())
-            return toggleBookmark(nav);
+        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos))) {
+            // Mid-turn or re-laying out, the page under the corner is going: the one that arrives is marked.
+            if (turning_ || layoutPending_) bookmarkArriving_ = true;
+            else if (!position_.value.empty()) toggleBookmark(nav);
+            return;
+        }
         if (!(question_ && positionBannerRect().contains(g.pos)) && tapLink(g.pos, nav)) return;
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()

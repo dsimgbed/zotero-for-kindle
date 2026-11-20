@@ -320,6 +320,7 @@ private:
     // bookmark with another's page).
     std::vector<std::pair<std::string, int>> markPlaces_;
     int markPage(const std::string& position) const;  // -1: not placed (yet)
+    bool bookmarkArriving_ = false;  // the corner tapped mid-turn: the page that arrives gets a bookmark
     bool arriving_ = false;  // a jump is landing: if it lands where it started, it needs no Back
     void answerPosition(bool go, Nav&);
     uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
