@@ -341,6 +341,9 @@ int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero %s starting (backend=%s)", ZK_VERSION, ZK_BACKEND);
     addFontDir(fontDir());
     Paths paths = defaultPaths();
+    // A session of days (the Kindle sleeps, the app stays) would otherwise grow the log without
+    // limit: the launcher's 1 MB cap, kept within a session too (only while stderr is that file).
+    setLogRotation(paths.logDir + "/zotero.log", 1 << 20);
 #ifndef ZK_KINDLE
     // --plugins-dir <dir>: the plugins folder to use instead of the app's own (the developer loop).
     for (int i = 1; i + 1 < argc; ++i)
