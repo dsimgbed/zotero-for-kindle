@@ -77,6 +77,10 @@ app, in its own style), and run in the background after a sync. Get one from *Se
 copy its folder into `zotero/plugins/` over USB. A plugin can also fill the body of Home (*Settings → Home*), drawing
 your items with their reading progress; the app keeps the frame and falls back to its own body if the plugin fails.
 
+<p align="center"><img src="docs/screenshots/reading-desk.png" width="300" alt="Reading Desk, a Home written by a plugin"><br>
+<sub><a href="https://github.com/ievlevpn/zk-reading-desk">Reading Desk</a>: what you're reading, a shelf of books, papers
+and pins, and a passage from your highlights each day</sub></p>
+
 They're kept on a short leash:
 
 - **Off until you say so** — a plugin stays off until you've read what it may do and turned it on.
