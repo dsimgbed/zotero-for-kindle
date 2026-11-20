@@ -6,8 +6,12 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
-## 0.11.0 (unreleased): quotes, and opening at an annotation
+## 0.11.0 (unreleased): a shelf, quotes, and opening at an annotation
 
+- `zk.ui.items({ style: "shelf" })` — the items as cover tiles in rows (4 on a Paperwhite or a
+  Kindle, 6 on a Scribe): the app's cover, a progress bar once opened, and "13%", "New", "Read" or
+  the download's progress under it; "PDF" / "WEB" in the corner of a file that isn't an EPUB. It
+  pages a row at a time; taps and long-presses work as on rows and cards. A ref's `label` isn't shown.
 - `zk.ui.quote({ id?, text, source? })` — a passage in italics with a rule on its left, at most 5
   lines (a longer one ends with "…"), its `source` on a line under it. With an `id` a tap sends
   `{ kind: "tap", id }`. Allowed in Home's body.

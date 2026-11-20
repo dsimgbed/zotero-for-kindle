@@ -1303,8 +1303,8 @@ declare namespace zk {
     function deck(deck: Omit<DeckBlock, "kind">): DeckBlock;
 
     /**
-     * Library items drawn by the app: a `card` (title, authors, progress) or a `row` per item,
-     * paged like the app's lists. The app resolves the keys itself, so the rows always show the
+     * Library items drawn by the app: a `card` (title, authors, progress) or a `row` per item, or
+     * a `shelf` of cover tiles, paged like the app's lists. The app resolves the keys itself, so the rows always show the
      * item's current title and reading progress, and repaints just this block when they change.
      * Items that are missing, in a switched-off group or unreadable are skipped silently; if all
      * are, `empty` shows (none: the block draws nothing).
@@ -1319,6 +1319,9 @@ declare namespace zk {
      * @example
      * // an item from a group library, with its own label
      * zk.ui.items({ id: "pick", style: "card", items: [{ key: "ABCD2345", library: 12, label: "Up next" }] });
+     * @example
+     * // the books being read, as covers (needs app 0.11.0)
+     * zk.ui.items({ id: "shelf", style: "shelf", items: reading.map((i) => i.key), empty: "Nothing on the shelf" });
      */
     function items(items: Omit<ItemsBlock, "kind">): ItemsBlock;
 
@@ -1559,8 +1562,21 @@ declare namespace zk {
     interface ItemsBlock {
       kind: "items";
       id: string;
-      /** `"card"`: a large entry per item; `"row"`: a compact line per item. */
-      style: "card" | "row";
+      /**
+       * `"card"`: a large entry per item; `"row"`: a compact line per item; `"shelf"`: cover tiles
+       * in rows.
+       *
+       * A shelf's tile is the item's cover as the app draws it (title and authors on a dark
+       * cover; "PDF" or "WEB" in its corner for a file that isn't an EPUB), a thin progress bar
+       * once it was opened, and one line under it: "13%", "New" or "Read", or the download's
+       * progress while it downloads. The tiles per row follow the screen's width (4 on a
+       * Paperwhite or a Kindle, 6 on a Scribe), and the shelf pages a row at a time. A ref's
+       * `label` isn't shown on a shelf. `"shelf"` needs app 0.11.0 (older apps refuse the tree).
+       *
+       * @example
+       * zk.ui.items({ id: "shelf", style: "shelf", items: keys });
+       */
+      style: "card" | "row" | "shelf";
       items: ItemRef[];
       /** Shown when none of the items can be read. */
       empty?: string;
