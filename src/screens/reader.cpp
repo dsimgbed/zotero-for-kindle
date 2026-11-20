@@ -489,7 +489,8 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
-                const bool relaid = layoutPending_;
+                // The re-layout's page (or a later one): one posted before it keeps the old numbering.
+                const bool relaid = layoutPending_ && e.layoutId == layoutId_;
                 if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_ || note_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
@@ -527,7 +528,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     turning_ = false;
                     turnTarget_ = -1;
                 }
-                layoutPending_ = false;
+                if (relaid) layoutPending_ = false;
                 if (preview_) {
                     if (preview_->savePosition) preview_->savePosition(position_.value);
                 } else {
@@ -663,7 +664,7 @@ void ReaderScreen::onResize(Nav& nav) {
     for (auto& b : back_) b.page = -1;  // turned: pages are counted again
     turnTarget_ = -1;  // setLayout drops a turn on its way: the re-layout's page ends it
     placeRemoteAgain();
-    worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+    layoutId_ = worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
 }
 
 void ReaderScreen::placeRemoteAgain() {
@@ -702,7 +703,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
     placeRemoteAgain();
     if (!preview_) saveLayout(nav.library(), row_.key, l);  // a preview's lasts while it is open
-    worker_->setLayout(l, position_);
+    layoutId_ = worker_->setLayout(l, position_);
 }
 
 void ReaderScreen::openMenus(Nav& nav) {

@@ -278,6 +278,7 @@ private:
     int turnTarget_ = -1;  // the page a turn (not a jump) is on its way to
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
+    uint64_t layoutId_ = 0;       // the last setLayout's id: its pages end layoutPending_
     struct PendingGo {
         int page = 0, count = 0, views = 1;  // asked for, in the pages counted then
     };

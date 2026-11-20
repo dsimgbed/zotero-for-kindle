@@ -28,11 +28,15 @@ struct Rig {
     FakeNav nav{lib};
     FakeLipc lipc;
     std::unique_ptr<ReaderScreen> reader;
-    Rig() {
+    explicit Rig(int delayMs = 0) {
         fillFixtureLibrary(lib, 10);
         lipc.props["com.lab126.powerd flIntensity"] = "10";
-        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [delayMs] {
+            return std::make_unique<RenderWorker>([delayMs](DocType) {
+                auto e = std::make_unique<FakeEngine>();
+                e->delayMs = delayMs;
+                return std::unique_ptr<DocumentEngine>(std::move(e));
+            });
         }, 6, &lipc);
         nav.visible = reader.get();
         reader->onShow(nav);
@@ -201,4 +205,22 @@ TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when the book's sync fai
     failed.attachmentKey = "EP000004";
     rig.reader->onSyncEvent(failed, rig.nav);
     CHECK(rig.reader->menus()->syncing());
+}
+
+TEST_CASE("reader menus fix: a page from before the re-layout doesn't take Go to page to the old count") {
+    // Audit B fix round 1: any Page ended the re-layout, also one posted before it began.
+    Rig rig(100);
+    rig.reader->onGesture(tapAt({1100, 700}), rig.nav);  // a turn ...
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));  // ... its page posted, not yet picked up
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;  // 100 pages → 75
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);  // page 51 of 100: page 38 of 75
+    rig.reader->onTick(rig.nav);  // the turn's page, laid out as before
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.reader->page() == 37);
 }
