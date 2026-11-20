@@ -194,8 +194,12 @@ public:
         if (!dpy_) return false;
         if (uiWakePending()) timeout_ms = 0;  // e.g. one from before the pipe existed
         if (!XPending(dpy_)) {  // (XPending also sends what is queued for the server)
-            // A negative fd is skipped by poll(): the pen may be gone.
-            pollfd p[3] = {{ConnectionNumber(dpy_), POLLIN, 0}, {pen_ ? pen_->fd() : -1, POLLIN, 0}, {gWakePipe[0], POLLIN, 0}};
+            // A negative fd is skipped by poll(): the pen may be gone. In the background the app
+            // ignores the pen, so a pen hovering over the screensaver or a system dialog mustn't
+            // wake it at the digitizer's rate; what it sent is read (and dropped) at the next wake,
+            // and an overflow there is a SYN_DROPPED the decoder already handles.
+            const int penFd = pen_ && !background_ ? pen_->fd() : -1;
+            pollfd p[3] = {{ConnectionNumber(dpy_), POLLIN, 0}, {penFd, POLLIN, 0}, {gWakePipe[0], POLLIN, 0}};
             poll(p, 3, timeout_ms);
             if (p[1].fd >= 0 && (p[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                 log(LogLevel::Warn, "pen: the digitizer went away");
