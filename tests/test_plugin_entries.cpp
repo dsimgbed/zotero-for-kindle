@@ -580,3 +580,32 @@ TEST_CASE("plugin entries: a plugin turned off and on again wakes again, so Home
     CHECK(eventually([&] { return events.mainScreens().size() == 1; }));  // woken again
     host.stop();
 }
+
+TEST_CASE("plugin entries fix: on KT4 many item actions page; a row on a later page runs its own action") {
+    if (!fonts()) return;
+    ScopedMetrics sm(kKt4);
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    FakeNav nav{lib};
+    fillFixtureLibrary(lib, 10);
+    FakeEntries e;
+    for (int i = 0; i < 14; ++i) e.item.push_back({"p" + std::to_string(i), "Plugin " + std::to_string(i), "a", "Action " + std::to_string(i)});
+    nav.entries = &e;
+    ItemDetailsScreen s(*lib.rowFor("IT000003"), [](const ItemRow&) {});
+    s.onShow(nav);
+    Canvas c(kKt4.width, kKt4.height);
+    s.draw(c);
+    REQUIRE(s.pages() > 1);
+    for (const Rect& r : s.actionRects())
+        if (!r.empty()) CHECK(r.y + r.h <= ItemDetailsScreen::openRect().y);
+    s.onGesture(swipe(Direction::Up), nav);
+    s.draw(c);
+    size_t first = 0;
+    while (first < s.actionRects().size() && s.actionRects()[first].empty()) ++first;
+    REQUIRE(first > 0);
+    REQUIRE(first < s.actionRects().size());
+    const Rect row = s.actionRects()[first];
+    s.onGesture(tapAt({row.x + 20, row.y + 20}), nav);
+    REQUIRE(e.runs.size() == 1);
+    CHECK(e.runs[1].action.pluginId == "p" + std::to_string(first));
+}

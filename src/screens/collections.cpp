@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "screens/collection_search.h"
+#include "screens/item_details.h"
 #include "screens/search.h"
 
 #include "ui/metrics.h"
@@ -74,6 +75,7 @@ void PinSheet::tap(Point p, Nav& nav) const {
 std::string keptNote(const std::optional<KeptStatus>& st) {
     if (!st) return {};
     if (st->paused) return "Paused — the Kindle is nearly full";
+    if (st->stalled > 0) return std::to_string(st->stalled) + (st->stalled == 1 ? " file" : " files") + " not downloaded — retrying";
     return "Downloading " + std::to_string(st->current) + " of " + std::to_string(st->total);
 }
 
@@ -299,28 +301,43 @@ void CollectionScreen::load(Library& lib) {
         starts_.push_back(start);
         start += c.count;
     }
-    // Paging counts lines; one "line" per subcollection or item, ~6 per page.
-    const int perPage = (contentArea().h - kPageIndicatorH) / kRowH;
-    const int64_t offset = pager_.offset();
-    pager_ = Pager(static_cast<int64_t>(subs_.size()) + items, perPage);
-    while (pager_.offset() < offset && pager_.next()) {
-    }
-    page_.clear();
-    int64_t i = pager_.offset();
-    int used = 0;
+    // Pages are filled greedily, subcollections (kLineH) then items (kRowH): where each starts
+    // follows from that fill, so every line is on exactly one page.
     const int room = contentArea().h - kPageIndicatorH;
-    for (; i < static_cast<int64_t>(subs_.size()) && used + kLineH <= room; ++i, used += kLineH)
-        page_.push_back({true, subs_[static_cast<size_t>(i)], {}});
-    if (used + kRowH <= room) {
-        const int itemSlots = (room - used) / kRowH;
-        q.offset = static_cast<int>(std::max<int64_t>(0, i - static_cast<int64_t>(subs_.size())));
-        q.limit = itemSlots;
+    const int64_t nSubs = static_cast<int64_t>(subs_.size()), total = nSubs + items;
+    std::vector<int64_t> pageStarts = {0};
+    int used = 0;
+    auto place = [&](int64_t line, int h) {
+        if (used > 0 && used + h > room) {
+            pageStarts.push_back(line);
+            used = 0;
+        }
+        used += h;
+    };
+    for (int64_t i = 0; i < nSubs; ++i) place(i, kLineH);
+    if (items > 0) {  // the first item, those fitting after it, then whole pages of items
+        place(nSubs, kRowH);
+        const int64_t perPage = std::max(1, room / kRowH);
+        for (int64_t line = nSubs + 1 + std::max(0, room - used) / kRowH; line < total; line += perPage)
+            pageStarts.push_back(line);
+    }
+    const int64_t offset = pager_.offset();
+    pager_ = Pager(total, 1);
+    pager_.setStarts(total, std::move(pageStarts));
+    pager_.goTo(pager_.pageOf(offset));
+    page_.clear();
+    const int64_t from = pager_.offset(), to = from + pager_.rowsOnPage();
+    for (int64_t i = from; i < std::min(to, nSubs); ++i) page_.push_back({true, subs_[static_cast<size_t>(i)], {}});
+    if (to > nSubs) {
+        q.offset = static_cast<int>(std::max(from, nSubs) - nSubs);
+        q.limit = static_cast<int>(to - std::max(from, nSubs));
         for (auto& r : lib.rows(q)) page_.push_back({false, {}, std::move(r)});
     }
 }
 
 void CollectionScreen::onShow(Nav& nav) {
     sheet_.reset();
+    itemSheet_.reset();
     jump_.reset();
     load(nav.library());
     loadKept(nav);
@@ -359,6 +376,7 @@ void CollectionScreen::draw(Canvas& canvas) {
                  1, Align::Center);
     drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());
     if (sheet_) sheet_->draw(cr);
+    if (itemSheet_) itemSheet_->draw(cr, sheetArea());
     if (jump_) jump_->draw(cr, sheetArea());
 }
 
@@ -394,15 +412,21 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.damage(contentArea(), Waveform::Quality);
         return;
     }
+    if (itemSheet_) return itemSheetGesture(g, nav);
     if (g.type == GestureType::LongPress) {
         auto rects = lineRects();
-        for (size_t i = 0; i < rects.size(); ++i)
-            if (rects[i].contains(g.pos) && page_[i].isCollection) {
+        for (size_t i = 0; i < rects.size(); ++i) {
+            if (!rects[i].contains(g.pos)) continue;
+            if (page_[i].isCollection) {
                 const auto pins = nav.library().pinnedCollections();
                 const bool pinned = std::find(pins.begin(), pins.end(), page_[i].collection.collection.key) != pins.end();
                 sheet_.emplace(page_[i].collection, pinned);
                 nav.damage(PinSheet::rect(), Waveform::Ui);
+            } else if (auto d = nav.library().details(page_[i].item.key)) {  // an item: its sheet, as in the Library
+                itemSheet_.emplace(page_[i].item, std::move(*d));
+                nav.damage(sheetArea(), Waveform::Ui);
             }
+        }
         return;
     }
     if (g.type == GestureType::Tap && backRect().contains(g.pos)) {
@@ -431,6 +455,35 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         if (!rects[i].contains(g.pos)) continue;
         if (page_[i].isCollection) nav.push(std::make_unique<CollectionScreen>(page_[i].collection, openItem_, status_));
         else if (openItem_) openItem_(page_[i].item);
+    }
+}
+
+void CollectionScreen::itemSheetGesture(const Gesture& g, Nav& nav) {
+    const Rect area = sheetArea();
+    switch (itemSheet_->onGesture(g, area, nav)) {
+        case ItemSheet::Action::Close:
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::Open: {
+            const ItemRow row = itemSheet_->row();
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            if (openItem_) openItem_(row);
+            break;
+        }
+        case ItemSheet::Action::Changed:
+            load(nav.library());  // the row changed: in Zotero now, or read
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::More: {
+            const ItemRow row = itemSheet_->row();
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            nav.push(std::make_unique<ItemDetailsScreen>(row, openItem_));
+            break;
+        }
+        case ItemSheet::Action::None: break;
     }
 }
 

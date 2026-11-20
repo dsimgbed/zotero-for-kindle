@@ -10,6 +10,7 @@
 #include "sync/sync_engine.h"
 #include "zotero/api.h"
 
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -184,4 +185,35 @@ TEST_CASE("log: Debug lines are dropped unless the level asks for them") {
     CHECK(text.find("tap at") == std::string::npos);
     CHECK(text.find("kept line") != std::string::npos);
     CHECK(text.find("debug line") != std::string::npos);
+}
+
+TEST_CASE("log: the launcher's log file is rotated by the app once it passes its cap, mid-session") {
+    TempDir dir;
+    const fs::path file = dir.path / "zotero.log";
+    // The app's stderr, as the launcher leaves it: appended to log/zotero.log.
+    const int saved = ::dup(STDERR_FILENO);
+    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    REQUIRE(fd >= 0);
+    ::dup2(fd, STDERR_FILENO);
+    ::close(fd);
+    setLogRotation(file.string(), 1000);
+    for (int i = 0; i < 40; ++i) log(LogLevel::Warn, "line %d of a long session", i);
+    log(LogLevel::Warn, "the newest line");
+    setLogRotation("", 0);
+    ::dup2(saved, STDERR_FILENO);
+    ::close(saved);
+    REQUIRE(fs::exists(dir.path / "zotero.log.1"));
+    CHECK(fs::file_size(dir.path / "zotero.log.1") <= 1100);  // over the cap by one line at most
+    CHECK(fs::file_size(file) <= 1100);
+    CHECK(readFile(file).find("the newest line") != std::string::npos);
+}
+
+TEST_CASE("log: a stderr that isn't the log file (a terminal, the desktop) is never rotated") {
+    TempDir dir;
+    const fs::path file = dir.path / "zotero.log";
+    std::ofstream(file) << std::string(2000, 'x');
+    setLogRotation(file.string(), 1000);  // stderr here is the test runner's, not this file
+    log(LogLevel::Warn, "a line");
+    setLogRotation("", 0);
+    CHECK_FALSE(fs::exists(dir.path / "zotero.log.1"));
 }

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_http.h"
 #include "update/download.h"
 #include "update/signature.h"
@@ -24,7 +25,7 @@ const std::string kZip = std::string(4000, 'z') + "the release";
 const std::string kBase = "https://github.com/ievlevpn/zotero-for-kindle/releases/download/v0.3.0/";
 
 std::string sha512Of(const std::string& bytes) {
-    const std::string path = "/tmp/zk-dl-hash";
+    const std::string path = test::uniqueTempPath("zk-dl-hash").string();
     std::ofstream(path, std::ios::binary) << bytes;
     auto h = sha512FileHex(path);
     fs::remove(path);

@@ -28,7 +28,7 @@ int g_live = 0;
 
 struct RenderWorker::Impl {
     struct Target {
-        enum class Kind { None, Page, Position, Annotation } kind = Kind::None;
+        enum class Kind { None, Page, Position, Annotation, Zotero } kind = Kind::None;
         int page = 0;
         DocPosition position;
         AnnotationRecord annotation;
@@ -52,6 +52,8 @@ struct RenderWorker::Impl {
     // Requests (guarded by mutex).
     std::optional<OpenRequest> open;
     std::optional<std::pair<Layout, DocPosition>> layout;
+    uint64_t layoutRequestId = 0, nextLayoutId = 1;  // the pending setLayout's id; the next one's
+    uint64_t layoutId = 0;                           // the layout in effect (worker thread)
     Target target;
     uint64_t generation = 0;
     std::optional<std::pair<uint64_t, std::string>> search;
@@ -217,6 +219,7 @@ void RenderWorker::Impl::run() {
 void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<OpenRequest> o;
     std::optional<std::pair<Layout, DocPosition>> l;
+    uint64_t lId = 0;
     Target t;
     std::optional<std::pair<uint64_t, std::string>> s;
     std::optional<std::vector<AnnotationRecord>> a;
@@ -234,6 +237,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         open.reset();
         l = std::move(layout);
         layout.reset();
+        lId = layoutRequestId;
         t = std::move(target);
         target = {};
         s = std::move(search);
@@ -313,6 +317,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     }
     if (l) {
         engine->setLayout(l->first);
+        layoutId = lId;
         relaid(l->second.value.empty() ? current : engine->pageOf(l->second));
         postCurrent = true;
     }
@@ -320,6 +325,9 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         int page = current;
         if (t.kind == Target::Kind::Page) page = t.page;
         else if (t.kind == Target::Kind::Position) page = engine->pageOf(t.position);
+        else if (t.kind == Target::Kind::Zotero) {
+            if (const int p = engine->pageOfZoteroPosition(t.position.value); p >= 0) page = p;
+        }
         else if (const int p = engine->pageOfAnnotation(t.annotation); p >= 0) page = p;
         current = std::clamp(page, 0, std::max(0, pageCount - 1));
         postCurrent = true;
@@ -364,6 +372,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     if (postCurrent) {
         RenderEvent ev = pageEvent(current);
         ev.landed = landed;
+        ev.layoutId = layoutId;
         postCurrent = false;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -435,12 +444,15 @@ void RenderWorker::open(std::string path, DocType type, Layout layout, DocPositi
     });
 }
 
-void RenderWorker::setLayout(Layout layout, DocPosition keep) {
+uint64_t RenderWorker::setLayout(Layout layout, DocPosition keep) {
+    uint64_t id = 0;
     request(*impl_, [&] {
         impl_->layout = std::make_pair(layout, std::move(keep));
+        impl_->layoutRequestId = id = impl_->nextLayoutId++;
         impl_->target = {};
         ++impl_->generation;
     });
+    return id;
 }
 
 void RenderWorker::show(int page) {
@@ -453,6 +465,13 @@ void RenderWorker::show(int page) {
 void RenderWorker::showPosition(DocPosition pos) {
     request(*impl_, [&] {
         impl_->target = {Impl::Target::Kind::Position, 0, std::move(pos), {}};
+        ++impl_->generation;
+    });
+}
+
+void RenderWorker::showZotero(std::string position) {
+    request(*impl_, [&] {
+        impl_->target = {Impl::Target::Kind::Zotero, 0, {std::move(position)}, {}};
         ++impl_->generation;
     });
 }

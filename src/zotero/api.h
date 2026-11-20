@@ -1,11 +1,11 @@
 #pragma once
 // Zotero Web API v3 for the user's library and the groups the key reaches: library calls go to
 // /users/<id> or, after setLibrary(groupId), to /groups/<groupId>; settings always to the user's. Every call returns nullopt on failure and fills
-// `err` (when given) with a plain-language UserError. Rate limiting (429/503 + Retry-After) is
-// waited out up to three times; a Backoff header delays the next request.
+// `err` (when given) with a plain-language UserError. Rate limits: see zotero/rate_limit.h.
 
 #include "net/errors.h"
 #include "net/http.h"
+#include "zotero/rate_limit.h"
 
 #include <nlohmann/json.hpp>
 
@@ -72,7 +72,9 @@ public:
     ZoteroApi(Http&, int64_t userId, std::string apiKey);
 
     void setSleeper(std::function<void(int seconds)>);
-    void setOnWait(std::function<void(const UserError&)>);  // "Zotero is busy — retrying at …"
+    // Shares another limiter (the sync worker's, which file downloads use too): one Backoff for all.
+    void setRateLimiter(RateLimiter& r) { rate_ = &r; }
+    void setOnWait(std::function<void(const UserError&)>);  // "Zotero asks to wait until HH:MM."
 
     // The library the calls below go to: 0 the user's own, else a group ID.
     void setLibrary(int64_t groupId) { library_ = groupId; }
@@ -121,9 +123,9 @@ private:
     Http& http_;
     int64_t userId_;
     std::string apiKey_;
-    std::function<void(int)> sleeper_;
+    RateLimiter ownRate_;
+    RateLimiter* rate_ = &ownRate_;
     std::function<void(const UserError&)> onWait_;
-    int backoffS_ = 0;
     int64_t library_ = 0;
 };
 

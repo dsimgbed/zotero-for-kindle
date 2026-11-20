@@ -398,7 +398,11 @@ void ReaderMenus::onPage(Nav& nav) {
 }
 
 void ReaderMenus::onSyncEvent(const SyncEvent& e, Nav& nav) {
-    if (e.kind != SyncEvent::Kind::AnnotationsReady || e.attachmentKey != reader_.row().attachmentKey) return;
+    if (e.attachmentKey != reader_.row().attachmentKey) return;
+    // The book's sync ends with its annotations, or, failing to get the file, with the download.
+    const bool failed = e.kind == SyncEvent::Kind::DownloadFinished && e.error;
+    if (e.kind != SyncEvent::Kind::AnnotationsReady && !failed) return;
+    if (syncing_ && e.error) nav.toast(e.error->message);  // asked for: said why it didn't happen
     syncing_ = false;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(panelRect(), Waveform::Ui);
@@ -490,7 +494,10 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (picker_) return onPickerTap(g.pos, nav);  // over everything: a tap outside only closes it
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
-        if (!reader_.preview()) nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
+        if (!reader_.preview()) {  // closing the book: send what was changed in it, and get Zotero's news
+            if (loadSettings(nav.library()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
+            else nav.sync().syncNow();
+        }
         nav.pop();
         return;
     }

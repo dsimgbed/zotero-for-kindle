@@ -507,7 +507,9 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             if (l.items.empty()) centredText(cr, b.empty, kEmpty, r);
             for (const auto& p : l.parts) {
                 if (!p.item) continue;
-                if (itemCards(b)) drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], l.itemMetas[p.index]);
+                if (itemCards(b))
+                    drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], l.itemMetas[p.index],
+                                 gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
                 else drawItemRow(cr, p.rect, *p.item, gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
             }
             break;

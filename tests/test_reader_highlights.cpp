@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 #include "docs/render_worker.h"
 #include "fake_nav.h"
@@ -22,7 +23,7 @@ using json = nlohmann::json;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 struct Rig {
     Db db{Db::open(":memory:")};

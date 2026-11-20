@@ -42,7 +42,9 @@ Its settings and data stay with it across an update.
 ### Roll back
 
 An update keeps the version before it. On the plugin's page, **Roll back to 1.2** puts that
-version back, with the plugin's data as it is now. One earlier version is kept.
+version back, with the plugin's data as it is now. One earlier version is kept. A kept version
+this app can't run (made for another plugin API, or needing a newer app) is refused, as an install
+would be. If it asks for more than the current one, it is left off until you turn it on.
 
 ### Remove
 

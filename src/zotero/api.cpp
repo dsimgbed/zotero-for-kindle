@@ -2,10 +2,8 @@
 
 #include "core/log.h"
 
-#include <chrono>
 #include <cstdio>
 #include <random>
-#include <thread>
 
 namespace zk {
 
@@ -15,18 +13,6 @@ namespace {
 
 constexpr const char* kBase = "https://api.zotero.org";
 constexpr const char* kHost = "api.zotero.org";
-constexpr int kMaxRateLimitRetries = 3;
-
-int headerInt(const HttpResponse& r, const char* name, int fallback = 0) {
-    auto it = r.headers.find(name);
-    if (it == r.headers.end()) return fallback;
-    try {
-        return std::stoi(it->second);
-    } catch (...) {
-        return fallback;
-    }
-}
-
 int64_t libraryVersionOf(const HttpResponse& r) {
     auto it = r.headers.find("last-modified-version");
     if (it == r.headers.end()) return 0;
@@ -62,10 +48,14 @@ UserError badBody(const std::string& what) {
 }  // namespace
 
 ZoteroApi::ZoteroApi(Http& http, int64_t userId, std::string apiKey)
-    : http_(http), userId_(userId), apiKey_(std::move(apiKey)),
-      sleeper_([](int s) { std::this_thread::sleep_for(std::chrono::seconds(s)); }) {}
+    : http_(http), userId_(userId), apiKey_(std::move(apiKey)) {}
 
-void ZoteroApi::setSleeper(std::function<void(int)> f) { sleeper_ = std::move(f); }
+void ZoteroApi::setSleeper(std::function<void(int)> f) {
+    rate_->setSleeper([f = std::move(f)](int s) {
+        f(s);
+        return true;
+    });
+}
 void ZoteroApi::setOnWait(std::function<void(const UserError&)> f) { onWait_ = std::move(f); }
 
 std::string ZoteroApi::userUrl(const std::string& path) const {
@@ -92,31 +82,20 @@ bool KeyInfo::anyGroupAccess() const {
 HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
     req.headers.emplace_back("Zotero-API-Version", "3");
     req.headers.emplace_back("Zotero-API-Key", apiKey_);
-    for (int attempt = 0;; ++attempt) {
-        if (backoffS_ > 0) {
-            sleeper_(backoffS_);
-            backoffS_ = 0;
+    HttpResponse r = rate_->send(http_, req, [&](const HttpResponse& busy) {
+        UserError wait = classify(busy, NetState{}, kHost, false, req.method);
+        log(LogLevel::Info, "zotero: %s", wait.message.c_str());
+        if (onWait_) onWait_(wait);
+    });
+    if (r.curlCode != 0 || ((r.status < 200 || r.status >= 300) && r.status != 304)) {
+        if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE" || req.method == "PATCH"))) {
+            UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
+            log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
+                e.details.c_str());
+            setError(err, e);
         }
-        HttpResponse r = http_.send(req);
-        backoffS_ = headerInt(r, "backoff");
-        const bool busy = r.curlCode == 0 && (r.status == 429 || (r.status == 503 && r.headers.count("retry-after")));
-        if (busy && attempt < kMaxRateLimitRetries) {
-            UserError wait = classify(r, NetState{}, kHost, false, req.method);
-            log(LogLevel::Info, "zotero: %s", wait.message.c_str());
-            if (onWait_) onWait_(wait);
-            sleeper_(headerInt(r, "retry-after", 60));
-            continue;
-        }
-        if (r.curlCode != 0 || ((r.status < 200 || r.status >= 300) && r.status != 304)) {
-            if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE" || req.method == "PATCH"))) {
-                UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
-                log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
-                    e.details.c_str());
-                setError(err, e);
-            }
-        }
-        return r;
     }
+    return r;
 }
 
 std::string ZoteroApi::keyFingerprint() const {

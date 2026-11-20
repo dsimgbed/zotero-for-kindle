@@ -47,13 +47,17 @@ struct Rig {
     ItemRow row;
     std::unique_ptr<ReaderScreen> reader;
 
-    explicit Rig(DocType type = DocType::Pdf, int page = 0) {
+    explicit Rig(DocType type = DocType::Pdf, int page = 0, int placeDelayMs = 0) {
         addFontDir("assets/fonts-device");
         fillFixtureLibrary(lib, 10);
         for (auto& a : lib.annotationsFor("EP000003")) lib.removeObject("annotation", a.key);
         row = *lib.rowFor("IT000003");
-        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [placeDelayMs] {
+            return std::make_unique<RenderWorker>([placeDelayMs](DocType) {
+                auto e = std::make_unique<FakeEngine>();
+                e->placeDelayMs = placeDelayMs;
+                return std::unique_ptr<DocumentEngine>(std::move(e));
+            });
         }, 6);
         nav.visible = reader.get();
         reader->onShow(nav);
@@ -578,4 +582,16 @@ TEST_CASE("sticky note goldens: the PDF menus with Add note, its banner, and a n
     REQUIRE(rig.reader->notePopup());
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/note-popup.png");
+}
+
+TEST_CASE("sticky note fix: a note saved just before the book closes is still saved") {
+    // Audit B2: closing waited for handwriting only.
+    Rig rig(DocType::Pdf, 0, 150);
+    rig.arm();
+    rig.tap({420, 900});
+    rig.type("last thought");
+    rig.enter();
+    rig.reader->onClose(rig.nav);  // Back, or the app closing
+    REQUIRE(rig.notes().size() == 1);
+    CHECK(rig.notes()[0].comment == "last thought");
 }

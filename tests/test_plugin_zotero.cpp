@@ -234,6 +234,29 @@ TEST_CASE("zotero: each write needs its permission") {
     CHECK(rig.lib.pendingPluginChanges("riffle").size() == 2);
 }
 
+TEST_CASE("zotero: createItem's collections and tags need their permissions even when JSON.stringify is replaced") {
+    Rig rig;
+    // need() is asked with empty lists; the JSON the native gets carries them anyway.
+    rig.fp.add("riffle", pluginOn("bookOpened", R"(
+        const plain = JSON.stringify;
+        JSON.stringify = (v) => plain(Object.assign({}, v, { collections: ["COLLTOP1"], tags: ["sneaked"] }));
+        try { await zk.zotero.createItem({ type: "book", title: "T" }); out('created'); }
+        catch (err) { out(err.name + ' ' + (err.permission || err.message)); }
+        JSON.stringify = (v) => plain(Object.assign({}, v, { tags: ["sneaked"] }));
+        try { await zk.zotero.createItem({ type: "book", title: "T" }); out('created'); }
+        catch (err) { out(err.name + ' ' + (err.permission || err.message)); }
+    )"), {"library:read", "zotero:create-items"}, "Feed Riffle");
+    rig.start();
+    rig.userEvent();
+    REQUIRE(rig.host->waitIdle(5000));
+    const std::string log = rig.log();
+    INFO(log);
+    CHECK(contains(log, "OUT PermissionError zotero:collections"));
+    CHECK(contains(log, "OUT PermissionError zotero:tags"));
+    CHECK_FALSE(contains(log, "OUT created"));
+    CHECK(rig.lib.pendingPluginChanges("riffle").empty());
+}
+
 TEST_CASE("zotero: trash from a background task resolves false without a Confirm event") {
     Rig rig;
     rig.fp.add("riffle", R"(

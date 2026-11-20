@@ -3,6 +3,8 @@
 
 #include <doctest/doctest.h>
 
+#include <map>
+
 #include "docs/render_worker.h"
 #include "fake_engine.h"
 #include "fake_nav.h"
@@ -206,4 +208,37 @@ TEST_CASE("home: a reading place saved without the book being opened doesn't mak
     lib.markOpened("IT000006", "EP000006", 5000);
     REQUIRE(lib.lastOpened());
     CHECK(lib.lastOpened()->itemKey == "IT000006");
+}
+
+TEST_CASE("collection search fix: more results than fit above the keyboard turn pages; each is reachable once") {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    for (int i = 0; i < 20; ++i) {
+        const std::string n = (i < 10 ? "0" : "") + std::to_string(i);
+        addCollection(lib, "COLLTP" + n, "Topic " + n);
+    }
+    CollectionSearchScreen search(nullptr);
+    nav.visible = &search;
+    search.onShow(nav);
+    search.onKey(KeyEvent{KeyEvent::Code::Text, "topic"}, nav);
+    search.onKey(KeyEvent{KeyEvent::Code::Return, ""}, nav);
+    REQUIRE(search.results().size() == 20);
+    std::map<std::string, int> seen;
+    for (int guard = 0; guard < 30; ++guard) {
+        const auto rects = search.resultRects();
+        for (const Rect& r : rects) CHECK(r.y + r.h <= nav.keyboard().bounds().y);
+        for (size_t i = 0; i < rects.size(); ++i) ++seen[search.results()[search.firstShown() + i].entry.collection.key];
+        if (search.page() + 1 >= search.pages()) break;
+        search.onGesture(swipe(Direction::Up), nav);
+    }
+    CHECK(seen.size() == 20);
+    for (const auto& [k, n] : seen) CHECK_MESSAGE(n == 1, k);
+    // On a later page a tap opens that page's result.
+    REQUIRE(search.page() > 0);
+    search.onGesture(tapAt(search.resultRects()[0].center()), nav);
+    REQUIRE(nav.pushed.size() == 1);
+    auto* opened = dynamic_cast<CollectionScreen*>(nav.pushed[0].get());
+    REQUIRE(opened);
+    CHECK(opened->entry().collection.key == search.results()[search.firstShown()].entry.collection.key);
 }

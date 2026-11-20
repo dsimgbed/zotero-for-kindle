@@ -60,7 +60,7 @@ void CatalogService::set(const std::function<void(State&)>& change) {
 }
 
 void CatalogService::refresh(State& s) {
-    s.cache = loadCache(config_.pluginsDir);
+    s.cache = loadCache(config_.pluginsDir, &config_.registryKey);  // what it trusts, verified again
     s.kept = keptVersions(config_.pluginsDir);
 }
 
@@ -114,7 +114,7 @@ std::vector<std::string> CatalogService::installedIds(PluginHost* host) const {
 
 // Stops the plugin, swaps its files, puts it back (a failure repaired first, as install.h asks).
 bool CatalogService::swap(const std::string& id, PluginHost* host, const std::function<bool(UserError*)>& files,
-                          std::string& error) {
+                          std::string& error, const std::function<void()>& whileHeld) {
     if (host && !host->hold(id)) {
         host->release(id);
         error = "Couldn't stop the plugin. Try again.";
@@ -125,6 +125,8 @@ bool CatalogService::swap(const std::string& id, PluginHost* host, const std::fu
     if (!ok) {
         repairOne(config_.pluginsDir, id);
         error = e.message;
+    } else if (whileHeld) {
+        whileHeld();  // the new files are in place but can't load yet
     }
     if (host) host->release(id);
     return ok;
@@ -305,13 +307,17 @@ void CatalogService::startRollBack(const std::string& id) {
     run(Op::RollBack, id, "Rolling back…", [this, id, host](std::string& error) {
         // The kept version may ask for what the user hasn't seen: then it is left off, and its page
         // shows what it can do before it is turned on again.
+        // Turned off while still held: released first, it could load (or an event wake it) and
+        // run with what the user never allowed, however briefly.
         const auto adds = rollBackAdds(config_.pluginsDir, id);
-        if (!swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, e); }, error)) return false;
-        if (!adds.empty()) {
+        auto turnOff = [&] {
+            if (adds.empty()) return;
             if (host) host->setEnabled(id, false);
             else PluginState(config_.pluginsDir + "/.state.json").setEnabled(id, false);
-            set([](State& s) { s.notice = "It is off: this version can do more. Turn it on to allow it."; });
-        }
+        };
+        if (!swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, config_.app, e); }, error, turnOff))
+            return false;
+        if (!adds.empty()) set([](State& s) { s.notice = "It is off: this version can do more. Turn it on to allow it."; });
         return true;
     });
 }

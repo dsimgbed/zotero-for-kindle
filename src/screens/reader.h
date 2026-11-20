@@ -192,7 +192,7 @@ public:
     void setPenWrites(bool on, Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
-    // commitInk, then waits (at most `timeoutMs`) until every stroke is an annotation: before
+    // commitInk, then waits (at most `timeoutMs`) until every stroke, area and note is an annotation: before
     // the book closes. Back in the menus and onClose call it; after one wait has given up, the
     // next doesn't wait again (the UI would freeze twice for the same strokes).
     void flushInk(Nav&, int64_t timeoutMs = kInkFlushMs);
@@ -203,7 +203,7 @@ public:
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override {
         commitInk();
-        dropArea();  // also Add note and a note's pop-up
+        dropArea(notePicking_);  // also Add note, and a note's pop-up unless its own + Tag picker covers it
     }
     void onBackground(Nav&) override {
         commitInk();
@@ -239,7 +239,8 @@ private:
     void moveArea(Point to, Nav&);
     void endArea(Point to, Nav&);  // saves it when big enough
     void cancelArea(Nav&);         // armed or drawn: neither any more
-    void dropArea();               // the same without repainting (the page or screen changes anyway); Add note too
+    // The same without repainting (the page or screen changes anyway); Add note and a note's pop-up too.
+    void dropArea(bool keepNotePopup = false);
     void onArea(const RenderEvent&, Nav&);
     void placeNote(Point, Nav&);                    // the tap after Add note: the note box opens
     void saveNote(const std::string& text, Nav&);  // Return in it (empty: nothing)
@@ -274,8 +275,14 @@ private:
     int64_t wordsLeft_ = 0;
     double progress_ = 0;
     bool turning_ = false;
+    int turnTarget_ = -1;  // the page a turn (not a jump) is on its way to
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
+    uint64_t layoutId_ = 0;       // the last setLayout's id: its pages end layoutPending_
+    struct PendingGo {
+        int page = 0, count = 0, views = 1;  // asked for, in the pages counted then
+    };
+    std::optional<PendingGo> pendingGo_;  // turnTo while re-paginating
     // Selection mode.
     bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
     Point selAnchor_;
@@ -314,6 +321,7 @@ private:
     // bookmark with another's page).
     std::vector<std::pair<std::string, int>> markPlaces_;
     int markPage(const std::string& position) const;  // -1: not placed (yet)
+    bool bookmarkArriving_ = false;  // the corner tapped mid-turn: the page that arrives gets a bookmark
     bool arriving_ = false;  // a jump is landing: if it lands where it started, it needs no Back
     void answerPosition(bool go, Nav&);
     uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
@@ -324,9 +332,12 @@ private:
     int remotePage_ = -1;
     bool unplaced_ = false;  // Zotero's position can't be placed here: reading on decides
     struct PositionQuestion {
-        int page = 0;
         std::string text;
     };
+    // A re-layout counts pages again: where Zotero's position falls is asked again once the new
+    // pages show (placingAgain_: only remotePage_ and the question's text change, nothing is answered).
+    void placeRemoteAgain();
+    bool placingAgain_ = false;
     std::optional<PositionQuestion> question_;
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
     // Areas.
@@ -362,6 +373,7 @@ private:
     };
     std::map<uint64_t, SentNote> noteSent_;  // being placed by the worker
     std::unique_ptr<NotePopup> notePopup_;
+    bool notePicking_ = false;  // its + Tag picker is pushed: the pop-up is back with the tag after it
     // Handwriting.
     bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
@@ -371,6 +383,7 @@ private:
     bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     bool inkFlushGaveUp_ = false;
+    bool toldInkLost_ = false, toldAreaLost_ = false;  // what the close gave up on, said once per kind
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
     std::vector<std::vector<Point>> inkPending_;  // drawn, not yet sent

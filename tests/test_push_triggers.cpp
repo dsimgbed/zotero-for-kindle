@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include "app/settings_store.h"
 #include "docs/render_worker.h"
 #include "fake_engine.h"
 #include "fake_nav.h"
@@ -141,6 +142,23 @@ TEST_CASE("push triggers: changes made close together go up once, a delay after 
     CHECK(rig.ui->dirtyAnnotations().empty());
 }
 
+TEST_CASE("push triggers: a push that falls in Zotero's quiet goes up when it ends") {
+    // Final wave: the push was dropped, so with Sync every Off the edits waited for a tap.
+    Rig rig;
+    rig.start(50);
+    rig.pullFirst();
+    const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    rig.ui->setMetaValue("zoteroWaitUntil", std::to_string(nowMs + 800));
+    rig.newHighlight("written during the wait");
+    rig.service->pushSoon();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rig.count("POST ") == 0);  // not asked during the wait
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::PushFinished), 4000);
+    CHECK_FALSE(events.back().error);
+    CHECK(rig.count("POST ") == 1);
+    CHECK(rig.ui->dirtyAnnotations().empty());
+}
+
 TEST_CASE("push triggers: a sync sends unsent changes before pulling") {
     Rig rig;
     rig.start(60'000);
@@ -239,6 +257,33 @@ TEST_CASE("push triggers: the reader asks for a push after a highlight and a syn
     CHECK(nav.syncFake.syncs == syncs + 1);
 }
 
+TEST_CASE("push triggers: with Sync every Off, closing the book sends the changes but syncs nothing more") {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    fillFixtureLibrary(lib, 10);
+    AppSettings off = loadSettings(lib);
+    off.syncIntervalMinutes = 0;
+    saveSettings(lib, off);
+    ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+    }, 6);
+    nav.visible = &reader;
+    reader.onShow(nav);
+    for (int i = 0; i < 400 && !reader.ready(); ++i) {
+        reader.onTick(nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(reader.ready());
+    reader.onGesture(tapAt({600, 900}), nav);  // menus
+    REQUIRE(reader.menusOpen());
+    const int syncs = nav.syncFake.syncs, pushes = nav.syncFake.pushes;
+    reader.onGesture(tapAt(ReaderMenus::backRect().center()), nav);  // ‹ Library
+    CHECK(nav.pops == 1);
+    CHECK(nav.syncFake.syncs == syncs);
+    CHECK(nav.syncFake.pushes == pushes + 1);  // what was changed in the book still goes (after the push delay)
+}
+
 TEST_CASE("push triggers: a sync sends the reading position even with no highlight to send") {
     // Review C1: the service skipped the push when no annotation was waiting.
     Rig rig;
@@ -251,4 +296,14 @@ TEST_CASE("push triggers: a sync sends the reading position even with no highlig
     std::lock_guard<std::mutex> lock(rig.serverMutex);
     REQUIRE(rig.zotero.settings.count("lastPageIndex_u_EPUB0001"));
     CHECK(rig.zotero.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/4!/4/2/1:0");
+}
+
+TEST_CASE("sync worker: idle with Sync every Off and nothing pending, it sleeps until told") {
+    using namespace std::chrono;
+    const auto now = steady_clock::now(), last = now - minutes(3);
+    CHECK_FALSE(SyncService::nextWake(last, 0, std::nullopt));
+    // Otherwise it wakes when something is due, not every 30 s on the way.
+    CHECK(SyncService::nextWake(last, 10, std::nullopt) == last + minutes(10));
+    CHECK(SyncService::nextWake(last, 10, now + seconds(10)) == now + seconds(10));
+    CHECK(SyncService::nextWake(last, 0, now + minutes(5)) == now + minutes(5));
 }

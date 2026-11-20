@@ -146,7 +146,8 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
 
     HttpRequest req = get(a.key + ".zip");
     req.outFile = zipPath.string();
-    req.timeoutS = 600;
+    req.timeoutS = 0;
+    req.stallSeconds = kFileStallSeconds;
     req.onProgress = progress_;
     const std::string name = localFileName(a);
     auto noSpace = [&](const std::string& details) {

@@ -165,6 +165,7 @@ struct Ask {
 
 struct PluginRun {
     uint64_t serial = 0;
+    js::Value mainJs;  // main.js's evaluation: pending while a top-level await waits (see loading())
     std::map<uint64_t, Call> calls;  // in flight
     uint64_t current = 0;            // the call whose entry is running
     std::map<std::string, std::vector<js::Value>> handlers;
@@ -212,6 +213,11 @@ struct PluginRun {
         TreeUse use = TreeUse::Screen;  // HomeBody: Home's body (no search or field; its trees' JSON kept)
     };
     std::map<uint64_t, OpenScreen> screens;
+    // Screens whose last onEvent failed (kept after they close). While any is here, a screen's
+    // render going well doesn't clear the failure count: only that screen's next event going well,
+    // or a success outside screens, does. Else an onEvent that always throws would never add up,
+    // and Home's body re-rendering at every show would hide another screen's failures.
+    std::set<uint64_t> failedEvents;
 };
 
 }  // namespace plugins
@@ -616,7 +622,7 @@ struct PluginHost::Impl {
         setLoaded(id, true);
         startCall(p, CallKind::Load, "loading " + f.manifest->main, deps.handlerBudgetMs, false,
                   [&] {
-                      p.cx.evalModule(source, f.manifest->main);
+                      p.cx.evalModule(source, f.manifest->main, &p.run->mainJs);
                       return js::Value();
                   },
                   !afresh);
@@ -841,7 +847,9 @@ struct PluginHost::Impl {
     }
 
     void succeed(PluginCtx& p, Call& c) {
-        const bool counts = c.resets && (c.kind == CallKind::Load || c.kind == CallKind::Event || c.kind == CallKind::Background);
+        // A screen's onEvent going well is half of its cycle: the render after it decides (renderDone).
+        const bool counts = c.resets && (c.kind == CallKind::Load || (c.kind == CallKind::Event && c.screen == 0) ||
+                                         c.kind == CallKind::Background);
         if (c.done) {
             JSContext* cx = p.cx.raw();
             std::string text;
@@ -851,6 +859,7 @@ struct PluginHost::Impl {
         }
         backgroundEnded(p, c.kind);
         p.run->calls.erase(c.id);
+        if (counts) p.run->failedEvents.clear();
         if (counts && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
     }
 
@@ -1137,6 +1146,13 @@ struct PluginHost::Impl {
     // user-caused, deps.actionBudgetMs; render: deps.renderBudgetMs, not user-caused); the next
     // step is posted as a task when it ends, so no plugin code runs nested in another's.
 
+    // main.js still runs: its first part, or the rest after a top-level await.
+    bool loading(PluginCtx& p) {
+        for (const auto& [id, c] : p.run->calls)
+            if (c.kind == CallKind::Load) return true;
+        return !p.run->mainJs.isUndefined() && p.run->mainJs.promiseState() == js::PromiseState::Pending;
+    }
+
     std::string cantShow(PluginCtx& p) { return p.manifest.name + " can't show this screen right now"; }
 
     void postScreen(PluginCtx& p, PluginHostEvent::Kind kind, uint64_t instance, std::string text) {
@@ -1174,6 +1190,10 @@ struct PluginHost::Impl {
             const std::string name = nameOf(pluginId);
             PluginHostEvent ev{PluginHostEvent::Kind::ScreenError, pluginId, name, name + " can't show this screen right now", {}, 0, ""};
             ev.instance = instance;
+            // Loaded and running, without that screen: gone for good (not just off for now). Not while
+            // main.js still runs: it may register the screen after an await.
+            if (it != loaded.end() && !turnOffs.count(pluginId) && !restarts.count(pluginId) && !loading(*it->second))
+                ev.value = {{"missing", true}};
             postEvent(std::move(ev));
             return;
         }
@@ -1239,6 +1259,12 @@ struct PluginHost::Impl {
         sc->counting = false;
         sc->busy = false;
         if (sc->failed) return;
+        if (ok) p.run->failedEvents.erase(instance);
+        else if (!text.empty()) p.run->failedEvents.insert(instance);  // "": stopped on purpose, not counted
+        // No render follows an event that closed its screen (or a `back`): the event decides.
+        auto clearIfClean = [&] {
+            if (ok && p.run->failedEvents.empty() && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
+        };
         if (!ok && !text.empty())
             postScreen(p, PluginHostEvent::Kind::ScreenActionError, instance, p.manifest.name + " couldn't do that: " + text);
         if (ok && !sc->closed) {
@@ -1251,13 +1277,16 @@ struct PluginHost::Impl {
                 postEvent(std::move(ev));
                 sc->queue.clear();
                 sc->closed = true;
+                clearIfClean();
                 finishScreen(p, instance, std::move(result));
                 applyTurnOffs();
                 return;
             }
         }
-        if (sc->closed) pumpScreen(p, instance);
-        else {
+        if (sc->closed) {
+            clearIfClean();
+            pumpScreen(p, instance);
+        } else {
             sc->busy = true;
             sc->refreshDue = sc->refreshByUser = false;
             sc->refreshAtMs = 0;  // this render shows what a waiting refresh would have
@@ -1307,7 +1336,7 @@ struct PluginHost::Impl {
             applyTurnOffs();
             return;
         }
-        if (state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
+        if (p.run->failedEvents.empty() && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
         PluginHostEvent ev{PluginHostEvent::Kind::ScreenTree, p.manifest.id, p.manifest.name, "", {}, sc->handled, ""};
         ev.instance = instance;
         ev.screenId = sc->screenId;

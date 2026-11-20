@@ -26,6 +26,11 @@ struct HttpRequest {
     int connectTimeoutS = 10;
     int timeoutS = 120;
     int timeoutMs = 0;          // > 0: the whole transfer's limit in ms, instead of timeoutS
+    // > 0: the transfer fails (curl 28) once it has moved under stallBytesPerS for this long.
+    // With timeoutS = 0 a large file over a slow line takes as long as it needs, while a dead one
+    // still ends: a whole-transfer limit can never be right for files of every size.
+    int stallSeconds = 0;
+    int stallBytesPerS = 1024;
     size_t maxBodyBytes = 0;    // > 0: the transfer fails (tooLarge) once the body would pass this
     // When set: asked for every address the client is about to connect to (on a fresh connection;
     // no cached one is reused); false refuses it (HttpResponse::addressRefused if none was allowed).

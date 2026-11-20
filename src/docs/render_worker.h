@@ -38,6 +38,7 @@ struct RenderEvent {
     // Page: each bookmark given to setBookmarks with its page (-1: can't be placed), by position.
     std::vector<std::pair<std::string, int>> bookmarkPlaces;
     bool landed = false;  // Page: where a show/showPosition/showAnnotation request took it
+    uint64_t layoutId = 0;  // Page: the setLayout it is laid out in (0: the one open() gave)
     std::vector<LinkBox> links;      // Page: the page's links
     Rect pageBox;                    // Page: where the page itself is drawn (empty: all of it)
     std::optional<LinkInfo> link;    // Link: what the asked-for link is (nullopt: nothing to follow)
@@ -56,10 +57,12 @@ public:
 
     // `zoteroStart`: where to open when `start` is empty (Zotero's position, from another device).
     void open(std::string path, DocType, Layout, DocPosition start, std::string zoteroStart = "");
-    void setLayout(Layout, DocPosition keep);  // re-paginates; Opened again, at `keep`
+    // Re-paginates; Opened again, at `keep`. Pages laid out with it carry the id (RenderEvent::layoutId).
+    uint64_t setLayout(Layout, DocPosition keep);
     void show(int page);
     void showPosition(DocPosition);
     void showAnnotation(AnnotationRecord);  // the page the annotation is on (ignored if it can't be placed)
+    void showZotero(std::string position);  // a Zotero position, placed in the pages as they are then (ignored if it can't be)
     uint64_t search(std::string query);     // results come back with this request id
     void highlightsFor(std::vector<AnnotationRecord>);
     // Text between two points on `page`; only the latest request is answered.

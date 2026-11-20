@@ -24,6 +24,7 @@ struct Rig {
     FakeNav nav{lib};
     ItemRow row;
     bool failOpen = false;
+    int delayMs = 0;
     explicit Rig() {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");
@@ -33,6 +34,7 @@ struct Rig {
             return std::make_unique<RenderWorker>([this](DocType) {
                 auto e = std::make_unique<FakeEngine>();
                 e->failOpen = failOpen;
+                e->delayMs = delayMs;
                 return std::unique_ptr<DocumentEngine>(std::move(e));
             });
         }, 6);
@@ -143,4 +145,68 @@ TEST_CASE("reader: the footer shows chapter, time left and progress (golden)") {
     Canvas c(1236, 1547);
     r->draw(c);
     test::checkGolden(c, "tests/golden/reader-page.png");
+}
+
+TEST_CASE("reader fix: two quick turns move two pages") {
+    // Audit B6: the second turn counted from the page still shown, not the one being turned to.
+    Rig rig;
+    rig.delayMs = 80;
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.tapRight(*r);
+    rig.tapRight(*r);  // before page 1 arrives
+    REQUIRE(rig.waitPage(*r, 2));
+    for (int i = 0; i < 40 && r->turning(); ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(r->page() == 2);
+    rig.tapLeft(*r);
+    rig.tapLeft(*r);
+    CHECK(rig.waitPage(*r, 0));
+}
+
+TEST_CASE("reader fix: back from a panel that changed nothing, the page isn't painted again") {
+    // Audit B7: onShow sent the annotations again unconditionally, so the worker re-posted the
+    // page and it was painted a second time after the app's own redraw.
+    Rig rig;
+    auto r = rig.reader();
+    rig.nav.visible = r.get();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    for (int i = 0; i < 40; ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    r->onHide(rig.nav);  // a panel pushed ...
+    r->onShow(rig.nav);  // ... and popped
+    rig.nav.damages.clear();
+    for (int i = 0; i < 40; ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    for (const auto& d : rig.nav.damages) CHECK_FALSE(d.rect == ReaderScreen::pageArea());
+}
+
+TEST_CASE("reader fix: three quick turns move three pages") {
+    // Audit B fix round 1: a page already overtaken (the first turn's) ended the turn under way.
+    Rig rig;
+    rig.delayMs = 150;  // the next page's pre-render is still going when the second tap comes
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.tapRight(*r);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // page 1 is posted, not yet picked up
+    rig.tapRight(*r);  // on to page 2
+    r->onTick(rig.nav);  // page 1 arrives: overtaken
+    REQUIRE(r->page() == 1);
+    CHECK(r->turning());
+    rig.tapRight(*r);  // on to page 3
+    REQUIRE(rig.waitPage(*r, 3));
+    for (int i = 0; i < 40 && r->turning(); ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(r->page() == 3);
 }

@@ -364,7 +364,12 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
 // ---- Full text: one worker for every plugin ------------------------------------------------
 
+// A plugin's fullText calls queued or running: more are refused, so one plugin that doesn't await
+// its calls can't fill the queue in front of everyone else's (whose budgets would run out waiting).
+constexpr int kFullTextMaxPending = 4;
+
 struct FullTextJob {
+    std::string owner;  // the plugin (its folder: plugins of two hosts never share a count)
     AttachmentRecord attachment;
     std::string pluginsDir;
     EngineEnv env;
@@ -374,50 +379,87 @@ struct FullTextJob {
 // Started at the first use and never stopped: the thread sleeps between jobs, and a job in flight
 // at exit is the process's own business. Everything a job needs is copied into it, so no plugin
 // or host object is touched from here (Work::finish is safe from any thread, and a no-op once the
-// host is gone).
+// host is gone). Plugins take turns: the next job is another plugin's than the last one, if any waits.
 class FullTextWorker {
 public:
     static FullTextWorker& get() {
         static FullTextWorker* w = new FullTextWorker;
         return *w;
     }
-    void submit(FullTextJob job) {
+    // False (nothing queued) when the plugin already has kFullTextMaxPending under way.
+    bool submit(FullTextJob job) {
         {
             std::lock_guard<std::mutex> lock(mu_);
+            // Jobs of calls stopped meanwhile (or of a plugin unloaded) free their place now.
+            std::erase_if(jobs_, [this](const FullTextJob& j) {
+                if (!j.work->cancelled()) return false;
+                done(j.owner);
+                return true;
+            });
+            int& mine = pending_[job.owner];
+            if (mine >= kFullTextMaxPending) return false;
+            ++mine;
             jobs_.push_back(std::move(job));
         }
         cv_.notify_one();
+        return true;
     }
 
 private:
     FullTextWorker() { std::thread([this] { run(); }).detach(); }
+    void done(const std::string& owner) {
+        if (--pending_[owner] <= 0) pending_.erase(owner);
+    }
     void run() {
         lowerThreadPriority();
         for (;;) {
             FullTextJob job;
             {
                 std::unique_lock<std::mutex> lock(mu_);
-                cv_.wait(lock, [this] { return !jobs_.empty(); });
-                job = std::move(jobs_.front());
-                jobs_.pop_front();
+                cv_.wait(lock, [this] { return !jobs_.empty() && !held_; });
+                auto next = std::find_if(jobs_.begin(), jobs_.end(), [this](const FullTextJob& j) { return j.owner != last_; });
+                if (next == jobs_.end()) next = jobs_.begin();
+                job = std::move(*next);
+                jobs_.erase(next);
+                last_ = job.owner;
             }
-            if (job.work->cancelled()) continue;  // its call was stopped while it waited
-            UserError err;
-            auto out = extractFullText(job.attachment, job.pluginsDir, job.env, &err);
-            if (out) {
-                auto textPtr = std::make_shared<std::string>(std::move(*out));
-                job.work->finish([textPtr](JSContext* c) {
-                    const std::string clean = sanitisedUtf8(textPtr->data(), textPtr->size());
-                    return JS_NewStringLen(c, clean.data(), clean.size());
-                });
+            if (job.work->cancelled()) {  // its call was stopped while it waited
+                std::lock_guard<std::mutex> lock(mu_);
+                done(job.owner);
             } else {
-                job.work->reject(err.message.empty() ? "zk.library.fullText: the text can't be read" : err.message);
+                UserError err;
+                auto out = extractFullText(job.attachment, job.pluginsDir, job.env, &err);
+                {  // given back before the promise settles: its continuation may ask again at once
+                    std::lock_guard<std::mutex> lock(mu_);
+                    done(job.owner);
+                }
+                if (out) {
+                    auto textPtr = std::make_shared<std::string>(std::move(*out));
+                    job.work->finish([textPtr](JSContext* c) {
+                        const std::string clean = sanitisedUtf8(textPtr->data(), textPtr->size());
+                        return JS_NewStringLen(c, clean.data(), clean.size());
+                    });
+                } else {
+                    job.work->reject(err.message.empty() ? "zk.library.fullText: the text can't be read" : err.message);
+                }
             }
         }
     }
     std::mutex mu_;
     std::condition_variable cv_;
     std::deque<FullTextJob> jobs_;
+    std::map<std::string, int> pending_;  // owner → queued or running
+    std::string last_;                    // whose job ran last
+    bool held_ = false;
+
+public:
+    void hold(bool on) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            held_ = on;
+        }
+        cv_.notify_all();
+    }
 };
 
 JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
@@ -436,7 +478,9 @@ JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv)
         return promise;
     }
     const PluginHostDeps& deps = depsOf(p);
-    FullTextWorker::get().submit({std::move(*attachment), deps.pluginsDir, deps.engineEnv, work});
+    if (!FullTextWorker::get().submit({deps.pluginsDir + "/" + p.manifest.id, std::move(*attachment), deps.pluginsDir, deps.engineEnv, work}))
+        work->reject("zk.library.fullText: this plugin already has " + std::to_string(kFullTextMaxPending) +
+                     " texts being read; await some before asking for more");
     return promise;
 }
 
@@ -608,3 +652,5 @@ void installLibrary(PluginCtx& p) {
 }
 
 }  // namespace zk::plugins
+
+void zk::holdFullTextWorker(bool held) { zk::plugins::FullTextWorker::get().hold(held); }

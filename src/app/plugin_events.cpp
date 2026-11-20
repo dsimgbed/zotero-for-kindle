@@ -295,7 +295,16 @@ void PluginEvents::poll(App& app) {
                 break;
             case PluginHostEvent::Kind::ReaderClosed:  // the app's own: never from the host
                 break;
-            case PluginHostEvent::Kind::ScreenTree:
+            case PluginHostEvent::Kind::ScreenTree: {
+                // A hidden screen (Home's body under the reader, a refreshing plugin) takes nothing
+                // until it shows: only its newest tree matters then (each answers every event before
+                // it), so older ones go and its mail stays small however long it waits.
+                if (!screens_.count(ev.instance)) break;
+                auto& box = mail_[ev.instance];
+                std::erase_if(box, [](const PluginHostEvent& e) { return e.kind == PluginHostEvent::Kind::ScreenTree; });
+                box.push_back(std::move(ev));
+                break;
+            }
             case PluginHostEvent::Kind::ScreenError:
             case PluginHostEvent::Kind::ScreenActionError:
                 if (screens_.count(ev.instance)) mail_[ev.instance].push_back(std::move(ev));

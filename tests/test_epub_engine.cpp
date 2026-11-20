@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 #include "golden.h"
 
@@ -18,7 +19,7 @@ using json = nlohmann::json;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 std::unique_ptr<DocumentEngine> openBook(const std::string& name, UserError* err = nullptr) {
     UserError e;
@@ -148,7 +149,7 @@ TEST_CASE("epub engine: Russian text hyphenates with the dictionary (golden)") {
 
 TEST_CASE("epub engine: a book with a non-Latin file name opens") {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "zk-ru-name";
+    const fs::path dir = test::uniqueTempPath("zk-ru-name");
     fs::create_directories(dir);
     const fs::path copy = dir / "Соловьёв и Ларионов.epub";
     fs::copy_file("tests/data/epub/alice-gutenberg-epub3.epub", copy, fs::copy_options::overwrite_existing);
@@ -173,14 +174,14 @@ TEST_CASE("engines: a missing file says it's missing, not damaged") {
 }
 
 namespace {
-const char* const kCacheDirs[] = {"/tmp/zk-cre-cache", "/tmp/zk-cre-cache-fast", "/tmp/zk-cre-cache-plugin-lib"};
+const std::string kCacheDirs[] = {test::creCacheDir(), test::creCacheDir("-fast"), test::creCacheDir("-plugin-lib")};
 
 // Every file in the crengine cache folders the tests use (whichever this process initialised
 // first): name -> its last access time and its bytes. Read with a raw read() after the access
 // time is taken.
 std::map<std::string, std::pair<long, std::string>> cacheSnapshot() {
     std::map<std::string, std::pair<long, std::string>> out;
-    for (const char* dir : kCacheDirs) {
+    for (const auto& dir : kCacheDirs) {
         std::error_code ec;
         for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             struct stat st {};
@@ -200,7 +201,7 @@ std::map<std::string, std::pair<long, std::string>> cacheSnapshot() {
 // Ages every cache file's access time (keeping its modification time), so that reading it shows:
 // with relatime (the default on macOS and Linux) a read then updates the access time.
 void ageCacheAccessTimes() {
-    for (const char* dir : kCacheDirs) {
+    for (const auto& dir : kCacheDirs) {
         std::error_code ec;
         for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             struct timespec times[2] = {{1000000, 0}, {0, UTIME_OMIT}};

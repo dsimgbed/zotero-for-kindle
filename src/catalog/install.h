@@ -52,8 +52,9 @@ std::optional<Staged> stage(Http&, const Entry&, const Latest&, const std::strin
 // <id>/ → .previous/<id>/ (replacing an older kept one), .incoming/<id>/ → <id>/, moving the old
 // data/ across; marks provenance "catalog". The caller has stopped the plugin.
 bool commit(const std::string& pluginsDir, const std::string& id, UserError*);
-// Swaps <id> and .previous/<id>; data/ stays in <id>. The caller has stopped the plugin.
-bool rollBack(const std::string& pluginsDir, const std::string& id, UserError*);
+// Swaps <id> and .previous/<id>; data/ stays in <id>. The caller has stopped the plugin. A kept
+// version `app` can't run (another plugin API, a newer minApp) is refused as stage() refuses it.
+bool rollBack(const std::string& pluginsDir, const std::string& id, const Version& app, UserError*);
 // The version in .previous/<id>/plugin.json, if one is kept and readable.
 std::optional<std::string> previousVersion(const std::string& pluginsDir, const std::string& id);
 // <id>/ (with its data/), .previous/<id>/, .incoming/<id>/ and its provenance; nothing else.

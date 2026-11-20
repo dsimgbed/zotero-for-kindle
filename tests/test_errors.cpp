@@ -69,8 +69,8 @@ TEST_CASE("classify: zotero.org rejects the key on reads and on writes") {
 TEST_CASE("classify: rate limiting and server errors") {
     UserError busy = classify(http(429, {{"retry-after", "60"}}), allUp, api, false);
     CHECK(busy.kind == ErrorKind::RateLimited);
-    CHECK(busy.message.find("Zotero is busy — retrying at ") == 0);
-    CHECK(busy.message.size() == std::string("Zotero is busy — retrying at HH:MM.").size());
+    CHECK(busy.message.find("Zotero asks to wait until ") == 0);
+    CHECK(busy.message.size() == std::string("Zotero asks to wait until HH:MM.").size());
     CHECK(classify(http(503, {{"retry-after", "5"}}), allUp, api, false).kind == ErrorKind::RateLimited);
     UserError broken = classify(http(500), allUp, api, false);
     CHECK(broken.kind == ErrorKind::ServerError);

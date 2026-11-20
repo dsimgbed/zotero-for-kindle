@@ -87,7 +87,7 @@ TEST_CASE("api: 429 with retry-after waits, retries and succeeds") {
     CHECK(rig.slept == std::vector<int>{3});
     REQUIRE(waits.size() == 1);
     CHECK(waits[0].kind == ErrorKind::RateLimited);
-    CHECK(waits[0].message.find("retrying at") != std::string::npos);
+    CHECK(waits[0].message.find("Zotero asks to wait until ") != std::string::npos);
 }
 
 TEST_CASE("api: rate limiting that never ends gives up with RateLimited") {
@@ -114,6 +114,39 @@ TEST_CASE("api: a Backoff header delays the next request") {
     CHECK(d->libraryVersion == 9);
     CHECK(d->items == std::vector<std::string>{"DEAD2345"});
     CHECK(d->collections == std::vector<std::string>{"GONE2345"});
+}
+
+TEST_CASE("api: a 429 with both Retry-After and Backoff waits once, the longer of the two") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3"}, {"backoff", "5"}}));
+    rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}", {{"last-modified-version", "1"}}));
+    rig.http.expect("GET", kBase + "/users/1/deleted?since=1",
+                    FakeHttp::ok(R"({"items":[],"collections":[],"searches":[],"tags":[],"settings":[]})", {{"last-modified-version", "1"}}));
+    REQUIRE(rig.api.versions("items", 0, nullptr));
+    REQUIRE(rig.api.deleted(1, nullptr));
+    CHECK(rig.slept == std::vector<int>{5});
+}
+
+TEST_CASE("api: a wait over a minute isn't slept through; the request ends RateLimited, the next sync tries") {
+    {
+        Rig rig;
+        rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3600"}}));
+        UserError err;
+        CHECK_FALSE(rig.api.versions("items", 0, &err));
+        CHECK(err.kind == ErrorKind::RateLimited);
+        CHECK(rig.slept.empty());
+        CHECK(rig.http.sent.size() == 1);
+    }
+    {
+        Rig rig;
+        rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}", {{"last-modified-version", "1"}, {"backoff", "600"}}));
+        REQUIRE(rig.api.versions("items", 0, nullptr));
+        UserError err;
+        CHECK_FALSE(rig.api.deleted(1, &err));  // not sent: Zotero asked for ten minutes' quiet
+        CHECK(err.kind == ErrorKind::RateLimited);
+        CHECK(rig.slept.empty());
+        CHECK(rig.http.sent.size() == 1);
+    }
 }
 
 TEST_CASE("api: fetch asks for the keys and returns the objects") {
@@ -225,4 +258,33 @@ TEST_CASE("api: with a group's library set, library calls go to /groups/<id>; se
     rig.api.setLibrary(0);
     rig.http.expect("GET", kBase + "/users/1/deleted?since=5", FakeHttp::ok("{}"));
     CHECK(rig.api.deleted(5, nullptr));
+}
+
+TEST_CASE("rate limit: a wait cut short by stopping ends the request; nothing more goes out") {
+    FakeHttp http;
+    RateLimiter rate;
+    rate.setSleeper([](int) { return false; });  // stop() during the wait
+    http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3"}}));
+    http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}"));
+    HttpRequest req;
+    req.url = kBase + "/users/1/items";
+    const HttpResponse r = rate.send(http, req);
+    CHECK(http.sent.size() == 1);
+    CHECK(r.curlCode != 0);
+}
+
+TEST_CASE("rate limit: a request that ends rate-limited tells how long Zotero asked to wait") {
+    FakeHttp http;
+    RateLimiter rate;
+    std::vector<int> gaveUp;
+    rate.setSleeper([](int) { return true; });
+    rate.setOnGiveUp([&](int s) { gaveUp.push_back(s); });
+    http.expect("GET", kBase + "/a", FakeHttp::status(429, {{"retry-after", "3600"}}));
+    HttpRequest req;
+    req.url = kBase + "/a";
+    CHECK(rate.send(http, req).status == 429);
+    CHECK(gaveUp == std::vector<int>{3600});
+    for (int i = 0; i < 4; ++i) http.expect("GET", kBase + "/a", FakeHttp::status(429, {{"retry-after", "2"}}));
+    CHECK(rate.send(http, req).status == 429);  // still busy after three waits
+    CHECK(gaveUp == std::vector<int>{3600, 2});
 }

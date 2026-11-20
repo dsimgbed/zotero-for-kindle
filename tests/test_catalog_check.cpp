@@ -226,3 +226,76 @@ TEST_CASE("catalog check: no cache yet, and provenance round-trips") {
     std::ofstream(dir.path / ".catalog" / "latest.json") << "{garbage";
     CHECK(loadCache(dir.str()).latest.empty());
 }
+
+TEST_CASE("catalog check: a signed registry older than the one kept is refused (no replay of a revocation)") {
+    TempDir dir;
+    Clock clock;
+    clock.now = 1'794'700'000'000;  // 2026-11-15: after the stamps
+    FakeHttp http;
+    const std::string body = registryJson("2026-11-10T12:00:00Z");
+    expectRegistry(http, body, sign(body, kSeed));
+    REQUIRE(runCheck(http, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+
+    for (const std::string& older : {std::string("2026-11-09T00:00:00Z"), std::string(""), std::string("2099-01-01"),
+                                     std::string("tomorrow")}) {  // no stamp of the right form: none
+        FakeHttp replay;
+        const std::string old = registryJson(older);
+        expectRegistry(replay, old, sign(old, kSeed));
+        clock.now += 1000;
+        const auto r = runCheck(replay, options(clock), dir.str(), {}, false, nullptr);
+        CHECK(r.status == CheckStatus::Failed);
+        CHECK(r.message == "The catalog is older than the one this Kindle has.");
+        CHECK(slurp(dir.path / ".catalog" / "registry.json") == body);
+    }
+
+    FakeHttp same;  // the same one again, or a newer one: taken
+    expectRegistry(same, body, sign(body, kSeed));
+    CHECK(runCheck(same, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+    FakeHttp newer;
+    const std::string next = registryJson("2026-11-11T00:00:00Z");
+    expectRegistry(newer, next, sign(next, kSeed));
+    CHECK(runCheck(newer, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+    CHECK(slurp(dir.path / ".catalog" / "registry.json") == next);
+}
+
+TEST_CASE("catalog check: the kept registry is verified again when read with the key; one changed on disk is none") {
+    TempDir dir;
+    Clock clock;
+    FakeHttp http;
+    const std::string body = registryJson();
+    expectRegistry(http, body, sign(body, kSeed));
+    REQUIRE(runCheck(http, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+    const auto key = publicKeyFor(kSeed);
+    CHECK(loadCache(dir.str(), &key).registry);
+
+    std::string tampered = body;
+    tampered.replace(tampered.find("Feed Riffle"), 11, "Feed Rifflf");
+    std::ofstream(dir.path / ".catalog" / "registry.json", std::ios::trunc) << tampered;
+    CHECK_FALSE(loadCache(dir.str(), &key).registry);
+    CHECK(loadCache(dir.str()).registry);  // without the key: as it is (provenance, latest releases)
+
+    // A tampered copy isn't what a fresh one is compared with: an older signed one is taken then.
+    FakeHttp again;
+    const std::string old = registryJson("2026-01-01T00:00:00Z");
+    expectRegistry(again, old, sign(old, kSeed));
+    CHECK(runCheck(again, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+}
+
+TEST_CASE("catalog check: a kept stamp of another form, or far ahead of the clock, refuses nothing later") {
+    for (const std::string& stamp : {std::string("2099-01-01T00:00:00Z"), std::string("9999-99-99T99:99:99Z"),
+                                     std::string("2026-11-10 12:00"), std::string("zzzz")}) {
+        CAPTURE(stamp);
+        TempDir dir;
+        Clock clock;
+        clock.now = 1'794'700'000'000;  // 2026-11-15
+        FakeHttp http;
+        const std::string body = registryJson(stamp);
+        expectRegistry(http, body, sign(body, kSeed));
+        REQUIRE(runCheck(http, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+        FakeHttp later;
+        const std::string next = registryJson("2026-11-14T00:00:00Z");
+        expectRegistry(later, next, sign(next, kSeed));
+        CHECK(runCheck(later, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+        CHECK(slurp(dir.path / ".catalog" / "registry.json") == next);
+    }
+}

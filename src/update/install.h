@@ -11,7 +11,9 @@
 #include "net/errors.h"
 #include "update/version.h"
 
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace zk {
@@ -43,9 +45,38 @@ struct Confirmed {
     Version from, to;
 };
 
-// Called once the app has drawn its first screen. Updated: this is the new version's first good
-// start (the backups are deleted). RolledBack: the launcher went back after a failed update.
+// The start is good: the backups are deleted. Updated: this is the new version's first good start.
+// RolledBack: the launcher went back after a failed update.
 Confirmed confirmStartup(const InstallPaths&, Version running);
 Confirmed confirmStartup(const InstallPaths&);  // running = appVersion()
+
+// The confirmation of an update, deferred: a new version counts as good only after it has been
+// in front kConfirmMs in all (like plugins' safe mode, kSafeModeConfirmMs), not at its first frame:
+// what comes after it (plugins, a sync, a book) could still crash it, and the launcher can roll
+// back only while the backup is there. Once due, the deletion waits for the next background (the
+// screensaver, a system dialog), never mid-reading. A clean end confirms too (a reader who quits at
+// once is not a crash, and would otherwise find the old version started again); so does installing
+// the next update. Anything else that ends the app first rolls the update back at the next start,
+// a Kindle shutdown or restart (SIGTERM) within that first minute in front included.
+// With no update of the running version to confirm, the first screen tidies update/ at once.
+class UpdateConfirm {
+public:
+    static constexpr int64_t kConfirmMs = 60'000;
+    UpdateConfirm(InstallPaths, Version running);
+    Confirmed atFirstScreen();  // what to tell the reader now; an update's backups stay
+    void tick(int64_t nowMs, bool foreground);  // every loop step: confirms once it is time
+    std::optional<int64_t> wakeAt(int64_t nowMs) const;  // when tick must run next (none: asleep, or done)
+    void cleanEnd();
+    bool pending() const { return pending_; }
+
+private:
+    InstallPaths paths_;
+    Version running_;
+    bool pending_ = true;
+    bool due_ = false;         // in front long enough: confirmed at the next background
+    int64_t frontMs_ = 0;      // in front, in all, until frontSince_
+    int64_t frontSince_ = -1;  // in front since (-1: in the background)
+    void confirm();
+};
 
 }  // namespace zk

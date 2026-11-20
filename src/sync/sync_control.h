@@ -30,10 +30,12 @@ struct SyncEvent {
 };
 
 // A kept collection catching up (spec B): "Downloading <current> of <total>", or paused because
-// the Kindle is nearly full. None when it has everything (or can't go on without Wi-Fi).
+// the Kindle is nearly full, or stopped with only stalled files left (the next sync tries them
+// again). None when it has everything (or can't go on without Wi-Fi).
 struct KeptStatus {
     int current = 0, total = 0;
     bool paused = false;
+    int stalled = 0;  // the round ended with only these left, each stalled: "N files not downloaded — retrying"
     bool operator==(const KeptStatus&) const = default;
 };
 

@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_zotero.h"
 #include "net/write_guard.h"
 #include "store/db.h"
@@ -75,7 +76,8 @@ struct Rig {
 };
 
 std::string tempDb(const char* name) {
-    const fs::path p = fs::temp_directory_path() / name;
+    const std::string n = name;
+    const fs::path p = test::uniqueTempPath(n.substr(0, n.rfind('.')), n.substr(n.rfind('.')));
     fs::remove(p);
     fs::remove(p.string() + "-wal");
     fs::remove(p.string() + "-shm");
@@ -256,6 +258,26 @@ TEST_CASE("annotations: edited here and on the desktop -> Zotero's version kept,
     CHECK(conflicts[0].conflictOf == "ANNO0001");
 }
 
+TEST_CASE("annotations: an edit Zotero applied although its answer was lost is not a conflict") {
+    Rig rig;
+    auto a = *rig.lib->annotation("ANNO0001");
+    a.comment = "kindle thoughts";
+    rig.lib->editAnnotation(a);
+    rig.desktopEdit("ANNO0001", "kindle thoughts");  // the PATCH landed (a new version); its answer never came
+    SyncReport rep = rig.pull();
+    CHECK_FALSE(rep.error);
+    CHECK(rep.conflicts == 0);
+    CHECK(rig.lib->conflicts().empty());
+    auto now = rig.lib->annotation("ANNO0001");
+    REQUIRE(now);
+    CHECK(now->comment == "kindle thoughts");
+    CHECK_FALSE(now->dirty);
+    CHECK(now->version == rig.server.libraryVersion);
+    rig.server.sent.clear();
+    CHECK_FALSE(rig.push().error);
+    CHECK(rig.server.count("POST", "/items") == 0);  // nothing left to send
+}
+
 TEST_CASE("annotations: re-applying an edit conflict puts the Kindle edit on the original highlight") {
     Rig rig;
     auto a = *rig.lib->annotation("ANNO0001");
@@ -293,6 +315,38 @@ TEST_CASE("annotations: re-applying a conflict whose original was deleted on the
     CHECK_FALSE(rig.push().error);
     REQUIRE(rig.server.items.count(key));
     CHECK(rig.server.items[key]["data"]["annotationComment"] == "kindle thoughts");
+}
+
+TEST_CASE("annotations: Zotero's copy to fetch again after a replaced file survives a failed pull and a restart; no duplicate") {
+    Rig rig(tempDb("zk-annotations-refetch.db"));
+    auto a = *rig.lib->annotation("ANNO0001");
+    a.comment = "kindle thoughts";
+    rig.lib->editAnnotation(a);
+    rig.server.put(FakeZotero::attachment("EPUB0001", "BOOK0001", "md5-two"));  // the file was replaced
+    rig.server.failWhen = [](const HttpRequest& r) {  // the line drops just as Zotero's copy is fetched
+        return r.method == "GET" && r.url.find("itemKey=ANNO0001") != std::string::npos;
+    };
+    CHECK(rig.pull().error);
+    REQUIRE(rig.lib->conflicts().size() == 1);
+    CHECK_FALSE(rig.lib->annotation("ANNO0001"));
+    rig.open();  // the app restarts
+    // "Use mine" before Zotero's copy is back: refused, not made into a second highlight.
+    auto conflict = rig.lib->conflicts().at(0);
+    CHECK(rig.lib->reapplyConflict(conflict.key).empty());
+    CHECK(rig.lib->conflicts().size() == 1);
+    CHECK(rig.lib->awaitingZoteroCopy(conflict.key));
+    rig.server.failWhen = nullptr;
+    CHECK_FALSE(rig.push().error);
+    CHECK_FALSE(rig.pull().error);  // Zotero's copy comes back
+    REQUIRE(rig.lib->annotation("ANNO0001"));
+    CHECK(rig.lib->annotation("ANNO0001")->comment == "");
+    CHECK_FALSE(rig.lib->awaitingZoteroCopy(conflict.key));
+    CHECK(rig.lib->reapplyConflict(conflict.key) == "ANNO0001");
+    CHECK_FALSE(rig.push().error);
+    int annotations = 0;
+    for (const auto& [k, o] : rig.server.items) annotations += o["data"].value("itemType", "") == "annotation";
+    CHECK(annotations == 1);
+    CHECK(rig.server.items["ANNO0001"]["data"]["annotationComment"] == "kindle thoughts");
 }
 
 TEST_CASE("annotations: discarding a conflict removes it and sends nothing") {
@@ -365,7 +419,11 @@ TEST_CASE("annotations: schema v2 databases gain the new columns without losing 
     Db db = Db::open(path);
     Library lib(db);
     CHECK(db.userVersion() == 12);
-    CHECK(lib.countAnnotations("mine") == 1);  // version 6: the highlights already there are searchable
+    {  // version 6: the highlights already there are searchable (this bare database has no items for Notes to list them under)
+        Stmt fts = db.prepare("SELECT count(*) FROM note_fts WHERE note_fts MATCH 'mine'");
+        REQUIRE(fts.step());
+        CHECK(fts.integer(0) == 1);
+    }
     lib.setLocalPosition("EPUB0001", "3");  // version 4's table is there too
     CHECK(lib.readingPosition("EPUB0001"));
     auto a = lib.annotation("UNSENT01");

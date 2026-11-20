@@ -75,6 +75,7 @@ struct Kindle {
         writeFile(root / "documents/Zotero.sh", "launcher 0.3.0");
         writeFile(home / "update/state", word + " 0.2.0 0.3.0\n");
     }
+    std::string script = "Zotero.sh.src";  // the launcher's file name, as the scriptlet runner starts it
     int launch() {
         // A `sync` on PATH that records what update/state held when it ran.
         writeFile(root / "fakebin/sync", "#!/bin/sh\necho \"sync $(cat '" + (home / "update/state").string() +
@@ -83,11 +84,12 @@ struct Kindle {
                                 ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
                                 (root / "var/config.json").string() + "' ZK_DISPLAY=none ZK_INK_MARK='" +
-                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' sh '" +
-                                (root / "documents/Zotero.sh.src").string() + "'";
+                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' ZK_LOCK='" + lock().string() + "' ZK_PROC='" + (root / "proc").string() + "' sh '" +
+                                (root / "documents" / script).string() + "'";
         return std::system(cmd.c_str());
     }
     fs::path pidfile() const { return root / "run/zotero.pid"; }
+    fs::path lock() const { return root / "run/zotero.lock"; }
     std::string runs() const { return readFile(home / "runs"); }
     std::string file(const fs::path& rel) const { return readFile(root / rel); }
     void checkRolledBack() const {
@@ -151,6 +153,53 @@ TEST_CASE("launcher: while the app runs, another start brings it to the front in
     for (int i = 0; i < 50 && !fs::exists(k.home / "raised"); i++) usleep(100 * 1000);
     CHECK(k.file("zotero/raised") == "raised\n");
     shell("kill " + pid);
+}
+
+TEST_CASE("launcher: a second start while the first is between runs of the app starts no second copy") {
+    // The window where no app runs but a launcher is busy (after an exit 75, during a rollback): the
+    // pid file is gone. The stand-in plays that window by removing it and tapping again (once).
+    Kindle k(std::string("#!/bin/sh\nif [ ! -f tapped ]; then : > tapped; rm -f \"$ZK_PIDFILE\"\n"
+                         "  sh ../documents/Zotero.sh.src; fi\necho '0.2.0 0' >> runs\n"));
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(readFile(k.home / "log/zotero.log").find("another launcher") != std::string::npos);
+    CHECK_FALSE(fs::exists(k.lock()));  // released at the end
+}
+
+TEST_CASE("launcher: a launcher started under another name still holds its lock") {
+    Kindle k;
+    k.script = "zk-start.sh";  // a runner that copies or renames the scriptlet
+    fs::copy_file(k.root / "documents/Zotero.sh.src", k.root / "documents/zk-start.sh");
+    // A first launcher, busy between two runs of the app: alive, its command line naming its file.
+    const std::string holder = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    writeFile(k.root / "proc" / holder / "cmdline", std::string("sh\0/mnt/us/documents/zk-start.sh\0", 33));
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(holder + " zk-start.sh", k.lock());
+    CHECK(k.launch() == 0);
+    CHECK_FALSE(fs::exists(k.home / "runs"));
+    CHECK(readFile(k.home / "log/zotero.log").find("another launcher") != std::string::npos);
+    shell("kill " + holder);
+}
+
+TEST_CASE("launcher: a lock whose pid now belongs to another program is taken over") {
+    Kindle k;
+    const std::string other = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    writeFile(k.root / "proc" / other / "cmdline", std::string("sleep\0" "3\0", 8));
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(other + " Zotero.sh.src", k.lock());
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    shell("kill " + other);
+}
+
+TEST_CASE("launcher: a lock left by a launcher that is gone does not stop a start") {
+    Kindle k;
+    const std::string gone = shell("sh -c 'echo $$'");
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(gone, k.lock());
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK_FALSE(fs::is_symlink(k.lock()));
 }
 
 TEST_CASE("launcher: a pid file left by an app that is gone does not stop a start") {
@@ -259,6 +308,30 @@ TEST_CASE("launcher: after an unclean exit it resets the system ink, not after a
         k.launch();
         CHECK_FALSE(fs::exists(k.home / "resets"));
     }
+}
+
+TEST_CASE("launcher: killed itself while the app runs, it still lets the Kindle sleep") {
+    // The system ends the launcher (SIGTERM) along with the app: the app's own signal path can't
+    // call lipc, so the launcher's ending is what turns the keep-awake off.
+    Kindle k(std::string("#!/bin/sh\nkill -TERM $PPID\nsleep 0.3\necho '0.2.0 0' >> runs\n"));
+    writeFile(k.root / "fakebin/lipc-set-prop", "#!/bin/sh\necho \"$*\" >> '" + (k.home / "lipc").string() + "'\n", true);
+    k.launch();
+    CHECK(readFile(k.home / "lipc") == "com.lab126.powerd preventScreenSaver 0\n");
+    CHECK_FALSE(fs::is_symlink(k.lock()));
+    for (int i = 0; i < 20 && !fs::exists(k.home / "runs"); i++) usleep(100 * 1000);  // the stand-in's end
+}
+
+TEST_CASE("launcher: a second start that finds the app running leaves the keep-awake alone") {
+    Kindle k;
+    writeFile(k.root / "fakebin/lipc-set-prop", "#!/bin/sh\necho \"$*\" >> '" + (k.home / "lipc").string() + "'\n", true);
+    const std::string holder = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(holder, k.lock());
+    CHECK(k.launch() == 0);
+    CHECK_FALSE(fs::exists(k.home / "runs"));
+    CHECK_FALSE(fs::exists(k.home / "lipc"));
+    CHECK(fs::read_symlink(k.lock()).string() == holder);  // not ours to release
+    shell("kill " + holder);
 }
 
 TEST_CASE("launcher: endless 75s stop after five") {

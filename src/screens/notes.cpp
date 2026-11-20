@@ -256,6 +256,11 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         const AnnotationRecord& a = lines_[i].note.annotation;
         if (!lines_[i].header && a.conflict) {
             if (noteRowButtonRect(rects[i], 0).contains(g.pos)) {
+                if (nav.library().awaitingZoteroCopy(a.key)) {  // re-applied now, it would be a second highlight
+                    nav.toast("Getting Zotero's copy first. Try again after this sync.");
+                    nav.sync().syncNow();
+                    return;
+                }
                 const std::string result = nav.library().reapplyConflict(a.key);
                 if (!result.empty())  // an edit of an annotation still there, or the annotation made again
                     plugins::annotationEvent(nav.plugins(), nav.library(),

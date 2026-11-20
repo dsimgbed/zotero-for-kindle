@@ -2,6 +2,7 @@
 // show, a jump, a web address).
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 #include "docs/render_worker.h"
 #include "fake_engine.h"
@@ -21,7 +22,7 @@ using namespace zk;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 std::unique_ptr<DocumentEngine> open(DocType type, const std::string& path) {
     UserError e;

@@ -155,34 +155,33 @@ std::string isoOf(int64_t ms) {
 
 // ---- Natives ------------------------------------------------------------------------------
 
-// n.need(call, withCollections, withTags): the permission check alone.
+// Whether the plugin may make a change of kind `k` (a createItem filing it in collections or
+// tagging it needs those permissions too); false with the PermissionError thrown.
+bool permitted(PluginCtx& p, Kind k, const std::string& name, bool withCollections, bool withTags) {
+    const std::string detail = "zk.zotero." + name + "()";
+    switch (k) {
+        case Kind::CreateItem:
+            return requirePermission(p, Permission::CreateItems, detail) &&
+                   (!withCollections || requirePermission(p, Permission::Collections, detail + " with collections")) &&
+                   (!withTags || requirePermission(p, Permission::Tags, detail + " with tags"));
+        case Kind::AddToCollection: return requirePermission(p, Permission::Collections, detail);
+        case Kind::AddTag: return requirePermission(p, Permission::Tags, detail);
+        case Kind::AddNote: return requirePermission(p, Permission::Notes, detail);
+        default: return requirePermission(p, Permission::Remove, detail);
+    }
+}
+
+// n.need(call, withCollections, withTags): the permission check alone, before the arguments are
+// checked (so a plugin without the permission hears that first). The natives that make the change
+// check again from what they were given: the JavaScript around them is the plugin's to replace.
 JSValue needNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     PluginCtx& p = ctxOf(c);
     std::string name;
     if (!text(c, argc, argv, 0, name)) return JS_EXCEPTION;
     Kind k;
     if (!kindNamed(name, k)) return JS_ThrowTypeError(c, "zk.zotero: unknown call");
-    const std::string detail = "zk.zotero." + name + "()";
-    switch (k) {
-        case Kind::CreateItem: {
-            if (!requirePermission(p, Permission::CreateItems, detail)) return JS_EXCEPTION;
-            if (argc > 1 && JS_ToBool(c, argv[1]) && !requirePermission(p, Permission::Collections, detail + " with collections"))
-                return JS_EXCEPTION;
-            if (argc > 2 && JS_ToBool(c, argv[2]) && !requirePermission(p, Permission::Tags, detail + " with tags")) return JS_EXCEPTION;
-            break;
-        }
-        case Kind::AddToCollection:
-            if (!requirePermission(p, Permission::Collections, detail)) return JS_EXCEPTION;
-            break;
-        case Kind::AddTag:
-            if (!requirePermission(p, Permission::Tags, detail)) return JS_EXCEPTION;
-            break;
-        case Kind::AddNote:
-            if (!requirePermission(p, Permission::Notes, detail)) return JS_EXCEPTION;
-            break;
-        default:
-            if (!requirePermission(p, Permission::Remove, detail)) return JS_EXCEPTION;
-    }
+    const bool collections = argc > 1 && JS_ToBool(c, argv[1]), tags = argc > 2 && JS_ToBool(c, argv[2]);
+    if (!permitted(p, k, name, collections, tags)) return JS_EXCEPTION;
     return JS_UNDEFINED;
 }
 
@@ -196,6 +195,19 @@ JSValue addNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!kindNamed(name, k) || (k != Kind::CreateItem && k != Kind::AddToCollection && k != Kind::AddTag && k != Kind::AddNote))
         return JS_ThrowTypeError(c, "zk.zotero: unknown call");
     if (k != Kind::CreateItem && !text(c, argc, argv, 2, b)) return JS_EXCEPTION;
+    bool collections = false, tags = false;
+    if (k == Kind::CreateItem) {  // what the library will file and tag it with (its uniqueStrings)
+        const json v = json::parse(a, nullptr, false);
+        auto any = [&v](const char* key) {
+            if (!v.is_object() || !v.contains(key) || !v[key].is_array()) return false;
+            for (const auto& x : v[key])
+                if (x.is_string() && !x.get<std::string>().empty()) return true;
+            return false;
+        };
+        collections = any("collections");
+        tags = any("tags");
+    }
+    if (!permitted(p, k, name, collections, tags)) return JS_EXCEPTION;
     PluginChange ch;
     ch.pluginId = p.manifest.id;
     ch.kind = k;
@@ -228,6 +240,7 @@ JSValue removeNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!kindNamed(name, k) ||
         (k != Kind::Trash && k != Kind::RemoveFromCollection && k != Kind::RemoveTag && k != Kind::DeleteNote))
         return JS_ThrowTypeError(c, "zk.zotero: unknown call");
+    if (!permitted(p, k, name, false, false)) return JS_EXCEPTION;
     Library& lib = libraryOf(p);
 
     Removal r;

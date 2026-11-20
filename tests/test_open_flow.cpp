@@ -72,6 +72,14 @@ TEST_CASE("open flow: a remote book downloads with progress in its row") {
     p.total = 100;
     rig.event(p);
     CHECK(rig.flow.statusFor(r.attachmentKey) == "Downloading 42%");
+    {  // Zotero asks the download to wait: the row says so
+        SyncEvent w = rig.download(SyncEvent::Kind::DownloadProgress, r);
+        w.error = UserError{ErrorKind::RateLimited, "Zotero asks to wait until 14:03.", "HTTP 429"};
+        rig.event(w);
+        CHECK(rig.flow.statusFor(r.attachmentKey) == "Zotero asks to wait until 14:03.");
+        rig.nav.damages.clear();
+        rig.event(p);
+    }
     REQUIRE(rig.nav.damages.size() == 1);
     CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect == rig.rowRect(1));
@@ -298,4 +306,52 @@ TEST_CASE("library rowFor: a file the item doesn't have leaves the row not exact
     REQUIRE(base);
     CHECK_FALSE(base->exactFile);
     CHECK(rig.lib.rowFor(r.key, r.attachmentKey)->exactFile);
+}
+
+// ---- audit C1: which screen the download was asked from ----
+
+TEST_CASE("open flow fix: a new screen at the old one's address doesn't open the book") {
+    Rig rig;
+    const ItemRow r = rig.row(2);
+    auto open = [&rig](const ItemRow& row) { rig.flow.open(row, rig.nav); };
+    // One slot for both screens, so the second has the first's address (as the allocator may give it).
+    alignas(LibraryScreen) unsigned char slot[sizeof(LibraryScreen)];
+    auto* first = new (slot) LibraryScreen(open, rig.flow.statusFn());
+    rig.nav.visible = first;
+    rig.flow.open(r, rig.nav);
+    first->~LibraryScreen();
+    auto* second = new (slot) LibraryScreen(open, rig.flow.statusFn());
+    REQUIRE(static_cast<const void*>(second) == static_cast<const void*>(first));
+    rig.nav.visible = second;
+    rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    rig.flow.onSyncEvent(rig.download(SyncEvent::Kind::DownloadFinished, r), rig.nav);
+    CHECK(rig.nav.pushed.empty());
+    second->~LibraryScreen();
+    rig.nav.visible = rig.screen.get();
+}
+
+TEST_CASE("open flow fix: a file kept later after a failed tap doesn't open by itself") {
+    Rig rig;
+    const ItemRow r = rig.row(0);
+    rig.screen->onGesture(tapAt(rig.rowRect(0).center()), rig.nav);
+    SyncEvent failed = rig.download(SyncEvent::Kind::DownloadFinished, r);
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", ""};
+    rig.event(failed);
+    {  // A kept collection's download of it runs and fails too: the row ends on the error, not a percentage.
+        SyncEvent p = rig.download(SyncEvent::Kind::DownloadProgress, r);
+        p.done = 42;
+        p.total = 100;
+        rig.event(p);
+        SyncEvent again = rig.download(SyncEvent::Kind::DownloadFinished, r);
+        again.error = UserError{ErrorKind::NotOnServer, "Not on the server.", "HTTP 404"};
+        rig.event(again);
+        CHECK(rig.flow.statusFor(r.attachmentKey) == "Not on the server. (HTTP 404)");
+        CHECK(rig.nav.pushed.empty());
+    }
+    // Later the same file comes down as a kept collection's (no tap): it isn't opened, and the
+    // row no longer shows the old error.
+    rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    rig.event(rig.download(SyncEvent::Kind::DownloadFinished, r));
+    CHECK(rig.nav.pushed.empty());
+    CHECK(rig.flow.statusFor(r.attachmentKey).empty());
 }

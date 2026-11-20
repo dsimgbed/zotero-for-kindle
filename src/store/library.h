@@ -339,8 +339,19 @@ public:
     std::vector<AnnotationRecord> conflicts();
     void discardConflict(const std::string& key);
     // Puts a conflict copy's content back as a change to send: onto the annotation it was an
-    // edit of if that still exists, otherwise as a new annotation. Returns the key it now lives under.
+    // edit of if that still exists, otherwise as a new annotation. Returns the key it now lives under,
+    // or "" when it can't yet (awaitingZoteroCopy: the conflict copy stays).
     std::string reapplyConflict(const std::string& key);
+    // Annotations whose Kindle edit became a conflict when their file was replaced: removed here,
+    // Zotero's copy to be fetched again by the next pull of their library. Kept in the database,
+    // so a failed pull or a restart doesn't lose them.
+    void queueRefetch(const std::string& annotationKey, int64_t lib);
+    std::vector<std::string> refetchQueue(int64_t lib);
+    void refetchDone(const std::vector<std::string>& annotationKeys);
+    void pruneRefetch();  // drops those of libraries switched off or gone (no pull will bring them)
+    // The conflict copy's original is still to come back from Zotero: re-applying it now would
+    // make a second highlight.
+    bool awaitingZoteroCopy(const std::string& conflictKey);
     std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB, PDF and web snapshot files only
 
     LibraryStats stats();

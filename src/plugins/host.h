@@ -93,7 +93,8 @@ struct PluginHostDeps {
 // (title in `text`) over `parent` with zk.ui.open (parent 0: from an action's run); `value` the
 // params (null: none). ScreenClose: the plugin closed the screen (zk.ui.close); `value` the result.
 // ScreenError: the screen can't be shown (render failed, an invalid tree, the plugin turned off or
-// restarted): `text` "<Plugin> can't show this screen right now"; nothing more comes for it.
+// restarted): `text` "<Plugin> can't show this screen right now"; nothing more comes for it. `value`
+// {missing: true} when the plugin runs but has no screen of that id (gone in an update).
 // ScreenActionError: its onEvent failed: `text` "<Plugin> couldn't do that: <message>"; a tree follows.
 //
 // Actions (zk.selectionAction / zk.itemAction; `requestId` is runAction's number):

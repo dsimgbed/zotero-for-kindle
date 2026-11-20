@@ -86,6 +86,21 @@ TEST_CASE("webdav: download extracts the file and verifies its MD5") {
     }
 }
 
+TEST_CASE("webdav: a large file isn't cut off by a limit on the whole download; only a stall ends it") {
+    Rig rig;
+    rig.serveFixture();
+    UserError err;
+    REQUIRE(rig.dav.download(rig.attachment(), rig.dest.string(), &err));
+    bool zip = false;
+    for (const auto& r : rig.http.sent)
+        if (r.url.size() > 4 && r.url.compare(r.url.size() - 4, 4, ".zip") == 0) {
+            zip = true;
+            CHECK(r.timeoutS == 0);
+            CHECK(r.stallSeconds == kFileStallSeconds);
+        }
+    CHECK(zip);
+}
+
 TEST_CASE("webdav: a wrong MD5 is a Checksum error and leaves nothing behind") {
     Rig rig;
     rig.serveFixture();

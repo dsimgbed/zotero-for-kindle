@@ -139,6 +139,12 @@ TEST_CASE("kept: the row says how far the catch-up is, or that it paused, and no
     screen.onSyncEvent(e, rig.nav);
     CHECK(screen.rowNote(1) == "Paused — the Kindle is nearly full");
     CHECK_FALSE(rig.nav.damages.empty());
+    rig.nav.syncFake.kept["COLLCCCC"] = {0, 12, false, 1};  // the round ended with only a stalled file left
+    screen.onSyncEvent(e, rig.nav);
+    CHECK(screen.rowNote(1) == "1 file not downloaded — retrying");
+    rig.nav.syncFake.kept["COLLCCCC"] = {0, 12, false, 2};
+    screen.onSyncEvent(e, rig.nav);
+    CHECK(screen.rowNote(1) == "2 files not downloaded — retrying");
     rig.nav.syncFake.kept.clear();
     screen.onSyncEvent(e, rig.nav);
     CHECK(screen.rowNote(1).empty());

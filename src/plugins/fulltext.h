@@ -35,4 +35,8 @@ using EngineLoader = std::function<std::unique_ptr<DocumentEngine>(DocType, cons
 std::optional<std::string> extractFullText(const AttachmentRecord&, const std::string& pluginsDir, const EngineEnv&,
                                            UserError* err, const EngineLoader& loader = {});
 
+// Tests: while held, zk.library.fullText's worker starts no job (they queue), so what a plugin
+// submits in one go is counted before any of it ends.
+void holdFullTextWorker(bool held);
+
 }  // namespace zk

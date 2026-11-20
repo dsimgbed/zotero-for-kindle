@@ -18,6 +18,10 @@ struct Blank : Screen {
     void onGesture(const Gesture&, Nav&) override {}
 };
 
+struct Reading : Blank {
+    bool isReading() const override { return true; }
+};
+
 struct Rig {
     FakeDisplay display;
     FakeSync sync;
@@ -28,7 +32,8 @@ struct Rig {
     App app{display, lib, sync, keyboard, [this] { return now += 10; }};
     SyncStatus status;
     bool storage = true;
-    Lifecycle life{sync, status, [] { return 10; }, [this] { return storage; }};
+    int interval = 10;  // the Sync every setting
+    Lifecycle life{sync, status, [this] { return interval; }, [this] { return storage; }};
     Rig() {
         for (int i = 0; i < 4; ++i) app.setRoot(i, std::make_unique<Blank>());
         life.attach(app);
@@ -86,4 +91,52 @@ TEST_CASE("lifecycle: a failed last sync is retried on wake even if it was recen
     rig.app.step(0);
     rig.app.step(0);
     CHECK(rig.sync.whenOnline == 1);
+}
+
+TEST_CASE("lifecycle: no periodic sync while the reader shows; leaving it restores the interval") {
+    Rig rig;
+    rig.app.push(std::make_unique<Reading>());
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 0);
+    rig.app.push(std::make_unique<Reading>());  // a reader's panel (Contents, Notes) is reading too
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 0);
+    rig.app.pop();
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 0);
+    rig.app.pop();
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 10);
+}
+
+TEST_CASE("lifecycle: waking with the reader in front keeps the interval off") {
+    Rig rig;
+    rig.app.push(std::make_unique<Reading>());
+    rig.app.step(0);
+    rig.display.lifecycle(InputEvent::Kind::Background);
+    rig.app.step(0);
+    rig.now += 30 * 60'000;
+    rig.display.lifecycle(InputEvent::Kind::Foreground);
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 0);
+    rig.app.pop();
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 10);
+}
+
+TEST_CASE("lifecycle: with Sync every Off, waking never syncs by itself") {
+    Rig rig;
+    rig.interval = 0;
+    SyncEvent failed;
+    failed.kind = SyncEvent::Kind::SyncFinished;
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", "curl 6"};
+    rig.status.onEvent(failed, rig.now);
+    rig.display.lifecycle(InputEvent::Kind::Background);
+    rig.app.step(0);
+    rig.now += 30 * 60'000;
+    rig.display.lifecycle(InputEvent::Kind::Foreground);
+    rig.app.step(0);
+    CHECK(rig.sync.interval == 0);
+    CHECK(rig.sync.whenOnline == 0);
+    CHECK(rig.sync.syncs == 0);
 }

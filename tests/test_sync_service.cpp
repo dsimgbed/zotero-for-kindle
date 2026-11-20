@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_http.h"
 #include "fake_lipc.h"
 #include "fake_zotero.h"
@@ -51,6 +52,7 @@ struct Rig {
     std::atomic<uint64_t> freeBytes{uint64_t{1} << 40};
     std::atomic<int64_t> wallMs{1'762'000'000'000};
     int onlineGiveUpMs = 120'000;
+    int openCapFloorMs = 600'000;
 
     Rig() {
         char tmpl[] = "/tmp/zk-svc-XXXXXX";
@@ -87,6 +89,7 @@ struct Rig {
         deps.wallMs = [this] { return wallMs.load(); };
         deps.onlinePollMs = 20;
         deps.onlineGiveUpMs = onlineGiveUpMs;
+        deps.openCapFloorMs = openCapFloorMs;
         service = std::make_unique<SyncService>(std::move(deps));
         service->start();
     }
@@ -227,6 +230,106 @@ TEST_CASE("sync service: stop interrupts a Retry-After wait") {
     CHECK(msSince(t0) < 2000);
 }
 
+TEST_CASE("sync service: a read tag Zotero refuses is told once, with the push; the sync goes on") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.markRead("BOOK0001", true);
+    }
+    {
+        std::lock_guard<std::mutex> lock(rig.serverMutex);
+        rig.zotero.failObjects["BOOK0001"] = 400;
+    }
+    rig.service->syncNow();
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    int told = 0;
+    for (const auto& e : events) told += static_cast<int>(e.report.notices.size());
+    CHECK(told == 1);
+    CHECK_FALSE(events.back().error);
+}
+
+TEST_CASE("sync service: when Zotero asks for a long wait, no sync asks it again before then, across restarts") {
+    Rig rig;
+    std::atomic<bool> busy{true};
+    std::atomic<int> asked{0};
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (r.url.rfind("https://api.zotero.org/", 0) == 0) {
+            ++asked;
+            if (busy) return FakeHttp::status(429, {{"retry-after", "3600"}});
+        }
+        return base(r);
+    };
+    rig.start();
+    rig.service->syncNow();
+    auto first = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    REQUIRE(first.back().error);
+    CHECK(first.back().error->kind == ErrorKind::RateLimited);
+    const int before = asked;
+    CHECK(before >= 1);
+    busy = false;  // Zotero would answer now, but asked for an hour
+    const std::string expected = rateLimitMessage(rig.wallMs + 3600 * 1000);
+    // A tapped Sync: the message, without asking Zotero.
+    const uint64_t id = rig.service->syncNowTracked();
+    auto tapped = rig.waitFor([&](const SyncEvent& e) { return e.kind == SyncEvent::Kind::SyncFinished && e.request == id; });
+    REQUIRE(tapped.back().error);
+    CHECK(tapped.back().error->kind == ErrorKind::RateLimited);
+    CHECK(tapped.back().error->message == expected);
+    rig.service->syncWhenOnline();  // waking up: no request either
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    rig.service.reset();  // a restart remembers it
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK(asked == before);
+    rig.wallMs += int64_t{3601} * 1000;  // the hour is over: the next sync goes
+    rig.service->syncNow();
+    auto later = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK_FALSE(later.back().error);
+    CHECK(asked > before);
+}
+
+TEST_CASE("sync service: a book that keeps dripping in past its time ends with an error; the next open works") {
+    Rig rig;
+    rig.openCapFloorMs = 150;  // the cap: max(this, size / 20 KB/s) = 200 ms for these 4 KB
+    std::atomic<bool> drip{true};
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (drip && r.url.size() > 4 && r.url.compare(r.url.size() - 4, 4, ".zip") == 0) {
+            const auto t0 = Clock::now();
+            for (int64_t done = 1; msSince(t0) < 5000; ++done) {  // a byte at a time, never stalling
+                if (r.onProgress) r.onProgress(done, 4096);
+                if (r.cancel && *r.cancel) {
+                    HttpResponse aborted;
+                    aborted.curlCode = 42;
+                    aborted.curlError = "Callback aborted";
+                    return aborted;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return FakeHttp::status(500);
+        }
+        return base(r);
+    };
+    rig.serveFile();
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    const auto t0 = Clock::now();
+    rig.service->openBook("BOOK0001", "ABCD1234");
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished));
+    CHECK(msSince(t0) < 3000);
+    REQUIRE(events.back().error);
+    CHECK(events.back().error->message.find("too slowly") != std::string::npos);
+    drip = false;  // a good line again: the same book opens
+    rig.serveFile();
+    rig.service->openBook("BOOK0001", "ABCD1234");
+    auto again = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished));
+    CHECK_FALSE(again.back().error);
+}
+
 TEST_CASE("sync service: poll never waits for the worker") {
     Rig rig;
     rig.route = [](const HttpRequest& r) {
@@ -352,6 +455,7 @@ struct KeptRig : Rig {
     std::vector<std::string> fetched;  // attachment keys whose file was asked for, in order
     std::function<void(const HttpRequest&)> onFile;  // e.g. hold one back
     std::map<std::string, long> fileStatus;          // answer /file for this key with this status
+    std::set<std::string> stalls;                    // these files start, then stall (curl 28)
 
     KeptRig() {
         zotero.putCollection("SHELF001", "Shelf");
@@ -382,6 +486,18 @@ struct KeptRig : Rig {
             }
             if (r.url.rfind("https://files.example/", 0) == 0) {
                 HttpResponse ok = FakeHttp::ok(content(r.url.substr(22)));
+                bool stalled;
+                {
+                    std::lock_guard<std::mutex> lock(fileMutex);
+                    stalled = stalls.count(r.url.substr(22)) > 0;
+                }
+                if (stalled) {
+                    if (r.onProgress) r.onProgress(3, static_cast<int64_t>(ok.body.size()));
+                    HttpResponse timedOut;
+                    timedOut.curlCode = 28;
+                    timedOut.curlError = "Operation too slow";
+                    return timedOut;
+                }
                 if (r.onProgress) {  // like CurlHttp: the size is known early
                     r.onProgress(0, static_cast<int64_t>(ok.body.size()));
                     if (r.cancel && *r.cancel) {
@@ -402,7 +518,7 @@ struct KeptRig : Rig {
     }
     static std::string content(const std::string& key) { return "the book " + key; }
     static std::string md5(const std::string& key) {
-        const std::string path = "/tmp/zk-kept-md5-" + key;
+        const std::string path = test::uniqueTempPath("zk-kept-md5-" + key).string();
         std::ofstream(path, std::ios::binary) << content(key);
         const std::string h = md5OfFile(path);
         fs::remove(path);
@@ -417,6 +533,11 @@ struct KeptRig : Rig {
     }
     void startOnZotero() { start(""); }
     bool downloaded(const std::string& att) { return fs::exists(fs::path(files()) / att / "book.epub"); }
+    void stall(const std::string& key, bool on = true) {
+        std::lock_guard<std::mutex> lock(fileMutex);
+        if (on) stalls.insert(key);
+        else stalls.erase(key);
+    }
     void answerFile(const std::string& key, long status) {
         std::lock_guard<std::mutex> lock(fileMutex);
         if (status) fileStatus[key] = status;
@@ -752,4 +873,137 @@ TEST_CASE("kept: every readable file of an item downloads, not only the one Open
     CHECK(ui.attachment("ATTA0002")->state == AttachmentRecord::State::Local);
     CHECK(ui.attachment("ATTA0002")->title == "Full Text PDF");
     CHECK(ui.rowFor("BOOKA001")->files == 2);
+}
+
+TEST_CASE("kept: a file whose download stalls goes behind the others; it doesn't hold them up, now or after") {
+    KeptRig rig;
+    rig.book("BOOKD001", "ATTD0001", "SHELF001");
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    // The file the round asks for first stalls.
+    std::string first;
+    rig.onFile = [&](const HttpRequest& r) {
+        std::lock_guard<std::mutex> lock(rig.fileMutex);
+        if (first.empty()) {
+            first = r.url.substr(std::string("https://api.zotero.org/users/1/items/").size(), 8);
+            rig.stalls.insert(first);
+        }
+    };
+    rig.service->downloadKept();
+    std::vector<std::string> others;
+    // The round ends with only that one left; the row says so (not nothing, as if all were in).
+    REQUIRE(rig.waitUntil([&] {
+        auto st = rig.service->keptStatus("SHELF001");
+        return st && st->stalled == 1;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (const char* k : {"ATTA0001", "ATTB0001", "ATTD0001"})
+        if (k != first) others.push_back(k);
+    REQUIRE(others.size() == 2);
+    CHECK(rig.downloaded(others[0]));  // the others came in the same round
+    CHECK(rig.downloaded(others[1]));
+    CHECK_FALSE(rig.downloaded(first));
+    CHECK(rig.fetches(first) == 1);  // tried once this round, not over and over
+    // The next round (rebuilt from the library, as after a restart) asks for a new file first.
+    rig.book("BOOKE001", "ATTE0001", "SHELF001");
+    rig.syncAndWait();
+    REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTE0001") && rig.fetches(first) == 2; }));
+    const auto fetched = rig.fetchedCopy();
+    const auto e = std::find(fetched.begin(), fetched.end(), "ATTE0001");
+    const auto again = std::find(std::next(std::find(fetched.begin(), fetched.end(), first)), fetched.end(), first);
+    CHECK(e < again);
+    rig.stall(first, false);  // the line is good again: it comes in
+    rig.syncAndWait();
+    CHECK(rig.waitUntil([&] { return rig.downloaded(first); }));
+}
+
+TEST_CASE("sync service: a book's download says why it waits when Zotero asks it to") {
+    KeptRig rig;
+    std::atomic<bool> once{true};
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (r.url.find("/items/ATTC0001/file") != std::string::npos && once.exchange(false))
+            return FakeHttp::status(429, {{"retry-after", "1"}});
+        return base(r);
+    };
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.service->openBook("BOOKC001", "ATTC0001");
+    auto events = rig.waitFor([](const SyncEvent& e) { return e.kind == SyncEvent::Kind::DownloadFinished; });
+    CHECK_FALSE(events.back().error);
+    bool told = false;
+    for (const auto& e : events)
+        told = told || (e.kind == SyncEvent::Kind::DownloadProgress && e.error &&
+                        e.error->message.rfind("Zotero asks to wait until ", 0) == 0);
+    CHECK(told);
+}
+
+TEST_CASE("kept: files from Zotero storage aren't asked for while Zotero asked for quiet") {
+    KeptRig rig;
+    rig.startOnZotero();
+    rig.syncAndWait();
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.setMetaValue("zoteroWaitUntil", std::to_string(rig.wallMs + 3600 * 1000));
+    }
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rig.fetchedCopy().empty());
+    rig.wallMs += int64_t{3601} * 1000;
+    rig.service->downloadKept();
+    CHECK(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
+}
+
+TEST_CASE("sync service: a stored Zotero wait months away is no wait (a clock that was ahead)") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.setMetaValue("zoteroWaitUntil", std::to_string(rig.wallMs + int64_t{90} * 24 * 3600 * 1000));
+    }
+    rig.service->syncNow();
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK_FALSE(events.back().error);
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.metaValue("zoteroWaitUntil").empty());  // cleared, not kept
+}
+
+TEST_CASE("sync service: a Zotero wait asked for is stored at most a day") {
+    Rig rig;
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (r.url.rfind("https://api.zotero.org/", 0) == 0) return FakeHttp::status(429, {{"retry-after", "9999999"}});
+        return base(r);
+    };
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    const int64_t until = std::stoll(ui.metaValue("zoteroWaitUntil"));
+    CHECK(until <= rig.wallMs + int64_t{24} * 3600 * 1000);
+    CHECK(until > rig.wallMs);
+}
+
+TEST_CASE("kept: a stalled file no longer kept, or gone, is off the stalled list") {
+    KeptRig rig;
+    rig.startOnZotero();
+    rig.syncAndWait();
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.setMetaValue("keptStalled", R"({"GONE0001": 1, "ATTC0001": 1})");  // gone; not in a kept collection
+    }
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
+    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.metaValue("keptStalled") == "{}");
 }

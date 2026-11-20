@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "store/db.h"
 #include "store/library.h"
 
@@ -364,7 +365,7 @@ TEST_CASE("groups: plugin changes go to their target's library; read-only groups
 }
 
 TEST_CASE("groups: a schema 11 database gains libraries; its rows are My Library's") {
-    const auto path = fs::temp_directory_path() / "zk-test-groups-v11.db";
+    const auto path = test::uniqueTempPath("zk-test-groups-v11", ".db");
     fs::remove(path);
     {
         Db db = Db::open(path.string());

@@ -28,11 +28,15 @@ struct Rig {
     FakeNav nav{lib};
     FakeLipc lipc;
     std::unique_ptr<ReaderScreen> reader;
-    Rig() {
+    explicit Rig(int delayMs = 0) {
         fillFixtureLibrary(lib, 10);
         lipc.props["com.lab126.powerd flIntensity"] = "10";
-        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [delayMs] {
+            return std::make_unique<RenderWorker>([delayMs](DocType) {
+                auto e = std::make_unique<FakeEngine>();
+                e->delayMs = delayMs;
+                return std::unique_ptr<DocumentEngine>(std::move(e));
+            });
         }, 6, &lipc);
         nav.visible = reader.get();
         reader->onShow(nav);
@@ -145,4 +149,151 @@ TEST_CASE("reader menus match the reviewed golden") {
     Canvas c(1236, 1547);
     rig.reader->draw(c);
     test::checkGolden(c, "tests/golden/reader-menus.png");
+}
+
+TEST_CASE("reader menus fix: Go to page and the slider while the book re-paginates go there once it has") {
+    // Audit B8: both did nothing while the pages were being counted again.
+    Rig rig;
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;  // 100 pages → 75
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);  // page 51 of 100: the same place in 75 pages is page 38
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 20; ++i) rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->page() == 37);
+    CHECK(rig.reader->backLabel());  // a jump like any other: Back returns
+
+    Layout smaller = rig.reader->layout();
+    smaller.sizePt = 9;  // 75 → 100
+    rig.reader->applyLayout(smaller, rig.nav);
+    rig.openMenus();
+    const Rect s = ReaderMenus::sliderRect();
+    rig.reader->onGesture(rig.drag(GestureType::DragStart, {s.x + 10, s.y + s.h / 2}), rig.nav);
+    rig.reader->onGesture(rig.drag(GestureType::DragEnd, {s.x + s.w / 2, s.y + s.h / 2}), rig.nav);  // page 38 of 75
+    CHECK(rig.waitPage(50));
+}
+
+TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when the book's sync fails, and says why") {
+    // Audit B8: only AnnotationsReady ended it, and a failed download never sends one.
+    Rig rig;
+    rig.openMenus();
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);  // Sync
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent failed;
+    failed.kind = SyncEvent::Kind::DownloadFinished;
+    failed.itemKey = "IT000003";
+    failed.attachmentKey = "EP000003";
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", "test"};
+    rig.reader->onSyncEvent(failed, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    REQUIRE_FALSE(rig.nav.toasts.empty());
+    CHECK(rig.nav.toasts.back() == "No Wi-Fi.");
+
+    // The annotations' pull failing: also said.
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent ready;
+    ready.kind = SyncEvent::Kind::AnnotationsReady;
+    ready.attachmentKey = "EP000003";
+    ready.error = UserError{ErrorKind::NoWifi, "Zotero can't be reached.", "test"};
+    rig.reader->onSyncEvent(ready, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    CHECK(rig.nav.toasts.back() == "Zotero can't be reached.");
+
+    // Another book's answer leaves it.
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);
+    failed.attachmentKey = "EP000004";
+    rig.reader->onSyncEvent(failed, rig.nav);
+    CHECK(rig.reader->menus()->syncing());
+}
+
+TEST_CASE("reader menus fix: a page from before the re-layout doesn't take Go to page to the old count") {
+    // Audit B fix round 1: any Page ended the re-layout, also one posted before it began.
+    Rig rig(100);
+    rig.reader->onGesture(tapAt({1100, 700}), rig.nav);  // a turn ...
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));  // ... its page posted, not yet picked up
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;  // 100 pages → 75
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);  // page 51 of 100: page 38 of 75
+    rig.reader->onTick(rig.nav);  // the turn's page, laid out as before
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.reader->page() == 37);
+}
+
+TEST_CASE("reader menus fix: Back while the book re-paginates replaces a Go to page asked meanwhile") {
+    // Audit B fix round 1: back() left the waiting Go to page in place, which then won.
+    Rig rig;
+    FakeEngine probe;
+    rig.reader->jumpTo(probe.positionOfPage(40));
+    REQUIRE(rig.waitPage(40));
+    for (int i = 0; i < 20 && rig.reader->turning(); ++i) rig.reader->onTick(rig.nav);
+    REQUIRE(rig.reader->backLabel());
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);
+    rig.reader->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);  // Back, to page 1
+    CHECK(rig.waitPage(0));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.reader->page() == 0);
+}
+
+TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when Zotero asks to wait, and says until when") {
+    // Audit B fix round 1, item 5: chunk A's rate-limit give-up ends OpenBook's pull with a
+    // RateLimited error on AnnotationsReady (a file still to fetch: on DownloadFinished).
+    Rig rig;
+    rig.openMenus();
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);  // Sync
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent waiting;  // a rate-limit notice while the file waits: still syncing
+    waiting.kind = SyncEvent::Kind::DownloadProgress;
+    waiting.attachmentKey = "EP000003";
+    waiting.error = UserError{ErrorKind::RateLimited, "Zotero asks to wait until 14:05.", "test"};
+    rig.reader->onSyncEvent(waiting, rig.nav);
+    CHECK(rig.reader->menus()->syncing());
+    SyncEvent ready;
+    ready.kind = SyncEvent::Kind::AnnotationsReady;
+    ready.attachmentKey = "EP000003";
+    ready.error = waiting.error;
+    rig.reader->onSyncEvent(ready, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    CHECK(rig.nav.toasts.back() == "Zotero asks to wait until 14:05.");
+}
+
+TEST_CASE("reader menus fix: a corner tap during a re-layout doesn't bookmark where a jump then goes") {
+    // Audit B fix round 2: the remembered corner tap outlived Go to page and Back.
+    Rig rig;
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // the corner, mid re-layout
+    rig.reader->goToPage(50);  // then Go to page
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.lib.bookmarks("EP000003").empty());
+
+    // Back the same way.
+    REQUIRE(rig.reader->backLabel());
+    Layout smaller = rig.reader->layout();
+    smaller.sizePt = 9;
+    rig.reader->applyLayout(smaller, rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
+    CHECK(rig.waitPage(0));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.lib.bookmarks("EP000003").empty());
 }

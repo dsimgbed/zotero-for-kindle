@@ -61,15 +61,16 @@ struct Rig {
     ItemRow row;
     std::unique_ptr<ReaderScreen> reader;
 
-    explicit Rig(DocType type = DocType::Pdf, int page = 0, Rect box = {}) {
+    explicit Rig(DocType type = DocType::Pdf, int page = 0, Rect box = {}, int placeDelayMs = 0) {
         addFontDir("assets/fonts-device");
         fillFixtureLibrary(lib, 10);
         for (auto& a : lib.annotationsFor("EP000003")) lib.removeObject("annotation", a.key);
         row = *lib.rowFor("IT000003");
-        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [box] {
-            return std::make_unique<RenderWorker>([box](DocType) {
+        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [box, placeDelayMs] {
+            return std::make_unique<RenderWorker>([box, placeDelayMs](DocType) {
                 auto e = std::make_unique<FakeEngine>();
                 e->box = box;
+                e->placeDelayMs = placeDelayMs;
                 return std::unique_ptr<DocumentEngine>(std::move(e));
             });
         }, 6);
@@ -833,4 +834,28 @@ TEST_CASE("area: while an area is dragged only its thin edges are refreshed") {
     CHECK(fast >= 4);
     rig.display.touch(TouchEvent::Type::Up, kBlankFar, rig.now);
     REQUIRE(rig.run([&] { return rig.all().size() == 1; }));
+}
+
+TEST_CASE("area fix: an area drawn just before the book closes is still saved") {
+    // Audit B2: closing waited for handwriting only.
+    Rig rig(DocType::Pdf, 0, {}, 150);
+    rig.longPressDrag(kBlank, kBlankFar, false);
+    REQUIRE(rig.waitFor([&] { return rig.reader->drawnArea().has_value(); }));
+    rig.gesture(GestureType::DragEnd, kBlankFar, kBlank);
+    rig.reader->onClose(rig.nav);  // Back, or the app closing
+    CHECK(rig.areas().size() == 1);
+}
+
+TEST_CASE("area fix: an area the close can't wait for any longer is said to be lost") {
+    // Audit B fix round 1: it vanished with only a log line.
+    Rig rig(DocType::Pdf, 0, {}, 400);
+    rig.longPressDrag(kBlank, kBlankFar, false);
+    REQUIRE(rig.waitFor([&] { return rig.reader->drawnArea().has_value(); }));
+    rig.gesture(GestureType::DragEnd, kBlankFar, kBlank);
+    rig.reader->flushInk(rig.nav, 50);
+    REQUIRE_FALSE(rig.nav.toasts.empty());
+    CHECK(rig.nav.toasts.back() == "An area or note couldn't be saved.");
+    const size_t toasts = rig.nav.toasts.size();
+    rig.reader->onClose(rig.nav);  // the close's own flush, after the menus' Back: said once
+    CHECK(rig.nav.toasts.size() == toasts);
 }

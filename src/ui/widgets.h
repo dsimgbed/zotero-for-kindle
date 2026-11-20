@@ -29,7 +29,9 @@ std::string itemRowMeta(const ItemRow&);
 
 // The Continue card: cover on the left, `label` (the kicker, "CONTINUE READING"; none: the title
 // moves up), title, byline, progress bar and `meta` on the right. The cover is `r.h` tall, 290 wide.
-void drawItemCard(cairo_t*, Rect, const ItemRow&, const std::string& label, const std::string& meta);
+// A `status` (download progress or an error, as a row's) shows in place of `meta`.
+void drawItemCard(cairo_t*, Rect, const ItemRow&, const std::string& label, const std::string& meta,
+                  const std::string& status = {});
 // The card's meta line: "13% · 3 highlights · opened today"; "new" / "2 highlights · new" before it was opened.
 // openedMs 0: never opened.
 std::string cardMetaText(const ItemRow&, int highlights, int64_t openedMs, int64_t nowMs);

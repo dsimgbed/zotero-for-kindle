@@ -37,13 +37,15 @@ public:
     // Home gives up on the body (it failed, the plugin closed it, no tree in time): it goes, and
     // Home shows its built-in body until the next shown().
     virtual void drop(Nav&) = 0;
+    // Home is no longer the visible screen (the body stays: it may show again).
+    virtual void hidden() {}
 };
 
 struct HomeActions {
     std::function<void()> openSearch;
     std::function<void()> openSettings;
     std::function<void(const ItemRow&)> openItem;
-    StatusFn status;  // download progress/errors for the Recent rows
+    StatusFn status;  // download progress/errors for the card and the Recent rows
     // "Version X is available" (UpdateNotice): the version, asked on show and every tick (so it
     // must be cheap: UpdateNotice reads the library only when the updater has news).
     std::function<std::optional<std::string>()> updateNotice;
@@ -65,6 +67,9 @@ public:
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
+    void onHide(Nav&) override {
+        if (link_) link_->hidden();
+    }
     void onTick(Nav&) override;
 
     // With no kept tree, how long the plugin's body may take to its first tree before Home gives up on it.
@@ -119,6 +124,7 @@ private:
     Content content() const;
     void pluginSyncEvent(const SyncEvent&, PluginBody&, bool headerChanged, const Content& shown, Nav&);
     Rect bannerRect() const;
+    std::vector<Rect> downloadRects(const SyncEvent&) const;  // the card and rows showing that download's item
     bool bannerShown() const {
         return status_.hasError() || safeModeBannerText().has_value() || updateBannerText().has_value();
     }

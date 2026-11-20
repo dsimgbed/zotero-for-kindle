@@ -32,6 +32,18 @@ int64_t versionOf(const json& obj) {
     return obj.contains("version") && obj["version"].is_number_integer() ? obj["version"].get<int64_t>() : 0;
 }
 
+// A title short enough for a toast: at most kMax bytes (never inside a UTF-8 character), with "…".
+std::string shortTitle(std::string t) {
+    constexpr size_t kMax = 40;
+    if (t.empty()) return "Untitled";
+    if (t.size() <= kMax) return t;
+    size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(t[cut]) & 0xC0) == 0x80) --cut;
+    t.resize(cut);
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    return t + "\u2026";
+}
+
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -193,7 +205,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (listing->notModified) {
             rep.toVersion = from;
             const bool catchUp = lib_.backfillPending(libId_, "notes") || lib_.backfillPending(libId_, "attachmentTitles") ||
-                                 !refetch_.empty() || (allOffline && lib_.annotationsVersion(libId_) < from);
+                                 !lib_.refetchQueue(libId_).empty() || (allOffline && lib_.annotationsVersion(libId_) < from);
             if (!catchUp) return;  // nothing changed: no further requests
             // Something of its own to catch up on: the listings as usual (without the condition).
             listing = api_.versions(kind, phase.since, &err, phase.itemType);
@@ -242,11 +254,12 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         lib_.clearBackfill(libId_, "attachmentTitles");
     }
 
-    if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
-        std::vector<std::string> keys;
-        keys.swap(refetch_);
+    // Zotero's copies of annotations whose Kindle edits became conflicts; off the queue only once
+    // they are in (one deleted on Zotero meanwhile simply doesn't come).
+    if (const std::vector<std::string> keys = lib_.refetchQueue(libId_); !keys.empty()) {
         refetched_.insert(keys.begin(), keys.end());
         if (!fetchAndApply("items", "annotations", keys, rep, progress)) return;
+        lib_.refetchDone(keys);
     }
     auto gone = api_.deleted(from, &err);
     if (!gone) return void(rep.error = err);
@@ -503,7 +516,10 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                     ++rep.annotations;
                     break;
                 }
-                if (local->dirty && version > local->version) {
+                if (local->dirty && version > local->version && sameContent(*local, incoming)) {
+                    // Our edit landed although its answer was lost (or both sides made the same
+                    // change): Zotero's copy is ours already, nothing to keep or send.
+                } else if (local->dirty && version > local->version) {
                     // Edited on both sides: Zotero's version wins, the Kindle edit is kept as a conflict.
                     AnnotationRecord mine = *local;
                     mine.key = newLocalKey();
@@ -544,7 +560,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
     lib_.setObjectVersion(key, version);
 }
 
-int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
+int SyncEngine::conflictUnsynced(const std::string& attachmentKey, bool refetch) {
     int n = 0;
     for (auto a : lib_.annotationsFor(attachmentKey)) {
         if (!a.dirty || a.conflict) continue;
@@ -561,7 +577,7 @@ int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
             lib_.upsertAnnotation(mine);
             lib_.removeObject("annotation", a.key);
             lib_.setObjectVersion(a.key, 0);
-            refetch_.push_back(a.key);
+            if (refetch) lib_.queueRefetch(a.key, libId_);
         } else {
             a.dirty = false;
             a.conflict = true;
@@ -598,8 +614,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         return;
     }
     if (auto att = lib_.attachment(key)) {
-        rep.conflicts += conflictUnsynced(key);
-        refetch_.clear();  // the file is gone from Zotero, and its annotations with it
+        rep.conflicts += conflictUnsynced(key, false);  // the file is gone from Zotero, and its annotations with it
         for (const auto& a : lib_.annotationsFor(key))
             if (!a.conflict) {
                 if (collecting_) pulled_.annotationRemoved(plugins::annotationRef(lib_, a));
@@ -614,6 +629,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         }
         return;
     }
+    lib_.refetchDone({key});  // an annotation still to come again, deleted on Zotero meanwhile
     const bool known = lib_.objectVersion(key) > 0;
     if (lib_.zoteroNote(key)) lib_.removeObject("note", key);  // also one a plugin is deleting
     if (known) ++rep.itemsRemoved;  // notes count too; they share the key space
@@ -707,9 +723,20 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
                 log(LogLevel::Warn, "sync: read tag of %s blocked by the write guard; next time", mark.itemKey.c_str());
                 break;
             }
-            if (!res || !res->failed.empty()) {
+            if (!res) {
                 rep.error = err;
                 return false;
+            }
+            if (!res->failed.empty()) {
+                // What was sent is refused (400/413), and would be again: the mark goes, so the
+                // item reads as Zotero has it, and the other marks and later pushes still go. The
+                // user hears why (a notice, not an error).
+                log(LogLevel::Warn, "sync: read tag of %s refused by Zotero (%s); mark dropped", mark.itemKey.c_str(),
+                    res->failed.begin()->second.c_str());
+                rep.notices.push_back("Zotero refused the read tag on \u201c" + shortTitle(item->title) +
+                                      "\u201d: " + res->failed.begin()->second);
+                lib_.clearReadMark(mark);
+                break;
             }
             if (res->gone) {  // deleted in Zotero meanwhile: the next pull removes it here too
                 lib_.clearReadMark(mark);

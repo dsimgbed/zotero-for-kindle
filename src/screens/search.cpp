@@ -51,7 +51,17 @@ std::vector<Rect> SearchScreen::recentRects() const {
     return out;
 }
 
-void SearchScreen::onSyncEvent(const SyncEvent& e, Nav& nav) { list_.onDownloadEvent(e, areaCache_, nav); }
+void SearchScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    list_.onDownloadEvent(e, areaCache_, nav);
+    // A sync may have deleted, changed or added items that match: the same search again, on the same page.
+    // Repainted only if that changed something (most periodic syncs change nothing).
+    if (e.kind == SyncEvent::Kind::SyncFinished && !searched_.empty()) {
+        const auto rows = list_.rows();
+        const int64_t total = list_.pager().total();
+        list_.refresh(nav.library());
+        if (list_.rows() != rows || list_.pager().total() != total) nav.damage(areaCache_, Waveform::Quality);
+    }
+}
 
 Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, W() - 2 * kMargin - 70, 92}; }
 

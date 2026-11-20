@@ -332,9 +332,10 @@ bool ReaderScreen::refuseReadOnly(Nav& nav, bool always) {
 }
 
 void ReaderScreen::onShow(Nav& nav) {
+    notePicking_ = false;
     readLibrary(nav);
     if (worker_) {  // back from a pushed panel: the book stays open (its notes may have changed)
-        refreshHighlights(nav);
+        sendAnnotations(nav, true);  // unchanged: the app's redraw is the only repaint
         return;
     }
     twoColumnsSetting_ = loadSettings(nav.library()).twoColumns;
@@ -363,6 +364,7 @@ void ReaderScreen::onShow(Nav& nav) {
     sendBookmarks();
     if (openAt_) {
         turning_ = true;
+        turnTarget_ = -1;
         worker_->showAnnotation(*openAt_);
         openAt_.reset();
     }
@@ -422,6 +424,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 break;
             case RenderEvent::Kind::Error:
                 error_ = e.error;
+                bookmarkArriving_ = false;  // no page arrives
                 if (visible) nav.redrawAll(Waveform::Quality);
                 break;
             case RenderEvent::Kind::SearchResults:
@@ -448,20 +451,38 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Placed: {
                 if (e.requestId != placeId_) break;
                 placeId_ = 0;
+                const bool again = std::exchange(placingAgain_, false);  // after a re-layout: nothing to compare
                 if (e.page < 0) {  // can't be placed here: nothing is sent until the reader reads on
-                    unplaced_ = true;
+                    if (!again) {
+                        unplaced_ = true;
+                    } else if (question_) {  // not in the new pages: no Go, the banner's place is gone with it
+                        question_.reset();
+                        unplaced_ = true;
+                        if (visible && !menus_) nav.damage(positionBannerRect(), Waveform::Quality);
+                    }
                     break;
                 }
                 remotePage_ = e.page / std::max(1, e.viewsPerPage);  // a PDF page, whatever the View
+                const int pct = static_cast<int>(std::lround(e.progress * 100));
+                const std::string text = (type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
+                                                                : "Your computer is at " + std::to_string(pct) + "%" +
+                                                                      (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".") +
+                                         "\nGo there?";
+                if (again) {
+                    if (question_ && question_->text != text) {  // the new pages' percentage and chapter
+                        question_->text = text;
+                        if (visible && !menus_) nav.damage(positionBannerRect(), Waveform::Ui);
+                    }
+                    // The re-layout's page named its start: on Zotero's page, Zotero's exact place it is.
+                    if (remotePage_ == page_ / views_ && !web_ && !preview_)
+                        nav.library().setLocalPosition(row_.attachmentKey, remoteValue_);
+                    break;
+                }
                 if (remotePage_ == page_ / views_) {  // the page we're on: agreed, nothing to ask
                     nav.library().answerRemotePosition(row_.attachmentKey, true, remoteVersion_);
                     break;
                 }
-                const int pct = static_cast<int>(std::lround(e.progress * 100));
-                std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
-                                                         : "Your computer is at " + std::to_string(pct) + "%" +
-                                                               (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".";
-                question_ = PositionQuestion{remotePage_, text + "\nGo there?"};
+                question_ = PositionQuestion{text};
                 if (visible) nav.damage(positionBannerRect(), Waveform::Ui);
                 break;
             }
@@ -475,6 +496,8 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
+                // The re-layout's page (or a later one): one posted before it keeps the old numbering.
+                const bool relaid = layoutPending_ && e.layoutId == layoutId_;
                 if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_ || note_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
@@ -508,8 +531,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 progress_ = e.progress;
                 wordsLeft_ = e.wordsLeftInChapter;
                 position_ = e.position;
-                turning_ = false;
-                layoutPending_ = false;
+                if (turnTarget_ < 0 || e.page == turnTarget_) {  // else posted before a later turn overtook it
+                    turning_ = false;
+                    turnTarget_ = -1;
+                }
+                if (relaid) layoutPending_ = false;
                 if (preview_) {
                     if (preview_->savePosition) preview_->savePosition(position_.value);
                 } else {
@@ -529,6 +555,20 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 if (!placeAfterFirstPage_.empty()) {
                     placeId_ = worker_->placeZotero(std::move(placeAfterFirstPage_));
                     placeAfterFirstPage_.clear();
+                }
+                if (relaid && pendingGo_) {  // Go to page or the slider, asked while the pages were counted again
+                    const PendingGo go = *pendingGo_;
+                    pendingGo_.reset();
+                    // A PDF page stays that page (in its views now); a book's page, the same place in it.
+                    const int to = type_ == DocType::Pdf ? go.page / go.views * views_
+                                   : go.count > 1     ? static_cast<int>(std::lround(static_cast<double>(go.page) *
+                                                                                      std::max(0, pageCount_ - 1) / (go.count - 1)))
+                                                      : 0;
+                    turnTo(std::clamp(to, 0, std::max(0, pageCount_ - 1)));
+                }
+                if (bookmarkArriving_ && !turning_ && !layoutPending_ && !position_.value.empty()) {
+                    bookmarkArriving_ = false;
+                    if (!bookmarked()) toggleBookmark(nav);  // a tap made blind adds, never removes
                 }
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
@@ -552,7 +592,8 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     linkId_ = 0;
     commitInk();
-    const int target = page_ + delta;
+    // A turn while one is on its way goes on from the page it is going to.
+    const int target = (turning_ && turnTarget_ >= 0 ? turnTarget_ : page_) + delta;
     if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !finishedSent_ && !preview_) {
         finishedSent_ = true;  // once a reading, however often the last page is swiped on
         plugins::bookEvent(nav.plugins(), nav.library(), "bookFinished", row_.key, row_.attachmentKey);
@@ -567,19 +608,24 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     // (Also while Zotero's position is still being placed, or can't be.)
     if (question_) {
         answerPosition(false, nav);
-    } else if (unplaced_ || placeId_ || !placeAfterFirstPage_.empty()) {
+    } else if (!placingAgain_ && (unplaced_ || placeId_ || !placeAfterFirstPage_.empty())) {
         unplaced_ = false;
         placeId_ = 0;
         placeAfterFirstPage_.clear();
         nav.library().answerRemotePosition(row_.attachmentKey, false, remoteVersion_);
     }
     turning_ = true;
+    turnTarget_ = target;
     worker_->show(target);
 }
 
 void ReaderScreen::turnTo(int page) {
     dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
-    if (!worker_ || layoutPending_) return;
+    if (!worker_) return;
+    if (layoutPending_) {  // counted in pages about to change: gone to once the new ones are counted
+        pendingGo_ = PendingGo{page, pageCount_, views_};
+        return;
+    }
     linkId_ = 0;
     markJumpOrigin();
     commitInk();
@@ -623,7 +669,22 @@ void ReaderScreen::onResize(Nav& nav) {
     if (!worker_) return;
     layoutPending_ = true;
     for (auto& b : back_) b.page = -1;  // turned: pages are counted again
-    worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+    turnTarget_ = -1;  // setLayout drops a turn on its way: the re-layout's page ends it
+    placeRemoteAgain();
+    layoutId_ = worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+}
+
+void ReaderScreen::placeRemoteAgain() {
+    if (remoteValue_.empty() || !placeAfterFirstPage_.empty()) return;  // asked once the new pages show anyway
+    if (placeId_) {  // its answer counts the old pages: ask again (as what it was, first or again)
+        placeId_ = 0;
+        placeAfterFirstPage_ = remoteValue_;
+        return;
+    }
+    if (remotePage_ < 0) return;
+    remotePage_ = -1;
+    placingAgain_ = true;
+    placeAfterFirstPage_ = remoteValue_;
 }
 
 void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
@@ -645,9 +706,11 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
     layout_ = l;
+    turnTarget_ = -1;  // setLayout drops a turn on its way: the re-layout's page ends it
     for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
+    placeRemoteAgain();
     if (!preview_) saveLayout(nav.library(), row_.key, l);  // a preview's lasts while it is open
-    worker_->setLayout(l, position_);
+    layoutId_ = worker_->setLayout(l, position_);
 }
 
 void ReaderScreen::openMenus(Nav& nav) {
@@ -727,9 +790,12 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
-        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
-            !layoutPending_ && !position_.value.empty())
-            return toggleBookmark(nav);
+        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos))) {
+            // Mid-turn or re-laying out, the page under the corner is going: the one that arrives is marked.
+            if (turning_ || layoutPending_) bookmarkArriving_ = true;
+            else if (!position_.value.empty()) toggleBookmark(nav);
+            return;
+        }
         if (!(question_ && positionBannerRect().contains(g.pos)) && tapLink(g.pos, nav)) return;
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
@@ -1131,7 +1197,7 @@ void ReaderScreen::draw(Canvas& canvas) {
             if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
         for (const auto& [id, s] : inkSent_)
             if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
-        strokePaths(cr, inkPending_, inkWidthPx());
+        if (inkPage_ == page_) strokePaths(cr, inkPending_, inkWidthPx());
         if (inkDown_) strokePaths(cr, {inkStroke_}, inkWidthPx());
         cairo_restore(cr);
     }
@@ -1248,6 +1314,9 @@ void ReaderScreen::draw(Canvas& canvas) {
 // --- Getting around: Back, bookmarks, Go to ---------------------------------------------------
 
 void ReaderScreen::markJumpOrigin() {
+    pendingGo_.reset();  // this jump instead
+    bookmarkArriving_ = false;  // a corner tap was for the page a turn brought, not where this jump goes
+    turnTarget_ = -1;  // a jump: where it lands is the worker's to say
     turnsSinceJump_ = 0;
     if (page_ < 0 || position_.value.empty() || layoutPending_) return;
     arriving_ = true;
@@ -1271,8 +1340,11 @@ void ReaderScreen::back(Nav& nav) {
     const BackEntry to = back_.back();
     back_.pop_back();
     turnsSinceJump_ = 0;
+    pendingGo_.reset();  // Back instead
+    bookmarkArriving_ = false;
     commitInk();
     turning_ = true;
+    turnTarget_ = -1;
     // The page (the view, in PDF column view) while its layout lasts; else the position.
     if (to.page >= 0) worker_->show(to.page);
     else worker_->showPosition(to.pos);
@@ -1439,11 +1511,12 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (go && worker_) {
         dropArea();
         markJumpOrigin();
+        commitInk();  // its strokes belong to the page it leaves
         turning_ = true;
-        worker_->show(question_->page * views_);  // its first view (PDF column view)
+        worker_->showZotero(remoteValue_);  // placed in the pages as they are now (a PDF page: its first view)
     }
     question_.reset();
-    nav.damage(positionBannerRect(), Waveform::Ui);
+    nav.damage(positionBannerRect(), Waveform::Quality);  // the page under it, without ghosts
 }
 
 // --- Areas ---------------------------------------------------------------------------------
@@ -1508,9 +1581,9 @@ void ReaderScreen::endArea(Point to, Nav& nav) {
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
 }
 
-void ReaderScreen::dropArea() {
+void ReaderScreen::dropArea(bool keepNotePopup) {
     areaArmed_ = areaDrawing_ = areaPen_ = noteArmed_ = false;
-    notePopup_.reset();
+    if (!keepNotePopup) notePopup_.reset();
     if (selecting_ && !selection_) selecting_ = false;  // a long press still waiting can't start one later
 }
 
@@ -1649,6 +1722,7 @@ void ReaderScreen::onNotePopup(const Gesture& g, Nav& nav) {
         return;
     }
     if (act == NotePopup::Action::AddTag) {
+        notePicking_ = true;
         pickAnnotationTag(nav, [this, n = &nav, key = notePopup_->key()](const std::string& tag) {
             const auto tags = setAnnotationTag(*n, key, tag, true);
             if (tags) n->sync().pushSoon();
@@ -1866,14 +1940,26 @@ void ReaderScreen::flushInk(Nav& nav, int64_t timeoutMs) {
     if (inkFlushGaveUp_) timeoutMs = 0;
     using clock = std::chrono::steady_clock;
     const auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+    // Areas and notes just made are placed by the worker too: lost the same way if not waited for.
+    auto waiting = [&] { return inkSent_.size() + areaSent_.size() + noteSent_.size(); };
     pumpEvents(nav, false);
-    while (!inkSent_.empty() && clock::now() < deadline) {
+    while (waiting() > 0 && clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        pumpEvents(nav, false);  // the Ink answers make the annotations
+        pumpEvents(nav, false);  // the Ink and Area answers make the annotations
     }
-    if (!inkSent_.empty()) {
-        inkFlushGaveUp_ = true;
-        log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
+    if (waiting() > 0) {
+        inkFlushGaveUp_ = true;  // the close's second flush doesn't wait again
+        // Each kind lost is told once: a later flush can lose a kind the first didn't.
+        if (!inkSent_.empty() && !toldInkLost_) {
+            toldInkLost_ = true;
+            log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
+            nav.toast("Some handwriting couldn't be saved.");
+        }
+        if ((!areaSent_.empty() || !noteSent_.empty()) && !toldAreaLost_) {
+            toldAreaLost_ = true;
+            log(LogLevel::Warn, "reader: areas or notes not placed in time, %zu request(s) lost", areaSent_.size() + noteSent_.size());
+            nav.toast("An area or note couldn't be saved.");  // as onArea's failures
+        }
     }
 }
 

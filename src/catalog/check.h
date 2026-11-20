@@ -9,6 +9,7 @@
 #include "catalog/registry.h"
 #include "net/http.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -42,7 +43,10 @@ struct Cache {
 
 std::string cacheDir(const std::string& pluginsDir);  // <pluginsDir>/.catalog
 
-Cache loadCache(const std::string& pluginsDir);  // missing/bad files → empty parts
+// Missing/bad files → empty parts. With `registryKey`, the registry is kept only if registry.json.sig
+// still verifies it (what the catalog trusts: author keys, revocations); without, as it is (for
+// writing provenance and latest releases back).
+Cache loadCache(const std::string& pluginsDir, const std::array<uint8_t, 32>* registryKey = nullptr);
 // Writes latest.json and installed.json (tmp + rename each). The registry files are written by
 // runCheck from the verified bytes, so their signature stays checkable.
 bool saveCache(const std::string& pluginsDir, const Cache&);

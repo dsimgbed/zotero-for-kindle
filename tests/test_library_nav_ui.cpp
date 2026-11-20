@@ -17,6 +17,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+
+#include <unistd.h>
 
 using namespace zk;
 using namespace zk::test;
@@ -414,4 +417,89 @@ TEST_CASE("library nav ui: the real library's jump letters, and a swipe and the 
             CHECK_FALSE(screen.jumpSheet());
         }
     }
+}
+
+TEST_CASE("library nav ui fix: removing the last page's books from Kindle updates the count and the page") {
+    Rig rig;
+    LibraryScreen screen(rig.open);
+    screen.onShow(rig.nav);
+    // One page and two books more on this Kindle.
+    const int keep = screen.list().rowsPerPage() + 2;
+    int kept = 0;
+    char tmpl[] = "/tmp/zk-remove-XXXXXX";
+    const std::filesystem::path dir = mkdtemp(tmpl);
+    for (const ItemRow& r : everything(rig.lib, ListQuery{}))
+        if (!r.attachmentKey.empty() && kept < keep) {
+            const auto file = dir / r.attachmentKey / "book.epub";
+            std::filesystem::create_directories(file.parent_path());
+            std::ofstream(file) << "x";
+            rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, file.string());
+            ++kept;
+        }
+    REQUIRE(kept == keep);
+    LibraryView v;
+    v.downloaded = true;
+    v.sort = SortBy::Recent;  // no headings: rowsPerPage rows a page
+    screen.setView(v, rig.nav);
+    const int64_t total = screen.list().pager().total();
+    REQUIRE(screen.list().pager().pages() >= 2);
+    const int last = screen.list().pager().pages() - 1;
+    REQUIRE(screen.list().goToPage(last, rig.lib));
+    const auto onLast = static_cast<int64_t>(screen.list().rows().size());
+    const Rect area = LibraryScreen::listArea();
+    for (int64_t i = 0; i < onLast; ++i) {
+        const Rect row = screen.list().rowRects(area)[0];
+        screen.onGesture(Gesture{GestureType::LongPress, row.center(), row.center()}, rig.nav);
+        REQUIRE(screen.list().sheet());
+        rig.nav.damages.clear();
+        for (int t = 0; t < 2; ++t) screen.onGesture(tapAt(screen.list().sheet()->removeRect(area).center()), rig.nav);
+        // The filter line's "N items" is repainted with the list.
+        bool line = false;
+        for (const auto& d : rig.nav.damages) line |= d.rect.contains(LibraryScreen::filterLineRect().center());
+        CHECK(line);
+        screen.onGesture(tapAt({area.w / 2, area.y + 10}), rig.nav);  // close the sheet
+    }
+    CHECK(screen.list().pager().total() == total - onLast);
+    CHECK(screen.filterLine() == std::to_string(total - onLast) + " items");
+    CHECK(screen.list().pager().page() == last - 1);  // the emptied page is gone: its neighbour shows
+    CHECK_FALSE(screen.list().rows().empty());
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("library nav ui fix: in Downloaded, a book downloaded in the background appears and is counted") {
+    Rig rig;
+    char tmpl[] = "/tmp/zk-kept-XXXXXX";
+    const std::filesystem::path dir = mkdtemp(tmpl);
+    auto keep = [&](const ItemRow& r) {
+        const auto file = dir / r.attachmentKey / "book.epub";
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream(file) << "x";
+        rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, file.string());
+    };
+    std::vector<ItemRow> withFile;
+    for (const ItemRow& r : everything(rig.lib, ListQuery{}))
+        if (!r.attachmentKey.empty()) withFile.push_back(r);
+    REQUIRE(withFile.size() >= 2);
+    keep(withFile[0]);
+    LibraryScreen screen(rig.open);
+    screen.onShow(rig.nav);
+    LibraryView v;
+    v.downloaded = true;
+    screen.setView(v, rig.nav);
+    REQUIRE(screen.list().pager().total() == 1);
+    // A kept collection's file comes down; it wasn't on the page, so no row of it was there.
+    keep(withFile[1]);
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::DownloadFinished;
+    e.itemKey = withFile[1].key;
+    e.attachmentKey = withFile[1].attachmentKey;
+    rig.nav.damages.clear();
+    screen.onSyncEvent(e, rig.nav);
+    CHECK(screen.list().pager().total() == 2);
+    CHECK(screen.filterLine() == "2 items");
+    CHECK(screen.list().rows().size() == 2);
+    bool listed = false;
+    for (const auto& d : rig.nav.damages) listed |= d.rect.contains(LibraryScreen::listArea().center());
+    CHECK(listed);
+    std::filesystem::remove_all(dir);
 }

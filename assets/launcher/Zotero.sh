@@ -11,13 +11,15 @@
 #                  backup beside it, $ZK_CONFIG.old (kept off the USB drive, mode 0600)
 #   exit code 75   the app installed an update: start it again
 # installing: the swap was interrupted. tried: the new version ran and never confirmed (the app
-# confirms by deleting update/state once it has drawn its first screen). Both: roll back.
+# confirms by deleting update/state after 60 s in front, or at a clean exit). Both: roll back.
 ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
 ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
 ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
 ZK_PIDFILE=${ZK_PIDFILE:-/tmp/zotero.pid}  # the running app's pid; /tmp is emptied at boot
+ZK_LOCK=${ZK_LOCK:-/tmp/zotero.lock}       # a link to "<pid> <file name>" of the launcher that runs the app
+ZK_PROC=${ZK_PROC:-/proc}
 cd "$ZK_HOME" || exit 1
 mkdir -p log
 U=update
@@ -32,11 +34,59 @@ running_pid() {
     pid=
     read -r pid < "$ZK_PIDFILE" 2>/dev/null
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
-    if [ -r "/proc/$pid/cmdline" ]; then
-        tr '\0' ' ' < "/proc/$pid/cmdline" | grep -q 'bin/zotero' || return 1
+    if [ -r "$ZK_PROC/$pid/cmdline" ]; then
+        tr '\0' ' ' < "$ZK_PROC/$pid/cmdline" | grep -q 'bin/zotero' || return 1
     fi
     echo "$pid"
 }
+# One launcher at a time, for its whole loop: between two runs of the app (a restart, a rollback)
+# there is no app pid to find, and a second launcher there would start a second copy over a
+# half-restored install. The lock is a symlink naming the holder's pid and file name, made in one
+# step. One whose launcher is gone (a power cut, a kill) is taken over: where /proc shows that pid
+# running something that isn't the file it named, the pid was reused. The name is the holder's own
+# ($0), whatever the scriptlet runner called it; with none recorded, a live pid holds.
+launcher_alive() {
+    kill -0 "$1" 2>/dev/null || return 1
+    if [ -n "$2" ] && [ -r "$ZK_PROC/$1/cmdline" ]; then
+        tr '\0' ' ' < "$ZK_PROC/$1/cmdline" | grep -qF "$2" || return 1
+    fi
+}
+me="$$ $(basename "$0")"
+take_lock() {
+    mkdir -p "$(dirname "$ZK_LOCK")"
+    ln -s "$me" "$ZK_LOCK" 2>/dev/null && return 0
+    link=$(readlink "$ZK_LOCK" 2>/dev/null)
+    holder=${link%% *}
+    name=
+    [ "$link" != "$holder" ] && name=${link#* }
+    [ -n "$holder" ] && launcher_alive "$holder" "$name" && return 1
+    rm -f "$ZK_LOCK"
+    ln -s "$me" "$ZK_LOCK" 2>/dev/null
+}
+if ! take_lock; then
+    if pid=$(running_pid); then
+        kill -WINCH "$pid" 2>/dev/null
+        note "already running (pid $pid): brought to the front, no second copy"
+    else
+        note "another launcher (pid $holder) is starting the app: no second copy"
+    fi
+    exit 0
+fi
+# At every end of this launcher, a kill included: the lock goes, and once an app has been started
+# the Kindle may sleep again (the app's keep-awake, which its own signal path can't turn off).
+started=
+finish() {
+    if [ -n "$started" ]; then
+        command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
+    fi
+    [ "$(readlink "$ZK_LOCK" 2>/dev/null)" = "$me" ] && rm -f "$ZK_LOCK"
+    return 0
+}
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 if pid=$(running_pid); then
     # SIGWINCH asks the app to come to the front. An older app ignores it (the signal's default),
     # where SIGUSR1 would kill it: a new launcher can meet an old app around updates and rollbacks.
@@ -99,6 +149,7 @@ check_update() {
 }
 
 starts=0
+started=1
 while [ "$starts" -lt 5 ]; do
     starts=$((starts + 1))
     rotate_log
@@ -123,6 +174,4 @@ done
 if [ "$code" != 0 ] && [ "$code" != 75 ] && [ -e "$ZK_INK_MARK" ]; then
     DISPLAY=$ZK_DISPLAY ./bin/zotero --reset-system-ink >> log/zotero.log 2>&1
 fi
-# Whatever happened to the app, let the Kindle sleep again.
-command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
-exit 0
+exit 0  # finish: whatever happened to the app, the Kindle may sleep again

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_zotero.h"
 #include "net/write_guard.h"
 #include "store/db.h"
@@ -582,7 +583,7 @@ TEST_CASE("changes: what Zotero deletes ends the changes pending on it, as Refus
 }
 
 TEST_CASE("changes: a schema 7 database gains the change table and keeps its library") {
-    const auto path = std::filesystem::temp_directory_path() / "zk-test-changes-v7.db";
+    const auto path = test::uniqueTempPath("zk-test-changes-v7", ".db");
     std::filesystem::remove(path);
     {
         Db db = Db::open(path.string());

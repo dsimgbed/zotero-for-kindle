@@ -448,6 +448,38 @@ TEST_CASE("annotation tags: a sticky note's pop-up has the same tag row, with Ed
     CHECK(rig.reader->annotationEditor()->commenting());
 }
 
+TEST_CASE("annotation tags fix: + Tag on a sticky note's pop-up keeps the pop-up, with the tag") {
+    // Audit B3: the picker hides the reader (App::push → onHide), which dropped the pop-up.
+    ReaderRig rig(DocType::Pdf);
+    AnnotationRecord a;
+    a.key = "NOTETAG2";
+    a.parentKey = "EP000003";
+    a.type = "note";
+    a.color = "#ffd400";
+    a.comment = "check this";
+    a.pageLabel = "0";
+    a.version = 3;
+    a.position = json{{"fake", 0}, {"note", {820, 520}}}.dump();
+    rig.lib.upsertAnnotation(a);
+    rig.annotationsReady();
+    REQUIRE(rig.waitFor([&] { return rig.reader->highlights().size() == 2; }));
+    rig.tap({840, 540});
+    REQUIRE(rig.reader->notePopup());
+    rig.tap(rig.reader->notePopup()->tags().addRect().center());
+    TagPickerScreen* p = rig.picker();
+    rig.reader->onHide(rig.nav);  // as App::push does
+    type(*p, rig.nav, "urgent");
+    p->onKey({KeyEvent::Code::Return, ""}, rig.nav);
+    rig.reader->onShow(rig.nav);  // the picker popped
+    CHECK(rig.tags("NOTETAG2") == std::vector<std::string>{"urgent"});
+    REQUIRE(rig.reader->notePopup());
+    CHECK(rig.reader->notePopup()->key() == "NOTETAG2");
+    CHECK(rig.reader->notePopup()->tags().isOn("urgent"));
+    // Any other hide still closes it.
+    rig.reader->onHide(rig.nav);
+    CHECK_FALSE(rig.reader->notePopup());
+}
+
 TEST_CASE("annotation tags: book notes' editor has the tag row too") {
     ReaderRig rig;
     rig.remember({"method"});

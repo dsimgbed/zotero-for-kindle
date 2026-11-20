@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/document.h"
 #include "docs/engine_factory.h"
 
@@ -12,7 +13,7 @@ namespace {
 
 std::unique_ptr<DocumentEngine> open(DocType t, const std::string& path) {
     UserError err;
-    auto e = loadEngine(t, EngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}, &err);
+    auto e = loadEngine(t, EngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}, &err);
     REQUIRE_MESSAGE(e, err.details);
     REQUIRE(e->open(path, &err));
     return e;

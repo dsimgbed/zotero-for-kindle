@@ -2,6 +2,7 @@
 
 #include <glib.h>
 
+#include <algorithm>
 #include <map>
 
 #include "screens/collections.h"
@@ -38,15 +39,29 @@ void CollectionSearchScreen::onShow(Nav& nav) {
     nav.keyboard().show();
     const Rect kb = nav.keyboard().bounds();
     bottom_ = kb.empty() ? H() : kb.y;
+    page_ = std::min(page_, pages() - 1);
 }
+
+// All of them if they fit; else fewer, the page indicator under them.
+int CollectionSearchScreen::perPage() const {
+    const int room = bottom_ - (kHeaderH + 10);
+    const int all = std::max(1, room / kLineH);
+    if (static_cast<int>(shown_.size()) <= all) return all;
+    return std::max(1, (room - kPageIndicatorH) / kLineH);
+}
+
+int CollectionSearchScreen::pages() const {
+    const int n = static_cast<int>(shown_.size()), per = perPage();
+    return std::max(1, (n + per - 1) / per);
+}
+
+Rect CollectionSearchScreen::indicatorRect() const { return {0, bottom_ - kPageIndicatorH, W(), kPageIndicatorH}; }
 
 std::vector<Rect> CollectionSearchScreen::resultRects() const {
     std::vector<Rect> out;
-    for (size_t i = 0; i < shown_.size(); ++i) {
-        const int y = kHeaderH + 10 + static_cast<int>(i) * kLineH;
-        if (y + kLineH > bottom_) break;
-        out.push_back({kMargin, y, W() - 2 * kMargin, kLineH});
-    }
+    const size_t from = firstShown(), to = std::min(shown_.size(), from + static_cast<size_t>(perPage()));
+    for (size_t i = from; i < to; ++i)
+        out.push_back({kMargin, kHeaderH + 10 + static_cast<int>(i - from) * kLineH, W() - 2 * kMargin, kLineH});
     return out;
 }
 
@@ -54,6 +69,7 @@ void CollectionSearchScreen::search(Nav& nav) {
     pending_ = false;
     searched_ = field_.text();
     shown_.clear();
+    page_ = 0;
     const std::string q = folded(searched_);
     if (!q.empty()) {
         const auto all = nav.library().allCollections();
@@ -103,15 +119,25 @@ void CollectionSearchScreen::draw(Canvas& canvas) {
     centredText(cr, empty ? "Find a collection…" : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
                 {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
     const auto rects = resultRects();
-    for (size_t i = 0; i < rects.size(); ++i)
-        drawCollectionRow(cr, rects[i], shown_[i].path, shown_[i].entry.items, shown_[i].entry.hasChildren, false, "",
-                          shown_[i].entry.kept);
+    for (size_t i = 0; i < rects.size(); ++i) {
+        const Result& r = shown_[firstShown() + i];
+        drawCollectionRow(cr, rects[i], r.path, r.entry.items, r.entry.hasChildren, false, "", r.entry.kept);
+    }
+    if (pages() > 1) drawPageIndicator(cr, indicatorRect(), page_, pages());
     if (!searched_.empty() && shown_.empty())
         drawText(cr, "No collection called “" + searched_ + "”", {kSerif, 11, 400, false, kSecondary},
                  {kMargin, kHeaderH + 120, W() - 2 * kMargin, 100}, 2, Align::Center);
 }
 
 void CollectionSearchScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (g.type == GestureType::Swipe && (g.dir == Direction::Up || g.dir == Direction::Down)) {
+        const int to = page_ + (g.dir == Direction::Up ? 1 : -1);
+        if (to >= 0 && to < pages()) {
+            page_ = to;
+            nav.damage({0, kHeaderH, W(), bottom_ - kHeaderH}, Waveform::Quality);
+        }
+        return;
+    }
     if (g.type != GestureType::Tap) return;
     if (headerBackRect().contains(g.pos) && !SearchScreen::fieldRect().contains(g.pos)) return leave(nav);
     if (SearchScreen::fieldRect().contains(g.pos)) {
@@ -123,7 +149,7 @@ void CollectionSearchScreen::onGesture(const Gesture& g, Nav& nav) {
     for (size_t i = 0; i < rects.size(); ++i)
         if (rects[i].contains(g.pos)) {
             nav.keyboard().hide();
-            nav.push(std::make_unique<CollectionScreen>(shown_[i].entry, openItem_, status_));
+            nav.push(std::make_unique<CollectionScreen>(shown_[firstShown() + i].entry, openItem_, status_));
             return;
         }
 }

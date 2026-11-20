@@ -211,27 +211,44 @@ void WetInk::disconnect() {
     post(kDisconnect, 1);
     post(kWake, 1);
     stop_ = true;
+    post(kNews, 1);  // the ack thread waits on it: this is its wake to stop
     if (acker_.joinable()) acker_.join();
+    take(kNews, 0);  // ours, if a news of the handler's woke it first (semaphores outlive the app)
     connected_ = false;
     log(LogLevel::Info, "wet ink: disconnected");
 }
 
 // The handler waits for each stroke (and stroke context) to be taken before it moves on; we don't
 // need its copy (the app reads the pen itself), so every one is acknowledged at once.
+// The thread sleeps on the handler's news (sem 1); disconnect() posts one to stop it. It used to
+// wake every 200 ms, 5 times a second for the whole session, the background included. News is
+// recorded only at connect (sem 8, then sem 1: docs/scribe-pen.md); whether each stroke brings one
+// is unchecked, so the wait is at most kAckMaxMs: a stroke without news waits that long for its
+// ack (the handler's line pauses), and the first such is logged, to tell on a Scribe.
 void WetInk::ackLoop() {
+    constexpr int kAckMaxMs = 1000;
     struct {
         long type;
         unsigned char data[512];
     } reply;
+    bool warned = false;
     while (!stop_) {
-        take(kNews, 200);
+        const bool news = take(kNews, kAckMaxMs);
+        if (stop_) break;
+        int acked = 0;
         while (take(kStroke, 0)) {
             post(kStrokeDone, 1);
             post(kWake, 1);
+            ++acked;
         }
         while (take(kContext, 0)) {
             post(kContextDone, 1);
             post(kWake, 1);
+            ++acked;
+        }
+        if (!news && acked && !warned) {
+            warned = true;
+            log(LogLevel::Warn, "wet ink: a stroke came without news; acknowledged late");
         }
         while (take(kIdle, 0)) {
         }

@@ -240,11 +240,27 @@ TEST_CASE("navigation: the ribbon, Back and the pages match the reviewed goldens
 
 TEST_CASE("navigation fix: the corner during a page turn doesn't bookmark the page being left") {
     Rig rig;
+    FakeEngine probe;
     rig.r->onGesture(tapAt({1100, 700}), rig.nav);  // turning to page 1 ...
     rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // ... and the corner at once
     REQUIRE(rig.waitPage(1));
     for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
-    CHECK(rig.lib.bookmarks("EP000003").empty());
+    CHECK(rig.r->page() == 1);  // the corner is not a second turn (audit B, fix round 1)
+    // It marks the page that arrives.
+    const auto marks = rig.lib.bookmarks("EP000003");
+    REQUIRE(marks.size() == 1);
+    CHECK(marks[0].position == probe.positionOfPage(1).value);
+}
+
+TEST_CASE("navigation fix: the corner during a turn to a bookmarked page leaves its bookmark") {
+    Rig rig;
+    FakeEngine probe;
+    rig.lib.addBookmark("EP000003", {probe.positionOfPage(1).value, "", 1});
+    rig.r->onGesture(tapAt({1100, 700}), rig.nav);
+    rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);
+    REQUIRE(rig.waitPage(1));
+    for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
+    CHECK(rig.lib.bookmarks("EP000003").size() == 1);  // a tap made blind never removes one
 }
 
 TEST_CASE("navigation fix: a quick second tap on the corner never removes another page's bookmark") {

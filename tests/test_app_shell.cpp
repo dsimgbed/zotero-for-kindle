@@ -215,3 +215,19 @@ TEST_CASE("app shell: hidden screens hear a finished sync when they are shown, n
     auto event = std::find(rig.log.begin(), rig.log.end(), "library:event");
     CHECK(show < event);
 }
+
+TEST_CASE("app shell: what a sync or a push has to tell (a refused read tag) is a toast") {
+    Rig rig;
+    SyncEvent finished;
+    finished.kind = SyncEvent::Kind::SyncFinished;
+    finished.report.notices = {"Zotero refused the read tag on \u201cOne\u201d: too long"};
+    rig.sync.events.push_back(finished);
+    rig.run(1);
+    CHECK(rig.app.lastToast() == "Zotero refused the read tag on \u201cOne\u201d: too long");
+    SyncEvent pushed;
+    pushed.kind = SyncEvent::Kind::PushFinished;
+    pushed.report.notices = {"first", "second"};
+    rig.sync.events.push_back(pushed);
+    rig.run(1);
+    CHECK(rig.app.lastToast() == "first (and 1 more)");
+}

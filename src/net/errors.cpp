@@ -19,14 +19,7 @@ bool endsWith(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-std::string retryClock(const HttpResponse& r) {
-    long seconds = 60;
-    if (auto it = r.headers.find("retry-after"); it != r.headers.end()) {
-        char* end = nullptr;
-        long v = std::strtol(it->second.c_str(), &end, 10);
-        if (end != it->second.c_str() && v >= 0) seconds = v;
-    }
-    std::time_t at = std::time(nullptr) + seconds;
+std::string clockAt(std::time_t at) {
     std::tm tm{};
     localtime_r(&at, &tm);
     char buf[8];
@@ -34,11 +27,25 @@ std::string retryClock(const HttpResponse& r) {
     return buf;
 }
 
+std::time_t retryAt(const HttpResponse& r) {
+    long seconds = 60;
+    if (auto it = r.headers.find("retry-after"); it != r.headers.end()) {
+        char* end = nullptr;
+        long v = std::strtol(it->second.c_str(), &end, 10);
+        if (end != it->second.c_str() && v >= 0) seconds = v;
+    }
+    return std::time(nullptr) + seconds;
+}
+
 UserError make(ErrorKind kind, std::string message, std::string details) {
     return UserError{kind, std::move(message), std::move(details)};
 }
 
 }  // namespace
+
+std::string rateLimitMessage(int64_t untilWallMs) {
+    return "Zotero asks to wait until " + clockAt(static_cast<std::time_t>(untilWallMs / 1000)) + ".";
+}
 
 bool isTailnetHost(const std::string& host) {
     if (endsWith(host, ".ts.net")) return true;
@@ -81,7 +88,7 @@ UserError classify(const HttpResponse& r, const NetState& net, const std::string
     const std::string details = "HTTP " + std::to_string(s);
     const bool zotero = host == "api.zotero.org";
     if (s == 429 || (s == 503 && r.headers.count("retry-after")))
-        return make(ErrorKind::RateLimited, "Zotero is busy — retrying at " + retryClock(r) + ".", details);
+        return make(ErrorKind::RateLimited, rateLimitMessage(static_cast<int64_t>(retryAt(r)) * 1000), details);
     if (zotero) {
         if (s == 401 || s == 403) {
             const bool write = method != "GET" && method != "HEAD";

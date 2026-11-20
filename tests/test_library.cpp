@@ -393,3 +393,65 @@ TEST_CASE("library: a version 6 database keeps its search index when migrated; a
         std::filesystem::remove_all(dir);
     }
 }
+
+TEST_CASE("library: highlights and Continue reading leave out items trashed in Zotero or by a plugin") {
+    Rig rig;
+    for (const char* k : {"ITEM0001", "ITEM0002", "ITEM0003"}) rig.lib.upsertItem(item(k, std::string("Book ") + k, "2020-01-01"));
+    int n = 0;
+    for (const char* k : {"ITEM0001", "ITEM0002", "ITEM0003"}) {
+        const std::string att = "ATTACH0" + std::to_string(++n);
+        rig.lib.upsertAttachment({att, k, "application/epub+zip", "b.epub", "abc", "imported_file", 0, "", AttachmentRecord::State::Remote});
+        AnnotationRecord a;
+        a.key = "ANNOT00" + std::to_string(n);
+        a.parentKey = att;
+        a.text = "words";
+        a.dateModified = "2026-01-0" + std::to_string(n) + "T00:00:00Z";
+        rig.lib.upsertAnnotation(a);
+        rig.lib.markOpened(k, att, 1000 * n);
+    }
+    CHECK(rig.lib.countAnnotations() == 3);
+    REQUIRE(rig.lib.lastOpened());
+    CHECK(rig.lib.lastOpened()->itemKey == "ITEM0003");
+
+    rig.lib.removeObject("item", "ITEM0003");  // trashed in Zotero: the sync removes the item, not its files
+    PluginChange trash;  // and a plugin trashes another (not sent yet)
+    trash.pluginId = "p";
+    trash.kind = PluginChange::Kind::Trash;
+    trash.itemKey = "ITEM0002";
+    REQUIRE_FALSE(rig.lib.queuePluginChange(trash).empty());
+
+    const auto notes = rig.lib.recentAnnotations(0, 10);
+    REQUIRE(notes.size() == 1);
+    CHECK(notes[0].itemKey == "ITEM0001");
+    CHECK(rig.lib.countAnnotations() == 1);
+    CHECK(rig.lib.countAnnotations("words") == 1);
+    CHECK(rig.lib.recentAnnotations(0, 10, "words").size() == 1);
+    REQUIRE(rig.lib.lastOpened());
+    CHECK(rig.lib.lastOpened()->itemKey == "ITEM0001");  // the next most recent still there
+}
+
+TEST_CASE("library: Zotero's copies to fetch again are dropped with their library switched off or gone") {
+    Rig rig;
+    Library::GroupMeta g;
+    g.id = 31;
+    g.version = 1;
+    g.name = "Lab";
+    g.libraryEditing = g.fileEditing = "members";
+    rig.lib.upsertGroup(g);
+    rig.lib.setGroupAccess(31, true, true);
+    AnnotationRecord c;
+    c.key = "CONFLIC1";
+    c.lib = 31;
+    c.conflict = true;
+    c.createdHere = true;
+    c.conflictOf = "ANNO0031";
+    rig.lib.upsertAnnotation(c);
+    rig.lib.queueRefetch("ANNO0031", 31);
+    rig.lib.queueRefetch("ANNO0000", kMyLibrary);
+    CHECK(rig.lib.awaitingZoteroCopy("CONFLIC1"));
+    rig.lib.setLibraryEnabled(31, false);  // no pull of it will bring the copy
+    CHECK_FALSE(rig.lib.awaitingZoteroCopy("CONFLIC1"));
+    rig.lib.pruneRefetch();
+    CHECK(rig.lib.refetchQueue(31).empty());
+    CHECK(rig.lib.refetchQueue(kMyLibrary) == std::vector<std::string>{"ANNO0000"});
+}

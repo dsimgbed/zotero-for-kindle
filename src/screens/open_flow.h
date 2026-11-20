@@ -40,9 +40,9 @@ public:
 private:
     struct Pending {
         ItemRow row;
-        const Screen* from = nullptr;
+        uint64_t from = 0;  // the screen it was tapped on (Screen::serial; 0: none)
         std::string status;
-        bool running = false;
+        bool running = false;  // false: it failed (its error shows until a retry)
         std::optional<AnnotationRecord> at;
         std::string listKey;  // the attachment key of the row it was tapped on
         std::vector<Done> done;  // who waits for the outcome
