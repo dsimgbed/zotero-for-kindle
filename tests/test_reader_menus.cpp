@@ -245,3 +245,25 @@ TEST_CASE("reader menus fix: Back while the book re-paginates replaces a Go to p
     }
     CHECK(rig.reader->page() == 0);
 }
+
+TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when Zotero asks to wait, and says until when") {
+    // Audit B fix round 1, item 5: chunk A's rate-limit give-up ends OpenBook's pull with a
+    // RateLimited error on AnnotationsReady (a file still to fetch: on DownloadFinished).
+    Rig rig;
+    rig.openMenus();
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);  // Sync
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent waiting;  // a rate-limit notice while the file waits: still syncing
+    waiting.kind = SyncEvent::Kind::DownloadProgress;
+    waiting.attachmentKey = "EP000003";
+    waiting.error = UserError{ErrorKind::RateLimited, "Zotero asks to wait until 14:05.", "test"};
+    rig.reader->onSyncEvent(waiting, rig.nav);
+    CHECK(rig.reader->menus()->syncing());
+    SyncEvent ready;
+    ready.kind = SyncEvent::Kind::AnnotationsReady;
+    ready.attachmentKey = "EP000003";
+    ready.error = waiting.error;
+    rig.reader->onSyncEvent(ready, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    CHECK(rig.nav.toasts.back() == "Zotero asks to wait until 14:05.");
+}
