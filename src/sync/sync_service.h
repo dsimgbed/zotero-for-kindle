@@ -73,6 +73,11 @@ public:
     std::optional<KeptStatus> keptStatus(const std::string& collectionKey) const override;
     void removeLibrary(int64_t lib, bool evenUnsent) override;
 
+    // When the idle worker must look again without being told (a command, pushSoon, a new interval
+    // and stop() all wake it): the interval's due time, a pending push's; nullopt: neither.
+    using TimePoint = std::chrono::steady_clock::time_point;
+    static std::optional<TimePoint> nextWake(TimePoint lastSync, int intervalMinutes, std::optional<TimePoint> pushDue);
+
 private:
     struct Command {
         // KeepDownloads: one file of the kept collections, then itself again (flag: a fresh start).

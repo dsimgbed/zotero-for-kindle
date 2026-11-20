@@ -280,3 +280,13 @@ TEST_CASE("push triggers: a sync sends the reading position even with no highlig
     REQUIRE(rig.zotero.settings.count("lastPageIndex_u_EPUB0001"));
     CHECK(rig.zotero.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/4!/4/2/1:0");
 }
+
+TEST_CASE("sync worker: idle with Sync every Off and nothing pending, it sleeps until told") {
+    using namespace std::chrono;
+    const auto now = steady_clock::now(), last = now - minutes(3);
+    CHECK_FALSE(SyncService::nextWake(last, 0, std::nullopt));
+    // Otherwise it wakes when something is due, not every 30 s on the way.
+    CHECK(SyncService::nextWake(last, 10, std::nullopt) == last + minutes(10));
+    CHECK(SyncService::nextWake(last, 10, now + seconds(10)) == now + seconds(10));
+    CHECK(SyncService::nextWake(last, 0, now + minutes(5)) == now + minutes(5));
+}

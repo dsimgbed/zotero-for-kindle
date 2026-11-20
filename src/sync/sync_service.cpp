@@ -229,6 +229,16 @@ bool SyncService::sleepFor(int seconds) {
     return !stopping_;
 }
 
+std::optional<SyncService::TimePoint> SyncService::nextWake(TimePoint lastSync, int intervalMinutes,
+                                                           std::optional<TimePoint> pushDue) {
+    std::optional<TimePoint> wake = pushDue;
+    if (intervalMinutes > 0) {
+        const TimePoint due = lastSync + std::chrono::minutes(intervalMinutes);
+        if (!wake || due < *wake) wake = due;
+    }
+    return wake;
+}
+
 void SyncService::run() {
     Worker w;
     try {
@@ -277,13 +287,12 @@ void SyncService::run() {
                 return intervalMinutes_ > 0 && Clock::now() - lastSync >= std::chrono::minutes(intervalMinutes_);
             };
             auto pushDue = [&] { return pushDue_ && Clock::now() >= *pushDue_; };
-            // Up to 30 s (the interval check), or until a pending push is due; pushSoon() may move
-            // that deadline while we wait, so it is read again on every wake-up.
-            const auto giveUp = Clock::now() + std::chrono::seconds(30);
+            // Until the interval or a pending push is due, else until told: with nothing due (Sync
+            // every Off, the reader in front, asleep) the worker doesn't wake at all. pushSoon()
+            // and setIntervalMinutes() move the deadline while we wait: read again on every wake-up.
             while (!(stopping_ || !commands_.empty() || due() || pushDue())) {
-                auto wake = giveUp;
-                if (pushDue_ && *pushDue_ < wake) wake = *pushDue_;
-                if (cv_.wait_until(lock, wake) == std::cv_status::timeout && Clock::now() >= giveUp) break;
+                if (auto wake = nextWake(lastSync, intervalMinutes_, pushDue_)) cv_.wait_until(lock, *wake);
+                else cv_.wait(lock);
             }
             if (stopping_) break;
             if (commands_.empty()) {
