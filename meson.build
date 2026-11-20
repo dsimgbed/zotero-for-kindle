@@ -258,7 +258,7 @@ screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep
 
 app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp',
-  'src/app/startup.cpp',
+  'src/app/startup.cpp', 'src/app/migrate_accounts.cpp',
   'src/app/lifecycle.cpp',
   'src/app/plugin_events.cpp',
   'src/app/home_tree.cpp',

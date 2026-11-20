@@ -420,6 +420,10 @@ int main(int argc, char** argv) {
         return screenshot(argv[2], argv[3], db);
     }
 
+    // Before any database is opened: a single-account install moves into the account layout, and
+    // the paths below become the active account's (the account session takes them over later).
+    const std::optional<int64_t> activeAccount = openAccountLayout(paths);
+    if (!activeAccount) return 1;  // a migration cut short: nothing is opened until it finishes (next start)
     std::error_code ec;
     std::filesystem::create_directories(paths.filesDir, ec);
     std::optional<Db> db;
@@ -431,7 +435,6 @@ int main(int argc, char** argv) {
     }
     Library lib(*db);
     DeviceSettings device(paths.deviceSettingsFile);  // the Kindle's settings; the account session (Task 6) will own it
-    moveDeviceKeys(lib, device);  // settings from before the split (Task 4 moves this to the account migration)
     // Before the sync worker can download anything: the folders of attachments deleted in Zotero,
     // and downloads cut short by a kill. Not on a library never pulled (or just rebuilt), which
     // would take every download for an orphan.
@@ -756,6 +759,7 @@ int main(int argc, char** argv) {
         };
         auto connected = [&](const Config& c, Nav&) {
             app.defer([&, c] {
+                if (*activeAccount && c.userId == *activeAccount) saveCredentials(paths, c);  // a new key for the account
                 config = c;
                 startService(c);
                 app.replaceRoot(0, makeHome());
