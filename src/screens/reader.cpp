@@ -364,6 +364,7 @@ void ReaderScreen::onShow(Nav& nav) {
     sendBookmarks();
     if (openAt_) {
         turning_ = true;
+        turnTarget_ = -1;
         worker_->showAnnotation(*openAt_);
         openAt_.reset();
     }
@@ -522,6 +523,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 wordsLeft_ = e.wordsLeftInChapter;
                 position_ = e.position;
                 turning_ = false;
+                turnTarget_ = -1;
                 layoutPending_ = false;
                 if (preview_) {
                     if (preview_->savePosition) preview_->savePosition(position_.value);
@@ -565,7 +567,8 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     linkId_ = 0;
     commitInk();
-    const int target = page_ + delta;
+    // A turn while one is on its way goes on from the page it is going to.
+    const int target = (turning_ && turnTarget_ >= 0 ? turnTarget_ : page_) + delta;
     if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !finishedSent_ && !preview_) {
         finishedSent_ = true;  // once a reading, however often the last page is swiped on
         plugins::bookEvent(nav.plugins(), nav.library(), "bookFinished", row_.key, row_.attachmentKey);
@@ -587,6 +590,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
         nav.library().answerRemotePosition(row_.attachmentKey, false, remoteVersion_);
     }
     turning_ = true;
+    turnTarget_ = target;
     worker_->show(target);
 }
 
@@ -1276,6 +1280,7 @@ void ReaderScreen::draw(Canvas& canvas) {
 // --- Getting around: Back, bookmarks, Go to ---------------------------------------------------
 
 void ReaderScreen::markJumpOrigin() {
+    turnTarget_ = -1;  // a jump: where it lands is the worker's to say
     turnsSinceJump_ = 0;
     if (page_ < 0 || position_.value.empty() || layoutPending_) return;
     arriving_ = true;
@@ -1301,6 +1306,7 @@ void ReaderScreen::back(Nav& nav) {
     turnsSinceJump_ = 0;
     commitInk();
     turning_ = true;
+    turnTarget_ = -1;
     // The page (the view, in PDF column view) while its layout lasts; else the position.
     if (to.page >= 0) worker_->show(to.page);
     else worker_->showPosition(to.pos);

@@ -242,7 +242,7 @@ TEST_CASE("navigation fix: the corner during a page turn doesn't bookmark the pa
     Rig rig;
     rig.r->onGesture(tapAt({1100, 700}), rig.nav);  // turning to page 1 ...
     rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // ... and the corner at once
-    REQUIRE(rig.waitPage(1));
+    REQUIRE(rig.waitPage(2));  // the corner is on the right edge: a second turn, on from page 1 (audit B6)
     for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
     CHECK(rig.lib.bookmarks("EP000003").empty());
 }

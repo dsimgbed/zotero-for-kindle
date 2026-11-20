@@ -275,6 +275,7 @@ private:
     int64_t wordsLeft_ = 0;
     double progress_ = 0;
     bool turning_ = false;
+    int turnTarget_ = -1;  // the page a turn (not a jump) is on its way to
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
     // Selection mode.
