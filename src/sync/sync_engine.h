@@ -47,6 +47,9 @@ struct SyncReport {
         UserError error;
     };
     std::vector<GroupError> groupErrors;
+    // What the user should hear though nothing failed (shown as a toast): e.g. a read tag Zotero
+    // refused, dropped so the rest goes on.
+    std::vector<std::string> notices;
 };
 
 // The WriteGuard's view of the plugin changes pending in `lib` (its plugin rules), as Zotero has

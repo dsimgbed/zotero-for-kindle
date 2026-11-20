@@ -705,6 +705,7 @@ SyncReport SyncService::pushChanges(Worker& w, std::vector<int64_t>* passed) {
     done.report = rep;
     if (!stopping_) emit(std::move(done));
     rep.pluginEvents.clear();  // told with PushFinished
+    rep.notices.clear();
     return rep;
 }
 

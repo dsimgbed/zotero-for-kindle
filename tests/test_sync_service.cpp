@@ -227,6 +227,28 @@ TEST_CASE("sync service: stop interrupts a Retry-After wait") {
     CHECK(msSince(t0) < 2000);
 }
 
+TEST_CASE("sync service: a read tag Zotero refuses is told once, with the push; the sync goes on") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.markRead("BOOK0001", true);
+    }
+    {
+        std::lock_guard<std::mutex> lock(rig.serverMutex);
+        rig.zotero.failObjects["BOOK0001"] = 400;
+    }
+    rig.service->syncNow();
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    int told = 0;
+    for (const auto& e : events) told += static_cast<int>(e.report.notices.size());
+    CHECK(told == 1);
+    CHECK_FALSE(events.back().error);
+}
+
 TEST_CASE("sync service: poll never waits for the worker") {
     Rig rig;
     rig.route = [](const HttpRequest& r) {

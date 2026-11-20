@@ -32,6 +32,18 @@ int64_t versionOf(const json& obj) {
     return obj.contains("version") && obj["version"].is_number_integer() ? obj["version"].get<int64_t>() : 0;
 }
 
+// A title short enough for a toast: at most kMax bytes (never inside a UTF-8 character), with "…".
+std::string shortTitle(std::string t) {
+    constexpr size_t kMax = 40;
+    if (t.empty()) return "Untitled";
+    if (t.size() <= kMax) return t;
+    size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(t[cut]) & 0xC0) == 0x80) --cut;
+    t.resize(cut);
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    return t + "\u2026";
+}
+
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -717,9 +729,12 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
             }
             if (!res->failed.empty()) {
                 // What was sent is refused (400/413), and would be again: the mark goes, so the
-                // item reads as Zotero has it, and the other marks and later pushes still go.
+                // item reads as Zotero has it, and the other marks and later pushes still go. The
+                // user hears why (a notice, not an error).
                 log(LogLevel::Warn, "sync: read tag of %s refused by Zotero (%s); mark dropped", mark.itemKey.c_str(),
                     res->failed.begin()->second.c_str());
+                rep.notices.push_back("Zotero refused the read tag on \u201c" + shortTitle(item->title) +
+                                      "\u201d: " + res->failed.begin()->second);
                 lib_.clearReadMark(mark);
                 break;
             }

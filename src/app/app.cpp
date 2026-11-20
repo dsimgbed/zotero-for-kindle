@@ -586,6 +586,10 @@ void App::step(int timeout_ms) {
         }
         const bool reloads = ev.kind == SyncEvent::Kind::SyncFinished || ev.kind == SyncEvent::Kind::PushFinished ||
                              ev.kind == SyncEvent::Kind::AnnotationsReady;
+        // Something to tell though nothing failed (a refused read tag): whichever screen is up.
+        if ((ev.kind == SyncEvent::Kind::SyncFinished || ev.kind == SyncEvent::Kind::PushFinished) && !ev.report.notices.empty())
+            toast(ev.report.notices.front() +
+                  (ev.report.notices.size() > 1 ? " (and " + std::to_string(ev.report.notices.size() - 1) + " more)" : ""));
         for (auto& stack : stacks_)
             for (auto& s : stack) {
                 if (reloads && s.get() != visibleTop()) {

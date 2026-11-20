@@ -131,6 +131,7 @@ void mergeReport(SyncReport& into, SyncReport&& from) {
     if (!into.error && from.error) into.error = from.error;
     into.initial = into.initial || from.initial;  // any library's first full sync: plugins rebuild
     into.groupErrors.insert(into.groupErrors.end(), from.groupErrors.begin(), from.groupErrors.end());
+    into.notices.insert(into.notices.end(), from.notices.begin(), from.notices.end());
     into.pluginEvents.insert(into.pluginEvents.end(), std::make_move_iterator(from.pluginEvents.begin()),
                              std::make_move_iterator(from.pluginEvents.end()));
 }

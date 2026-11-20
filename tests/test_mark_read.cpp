@@ -140,6 +140,7 @@ TEST_CASE("mark read: a mark Zotero refuses (400/413) is dropped; the others and
     rig.lib.markRead("BOOK0002", true);
     SyncReport rep = rig.engine.push();
     CHECK_FALSE(rep.error);
+    CHECK(rep.notices == std::vector<std::string>{"Zotero refused the read tag on \u201cOne\u201d: refused"});  // told, not an error
     CHECK(rig.serverTags("BOOK0002") == std::vector<std::string>{"read"});  // the other mark went
     CHECK(rig.serverTags("BOOK0001") == std::vector<std::string>{"economics"});
     CHECK(rig.lib.readMarks().empty());  // not sent again and again
@@ -334,4 +335,16 @@ TEST_CASE("mark read: a read row says Read where the progress was") {
     for (int y = 90; y < 180; ++y)
         for (int x = 1236 - 160; x < 1236; ++x) ink += px[y * stride + x * 4] < 80;
     CHECK(ink > 100);
+}
+
+TEST_CASE("mark read: a refusal names a long title shortened") {
+    Rig rig;
+    json long_ = FakeZotero::item("BOOK0003", "A very long title about the economics of everything that ever happened anywhere");
+    rig.server.put(long_);
+    REQUIRE_FALSE(rig.engine.pull(nullptr).error);
+    rig.server.failObjects["BOOK0003"] = 400;
+    rig.lib.markRead("BOOK0003", true);
+    SyncReport rep = rig.engine.push();
+    REQUIRE(rep.notices.size() == 1);
+    CHECK(rep.notices[0] == "Zotero refused the read tag on \u201cA very long title about the economics of\u2026\u201d: refused");
 }
