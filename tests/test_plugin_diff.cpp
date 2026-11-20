@@ -327,3 +327,43 @@ TEST_CASE("plugin diff: on a trimming Home body, a render that moves the trim po
     CHECK(all.united(lb.children[1].rect) == all);  // the longer first line drawn
     CHECK(diffTrees(lb, layoutTree(b, area, 0)).empty());
 }
+
+TEST_CASE("plugin diff: a block holding covers that appears or goes (a moved trim point) redraws with Quality") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const auto home = [](const std::string& first) {
+        json j = json::parse(R"({"kind":"column","fit":"trim","children":[{"kind":"text","text":"","id":"top"},
+          {"kind":"column","children":[{"kind":"text","text":"Pinned","style":"label"},
+            {"kind":"grid","columns":3,"children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"}]}]}]})");
+        j["children"][0]["text"] = first;
+        std::string why;
+        auto t = parseTree(j, &why, TreeUse::HomeBody);
+        INFO(why);
+        REQUIRE(t);
+        return *t;
+    };
+    Rows rows;
+    const Block a = home("Desk"), b = home("Desk, with a line long enough to take two lines and push the pinned covers off");
+    const Rect tall{blocksArea().x, blocksArea().y, blocksArea().w, 5000};
+    const Laid fa = layoutTree(a, tall, 0, &rows);
+    const Rect area{tall.x, tall.y, tall.w, fa.children[1].rect.y + fa.children[1].rect.h + 5 - tall.y};
+    const Laid la = layoutTree(a, area, 0, &rows), lb = layoutTree(b, area, 0, &rows);
+    REQUIRE(la.children.size() == 2);
+    REQUIRE(lb.children.size() == 1);  // the covers went
+    for (const auto& d : {diffTrees(la, lb), diffTrees(lb, la)}) {  // gone, then back
+        REQUIRE_FALSE(d.empty());
+        bool covered = false;
+        for (const auto& x : d)
+            if (x.rect.united(la.children[1].rect) == x.rect) {
+                covered = true;
+                CHECK(x.wave == Waveform::Quality);
+            }
+        CHECK(covered);
+    }
+    // A block without pictures that appears is still Ui.
+    const char* plain = R"({"kind":"column","children":[{"kind":"text","text":"Desk","style":"label"}]})";
+    const Block c = tree(plain), e = tree(with(plain, "}]}", R"(},{"kind":"button","id":"x","title":"New"}]})"));
+    const auto d = diffTrees(layoutTree(c, blocksArea(), 0), layoutTree(e, blocksArea(), 0));
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].wave == Waveform::Ui);
+}

@@ -1587,6 +1587,16 @@ TEST_CASE("plugin trim: a short area keeps the pair, the pinned row and one inbo
             if (!area.contains({x, y}) && g[(size_t)y * c.width() + x] != 128) ++outside;
     CHECK(outside == 0);
 
+    // No orphaned heading: an area that holds the inbox's label but not its first line drops the inbox column.
+    const Rect in1 = inbox.children[1].rect;
+    const Laid orphan = layoutTree(t, {tall.x, tall.y, tall.w, in1.y + in1.h / 2 - tall.y}, 0, &items);
+    CHECK(orphan.children.size() == 2);
+    CHECK(findLaid(orphan, "in1") == nullptr);
+    // Nor in the pinned section: its label without the grid's row is dropped with it.
+    const Laid& pinned = full.children[1];
+    const Laid noRow = layoutTree(t, {tall.x, tall.y, tall.w, pinned.children[1].rect.y + 20 - tall.y}, 0, &items);
+    CHECK(noRow.children.size() == 1);
+
     // fit "page" (the default) is unchanged: the same blocks page there.
     const Block paged = homeTree(deskHome("page"));
     CHECK(layoutTree(paged, area, 0, &items).pages > 1);

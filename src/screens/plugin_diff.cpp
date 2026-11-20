@@ -30,7 +30,8 @@ bool showsPicture(const Laid& l) {
 
 Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
     if (pageTurned) return Waveform::Quality;
-    if (!a || !b || a->block->kind != b->block->kind) return Waveform::Ui;
+    if (!a || !b || a->block->kind != b->block->kind)  // added, removed or replaced: covers among them want Quality
+        return (a && showsPicture(*a)) || (b && showsPicture(*b)) ? Waveform::Quality : Waveform::Ui;
     if (a->first != b->first && sameBlock(*a->block, *b->block)) return Waveform::Quality;  // the block paged
     switch (a->block->kind) {
         case K::Deck: return a->block->children == b->block->children ? Waveform::Fast : Waveform::Quality;

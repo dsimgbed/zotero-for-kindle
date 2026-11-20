@@ -800,7 +800,9 @@ Laid place(const Block& b, Rect r, int first, int count) {
 std::vector<Laid> trimStack(const std::vector<Block>& kids, Rect r, int gap);
 
 // `b` cut to what fits in `r` (it doesn't fit whole): a grid to its rows that fit, a column to its
-// children that fit (recursively); nullopt (dropped) when nothing of it fits or it can't be cut.
+// children that fit (recursively); nullopt (dropped) when nothing of it fits or it can't be cut. A
+// column that would keep only its first child of several (a section's label) is dropped too: no
+// orphaned heading at the bottom.
 std::optional<Laid> trimmed(const Block& b, Rect r) {
     r.w = ownW(b, r.w);
     switch (b.kind) {
@@ -816,7 +818,8 @@ std::optional<Laid> trimmed(const Block& b, Rect r) {
             Laid l;
             l.block = &b;
             l.children = trimStack(b.children, r, gapPx(b.gap));
-            if (l.children.empty()) return std::nullopt;
+            // Nothing fits, or only its first child of several (a heading never stands alone at the bottom): dropped.
+            if (l.children.empty() || (l.children.size() == 1 && b.children.size() > 1)) return std::nullopt;
             const Rect& last = l.children.back().rect;
             l.rect = {r.x, r.y, r.w, last.y + last.h - r.y};
             return l;

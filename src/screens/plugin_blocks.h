@@ -104,7 +104,7 @@ Rect blocksArea();
 // A root column with fit "trim" (a Home body's, 0.12) never pages: its children at their natural
 // heights while they fit; the first that doesn't is trimmed if it can be (a grid to its rows that
 // fit, a column to its children that fit, recursively) and dropped otherwise, and everything after
-// it is dropped. Laid::children holds only what's shown, so hit-testing and diffs see only that.
+// it is dropped. A column cut to only its first child of several (a heading alone) is dropped. Laid::children holds only what's shown, so hit-testing and diffs see only that.
 Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items = nullptr, const std::string& package = {});
 
 // How many times a text block's text has been laid out (for tests).
