@@ -274,7 +274,7 @@ struct Parser {
                 else onlyFields(o, where, {"children", "gap", "fit"});
                 b.gap = gapOf(o, "gap", where, Block::Gap::Small, true);
                 if (b.kind == K::Row)
-                    b.align = choice<Block::Align>(o, "align", where, Block::Align::Top,
+                    b.align = choice<Block::Align>(o, "align", where, Block::Align::Center,
                                                    {{"top", Block::Align::Top}, {"center", Block::Align::Center},
                                                     {"bottom", Block::Align::Bottom}, {"stretch", Block::Align::Stretch}});
                 else {

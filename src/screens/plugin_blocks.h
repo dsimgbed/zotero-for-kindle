@@ -104,8 +104,8 @@ struct Hit {
     std::optional<ItemRow> item;  // an items block's: part is its key
 };
 
-// The interactive block under `p`: a button, a list row, an item, a chip, a search/field, the deck, a notice
-// or a quote with an id.
+// The interactive block under `p`: a button, a list row, an item, a chip, a search/field, the deck, a notice,
+// a quote, a text or a box with an id (the innermost one).
 std::optional<Hit> hitTest(const Laid& root, Point p);
 
 // The laid block with this id (a search/field to redraw while typing), or nullptr.

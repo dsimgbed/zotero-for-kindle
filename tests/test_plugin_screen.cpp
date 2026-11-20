@@ -598,6 +598,30 @@ zk.screen("deck", {
     REQUIRE(r.until([&] { return r.shown("tapped passage"); }));
 }
 
+TEST_CASE("plugin screen, end to end: a tap on a text or a box with an id brings {tap, id}, as a quote's does") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([
+    zk.ui.text(said),
+    zk.ui.text("All 9 ›", { id: "all-pinned", weight: "bold" }),
+    zk.ui.box(zk.ui.text("Pinned"), { id: "pinned", border: "thin", pad: "small" }),
+  ]),
+  onEvent(e) { if (e.kind === "tap") said = "tapped " + e.id; },
+});
+)JS");
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("all-pinned");
+    REQUIRE(r.until([&] { return r.shown("tapped all-pinned"); }));
+    r.tapButton("pinned");
+    REQUIRE(r.until([&] { return r.shown("tapped pinned"); }));
+}
+
 TEST_CASE("plugin screen, end to end: zk.reader.open opens over the screen; the promise resolves; Back brings a `reader` event") {
     if (!fonts()) return;
     ScopedMetrics m(kPw5);

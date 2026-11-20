@@ -315,7 +315,7 @@ TEST_CASE("ui tree 0.12: widths, row alignment, the xsmall gap") {
     CHECK(t.children[2].widthPct == 35);
     CHECK(t.children[3].widthPct == 100);
     CHECK(t.children[4].width == Block::Width::Default);
-    CHECK(ok(json::parse(R"({"kind":"row","children":[]})")).align == Block::Align::Top);
+    CHECK(ok(json::parse(R"({"kind":"row","children":[]})")).align == Block::Align::Center);  // as before 0.12
     for (const char* a : {"top", "center", "bottom"}) ok(json{{"kind", "row"}, {"align", a}, {"children", json::array()}});
     CHECK(whyNot(json::parse(R"({"kind":"row","align":"middle","children":[]})")) ==
           "row: \"align\" must be one of \"top\", \"center\", \"bottom\", \"stretch\"");
@@ -500,7 +500,7 @@ TEST_CASE("ui tree 0.12: a 0.11 tree parses to the same blocks it always did") {
     const Block a = ok(j), b = ok(j);
     CHECK(sameBlock(a, b));
     CHECK(a.width == Block::Width::Default);
-    CHECK(a.align == Block::Align::Top);
+    CHECK(a.children[0].align == Block::Align::Center);
     CHECK(a.fit == Block::Fit::Page);
     CHECK(a.children[0].children[0].width == Block::Width::Default);
     CHECK_FALSE(a.children[0].children[0].tone);

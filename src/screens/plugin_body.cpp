@@ -334,6 +334,8 @@ void PluginBody::tapBlocks(Point p, Nav& nav) {
         case K::Deck:     // the card (0.9): the plugin may open it (zk.reader.open)
         case K::Notice:  // one with an id (0.9)
         case K::Quote:   // one with an id (0.11)
+        case K::Text:    // one with an id: a link (0.12)
+        case K::Box:     // one with an id (0.12)
             enqueue({{"kind", "tap"}, {"id", hit->id}}, nav);
             break;
         case K::List: enqueue({{"kind", "select"}, {"id", hit->id}, {"row", hit->part}}, nav); break;

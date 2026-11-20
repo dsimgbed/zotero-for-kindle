@@ -4,6 +4,8 @@
 #include <numeric>
 #include <utility>
 
+#include <glib.h>
+
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -64,14 +66,79 @@ TextStyle textStyle(Block::Style s) {
     return st;
 }
 
+// ── 0.12: a box, and text styled by its options ──
+//
+// A box's border is ink, its fill a light grey or ink; text inside an ink box is white unless its
+// tone says otherwise. While a box is laid out or drawn, gOnInk says whether its inside is ink.
+constexpr int kSmallRadius = 8;
+bool gOnInk = false;
+struct OnInk {
+    bool was = gOnInk;
+    explicit OnInk(const Block& box) {
+        if (box.fill != Block::Fill::None) gOnInk = box.fill == Block::Fill::Ink;
+    }
+    ~OnInk() { gOnInk = was; }
+    OnInk(const OnInk&) = delete;
+    OnInk& operator=(const OnInk&) = delete;
+};
+int borderPx(Block::Border b) { return b == Block::Border::Thin ? 2 : b == Block::Border::Thick ? 3 : 0; }
+int boxInset(const Block& box) { return borderPx(box.border) + gapPx(box.pad); }
+uint8_t fillGray(Block::Fill f) { return f == Block::Fill::Ink ? 28 : 214; }
+double boxRadius(const Block& box, Rect r) {
+    return box.radius == Block::Radius::Small ? kSmallRadius : box.radius == Block::Radius::Round ? r.h / 2.0 : 0;
+}
+
+// A text block's style: its preset (`style`), overridden by the options it gives.
+TextStyle textStyleOf(const Block& b) {
+    TextStyle st = textStyle(b.style);
+    if (b.font) st.family = *b.font == Block::Font::Serif ? kSerif : kSans;
+    if (b.size) {
+        static constexpr double kPt[] = {6, 7, 9, 11, 13};  // XSmall, Small, Body, Large, Title
+        st.size_pt = kPt[static_cast<int>(*b.size)];
+    }
+    if (b.weight) {
+        static constexpr int kWeight[] = {400, 500, 700};  // Regular, Medium, Bold
+        st.weight = kWeight[static_cast<int>(*b.weight)];
+    }
+    if (b.italic) st.italic = true;
+    switch (b.tone.value_or(Block::Tone::Auto)) {
+        case Block::Tone::Ink: st.gray = kInk; break;
+        case Block::Tone::Secondary: st.gray = kSecondary; break;
+        case Block::Tone::Inverse: st.gray = 255; break;
+        case Block::Tone::Auto:
+            if (gOnInk) st.gray = 255;
+            break;
+    }
+    return st;
+}
+
+Align alignOf(const Block& b) {
+    switch (b.textAlign.value_or(Block::TextAlign::Start)) {
+        case Block::TextAlign::Start: return Align::Left;
+        case Block::TextAlign::Center: return Align::Center;
+        case Block::TextAlign::End: return Align::Right;
+    }
+    return Align::Left;
+}
+
+std::string upper(const std::string& s) {
+    gchar* up = g_utf8_strup(s.c_str(), static_cast<gssize>(s.size()));
+    std::string out = up;
+    g_free(up);
+    return out;
+}
+
+// The text's spans as markup; caps: uppercase, tracked 0.12 em (a section label).
 std::string markupOf(const Block& b) {
     std::string m;
     for (const auto& s : b.spans) {
-        std::string t = markupEscape(s.text);
+        std::string t = markupEscape(b.caps ? upper(s.text) : s.text);
         if (s.italic) t = "<i>" + t + "</i>";
         if (s.bold) t = "<b>" + t + "</b>";
         m += t;
     }
+    if (b.caps && !m.empty())
+        m = "<span letter_spacing=\"" + std::to_string(static_cast<int>(textStyleOf(b).size_pt * 0.12 * 1024)) + "\">" + m + "</span>";
     return m;
 }
 
@@ -86,13 +153,12 @@ std::map<std::string, std::weak_ptr<const KeptText>>& keptTexts() {
 }
 std::vector<std::shared_ptr<const KeptText>>* gPins = nullptr;
 
-TextStyle textStyle(Block::Style s);
-std::string markupOf(const Block& b);
-
 std::shared_ptr<const KeptText> keptText(const Block& b, int w) {
     std::string m = markupOf(b);
-    std::string key = std::to_string(static_cast<int>(b.style)) + ' ' + std::to_string(b.lines) + ' ' +
-                      std::to_string(w) + ' ' + m;
+    const TextStyle st = textStyleOf(b);
+    std::string key = std::string(st.family) + ' ' + std::to_string(st.size_pt) + ' ' + std::to_string(st.weight) + ' ' +
+                      std::to_string(st.italic) + ' ' + std::to_string(st.gray) + ' ' + std::to_string(static_cast<int>(alignOf(b))) +
+                      ' ' + std::to_string(b.lines) + ' ' + std::to_string(w) + ' ' + m;
     auto& cache = keptTexts();
     if (auto it = cache.find(key); it != cache.end())
         if (auto t = it->second.lock()) {
@@ -102,7 +168,7 @@ std::shared_ptr<const KeptText> keptText(const Block& b, int w) {
     for (auto it = cache.begin(); it != cache.end();)  // the layouts no tree holds any more
         it = it->second.expired() ? cache.erase(it) : std::next(it);
     ++gTextLayouts;
-    auto t = std::make_shared<const KeptText>(m, textStyle(b.style), std::max(1, w), std::max(0, b.lines));
+    auto t = std::make_shared<const KeptText>(m, st, std::max(1, w), std::max(0, b.lines), alignOf(b));
     cache[std::move(key)] = t;
     if (gPins) gPins->push_back(t);
     return t;
@@ -212,8 +278,80 @@ std::vector<int> diffs(const std::vector<int>& tops) {
     return h;
 }
 
-// The widths of a row's children.
+// A block's natural width (an `auto` child of a row's), at most `w`.
+int naturalW(const Block& b, int w) {
+    w = std::max(1, w);
+    switch (b.kind) {
+        case K::Text: return std::min(w, measureText(markupOf(b), textStyleOf(b), w, 0).width);
+        case K::Button: return std::min(w, std::max(200, measureText(b.title, {kSans, 8.5, 700}, w, 1).width + 100));
+        case K::Box: {
+            const int in = 2 * boxInset(b);
+            return std::min(w, (b.children.empty() ? 0 : naturalW(b.children[0], w - in)) + in);
+        }
+        case K::Row: {
+            int sum = gapPx(b.gap) * std::max(0, static_cast<int>(b.children.size()) - 1);
+            for (const auto& c : b.children) sum += naturalW(c, w);
+            return std::min(w, sum);
+        }
+        case K::Column: {
+            int most = 0;
+            for (const auto& c : b.children) most = std::max(most, naturalW(c, w));
+            return most;
+        }
+        case K::Spacer: return 0;
+        default: return w;
+    }
+}
+
+std::vector<int> defaultWidths(const Block& row, int w);
+
+// The widths of a row's children (0.12): a percent of the room the gaps leave, an auto its natural
+// width, fill children share the rest. Percents and autos over the room: the percents shrink, in
+// proportion, to what the autos leave (autos alone over it: the longest are cut to share it).
+// Unsized, a button is auto and anything else fill; a row with no sized child is laid out as before
+// 0.12 (defaultWidths).
 std::vector<int> rowWidths(const Block& row, int w) {
+    const auto sized = [](const Block& c) { return c.width != Block::Width::Default; };
+    if (std::none_of(row.children.begin(), row.children.end(), sized)) return defaultWidths(row, w);
+    const int n = static_cast<int>(row.children.size());
+    const int room = std::max(0, w - gapPx(row.gap) * (n - 1));
+    std::vector<int> ws(n, 0);
+    int autos = 0, percents = 0, fills = 0;
+    const auto widthOf = [](const Block& c) {
+        if (c.width != Block::Width::Default) return c.width;
+        return c.kind == K::Button ? Block::Width::Auto : Block::Width::Fill;
+    };
+    for (int i = 0; i < n; ++i) {
+        const Block& c = row.children[i];
+        switch (widthOf(c)) {
+            case Block::Width::Auto: autos += ws[i] = naturalW(c, room); break;
+            case Block::Width::Percent: percents += ws[i] = c.widthPct * room / 100; break;
+            default: ++fills; break;
+        }
+    }
+    if (autos > room) {  // autos alone over the row: the short ones keep their width, the longest give way
+        std::vector<int> order;
+        for (int i = 0; i < n; ++i)
+            if (widthOf(row.children[i]) == Block::Width::Auto) order.push_back(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return ws[a] < ws[b]; });
+        int left = room, m = static_cast<int>(order.size());
+        for (int i : order) left -= ws[i] = std::min(ws[i], left / m--);
+        autos = room - left;
+    }
+    if (percents > 0 && percents + autos > room) {
+        const int left = std::max(0, room - autos), wanted = percents;
+        percents = 0;
+        for (int i = 0; i < n; ++i)
+            if (widthOf(row.children[i]) == Block::Width::Percent) percents += ws[i] = ws[i] * left / wanted;
+    }
+    const int rest = std::max(0, room - autos - percents);
+    for (int i = 0, k = 0; i < n; ++i)
+        if (widthOf(row.children[i]) == Block::Width::Fill) ws[i] = rest / fills + (k++ < rest % fills ? 1 : 0);
+    return ws;
+}
+
+// The widths of a row's children before 0.12 (none sized).
+std::vector<int> defaultWidths(const Block& row, int w) {
     const int n = static_cast<int>(row.children.size());
     std::vector<int> ws(n, 0);
     if (!n) return ws;
@@ -316,6 +454,17 @@ int naturalH(const Block& b, int w) {
             return 2 * kQuotePadY + textH(b.text, kQuoteText, inner, kQuoteLines) +
                    (b.meta.empty() ? 0 : kQuoteSourceGap + textH(b.meta, kQuoteSource, inner, 1));
         }
+        case K::Spacer: return 0;  // its room is given in a stretched column (stack)
+        case K::Box: {
+            OnInk ink(b);
+            const int in = boxInset(b);
+            return 2 * in + (b.children.empty() ? 0 : unitsOf(b.children[0], std::max(1, w - 2 * in)).natural());
+        }
+        case K::Cover:  // laid out by the next tasks; until then no room
+        case K::Progress:
+        case K::Item:
+        case K::Grid:
+        case K::Image: return 0;
         default: return unitsOf(b, w).natural();
     }
 }
@@ -337,14 +486,25 @@ std::vector<std::pair<int, int>> split(const std::vector<int>& h, int budget) {
 
 Laid place(const Block& b, Rect r, int first, int count);
 
+// A column's children top to bottom. A column given more than its natural height (one stretched in
+// a row) shares what is left between its spacers.
 std::vector<Laid> stack(const std::vector<Block>& kids, Rect r, int gap) {
+    std::vector<Units> units;
+    int total = 0, spacers = 0;
+    for (size_t i = 0; i < kids.size(); ++i) {
+        units.push_back(unitsOf(kids[i], r.w));
+        total += (i ? gap : 0) + units.back().natural();
+        if (kids[i].kind == K::Spacer) ++spacers;
+    }
+    const int spare = spacers ? std::max(0, r.h - total) : 0;
     std::vector<Laid> out;
     int y = r.y;
-    for (const auto& c : kids) {
+    for (size_t i = 0, k = 0; i < kids.size(); ++i) {
         if (y >= r.y + r.h) break;
-        const Units u = unitsOf(c, r.w);
-        const int h = std::min(u.natural(), r.y + r.h - y);
-        out.push_back(place(c, {r.x, y, r.w, h}, 0, static_cast<int>(u.h.size())));
+        int h = units[i].natural();
+        if (kids[i].kind == K::Spacer) h = spare / spacers + (static_cast<int>(k++) < spare % spacers ? 1 : 0);
+        h = std::min(h, r.y + r.h - y);
+        out.push_back(place(kids[i], {r.x, y, r.w, h}, 0, static_cast<int>(units[i].h.size())));
         y += h + gap;
     }
     return out;
@@ -363,13 +523,29 @@ Laid place(const Block& b, Rect r, int first, int count) {
             const auto ws = rowWidths(b, r.w);
             const int gap = gapPx(b.gap);
             int total = std::accumulate(ws.begin(), ws.end(), 0) + gap * (static_cast<int>(ws.size()) - 1);
-            int x = r.x + std::max(0, r.w - total);  // a row of buttons only sits on the right
+            const bool buttons = std::all_of(b.children.begin(), b.children.end(), [](const Block& c) { return c.kind == K::Button; });
+            int x = r.x + (buttons ? std::max(0, r.w - total) : 0);  // a row of buttons only sits on the right
             for (size_t i = 0; i < b.children.size(); ++i) {
                 const Units u = unitsOf(b.children[i], ws[i]);
-                const int h = std::min(u.natural(), r.h);
-                l.children.push_back(place(b.children[i], {x, r.y + (r.h - h) / 2, ws[i], h}, 0, static_cast<int>(u.h.size())));
+                int h = std::min(u.natural(), r.h), y = r.y;
+                switch (b.align) {
+                    case Block::Align::Top: break;
+                    case Block::Align::Center: y += (r.h - h) / 2; break;
+                    case Block::Align::Bottom: y += r.h - h; break;
+                    case Block::Align::Stretch: h = r.h; break;
+                }
+                l.children.push_back(place(b.children[i], {x, y, ws[i], h}, 0, static_cast<int>(u.h.size())));
                 x += ws[i] + gap;
             }
+            break;
+        }
+        case K::Box: {  // its child fills it inside the border and padding
+            if (b.children.empty()) break;
+            OnInk ink(b);
+            const int in = boxInset(b);
+            const Rect inner{r.x + in, r.y + in, std::max(0, r.w - 2 * in), std::max(0, r.h - 2 * in)};
+            const Units u = unitsOf(b.children[0], inner.w);
+            l.children.push_back(place(b.children[0], inner, 0, static_cast<int>(u.h.size())));
             break;
         }
         case K::Items: {
@@ -530,7 +706,7 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             const auto text = l.text ? l.text : keptText(b, r.w);
             const auto& tops = text->tops();
             if (b.lines > 0 && tops[std::min<size_t>(b.lines, tops.size() - 1)] > r.h)  // cut short: ellipsized to fit
-                drawText(cr, markupOf(b), textStyle(b.style), r, b.lines);
+                drawText(cr, markupOf(b), textStyleOf(b), r, b.lines, alignOf(b));
             else if (b.lines > 0) text->drawLines(cr, r, 0, b.lines);
             else text->drawLines(cr, r, l.first, l.count);
             break;
@@ -586,9 +762,21 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             if (!b.meta.empty())
                 drawText(cr, b.meta, kQuoteSource, {x, r.y + kQuotePadY + th + kQuoteSourceGap, w, r.h}, 1);
             break;
-        }        case K::Spacer:  // 0.12 primitives: drawn by the layout tasks
-        case K::Box:
-        case K::Cover:
+        }
+        case K::Box: {
+            OnInk ink(b);
+            const double radius = boxRadius(b, r);
+            if (b.fill != Block::Fill::None) {
+                gray(cr, fillGray(b.fill));
+                roundedRect(cr, r.x, r.y, r.w, r.h, radius);
+                cairo_fill(cr);
+            }
+            if (b.border != Block::Border::None) border(cr, r, kInk, radius, borderPx(b.border));
+            for (const auto& c : l.children) drawLaid(cr, c, f);
+            break;
+        }
+        case K::Spacer: break;
+        case K::Cover:  // 0.12 primitives: drawn by the next tasks
         case K::Progress:
         case K::Item:
         case K::Grid:
@@ -609,6 +797,8 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
         case K::Deck: hit = Hit{b.id, "", b.kind, l.rect}; break;
         case K::Notice:
         case K::Quote:
+        case K::Text:  // a link (0.12)
+        case K::Box:   // a custom button, a segment of a switch (0.12)
             if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
             break;
         case K::Buttons:

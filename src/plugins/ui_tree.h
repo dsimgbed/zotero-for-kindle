@@ -85,7 +85,7 @@ struct Block {
 
     Width width = Width::Default;  // any block; meaningful in a row (and a cover's, a progress's, an image's own)
     int widthPct = 0;              // width == Percent: 1..100
-    Align align = Align::Top;      // row
+    Align align = Align::Center;   // row (centred, as rows were before 0.12, unless it says)
     Fit fit = Fit::Page;           // column, on a Home body's root only
     Gap pad = Gap::None;           // box (its child is children[0]); an item's child is children[0] too
     Border border = Border::None;  // box

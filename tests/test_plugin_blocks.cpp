@@ -823,3 +823,290 @@ TEST_CASE("plugin shelf: golden on PW5 — covers, bars, New / Read / %, a PDF a
     drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
     checkGolden(c, "tests/golden/plugin-items-shelf.png");
 }
+
+// ---- primitives (0.12): widths, alignment, spacer, box, styled text --------------------------------
+
+namespace {
+
+// `children` in a row (`opts` merged into it), the row alone in a column.
+Block rowTree(const json& children, const json& opts = json::object()) {
+    json row = {{"kind", "row"}, {"children", children}};
+    row.update(opts);
+    return tree({{"kind", "column"}, {"children", json::array({row})}});
+}
+
+const TextStyle kBodyText{"Bookerly", 9, 400, false, 0, true};
+
+// A box as tall as a cover beside it (a column of lines inside it, padded), 35% of the row.
+json coverBox() {
+    return json::parse(R"({"kind":"box","width":"35%","fill":"ink","pad":"large",
+      "child":{"kind":"text","text":"Pride and Prejudice\n\n\n\n\n\n\n\nJane Austen","style":"title"}})");
+}
+
+// A canvas with only `t` drawn in it.
+std::vector<uint8_t> drawn(const Block& t) {
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    return grayOf(c);
+}
+
+}  // namespace
+
+TEST_CASE("plugin primitives: a row's widths — a percent of the row, auto its natural width, fill the rest") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = rowTree(json::parse(R"([{"kind":"text","text":"Thirty","width":"30%"},{"kind":"text","text":"The rest of the row"},
+                                           {"kind":"text","text":"All 9 ›","width":"auto"}])"));
+    const Rect area = blocksArea();
+    const Laid l = layoutTree(t, area, 0);
+    const auto& kids = l.children.at(0).children;
+    REQUIRE(kids.size() == 3);
+    const int room = area.w - 2 * 18;  // the row less its two small gaps
+    CHECK(kids[0].rect.w == room * 30 / 100);
+    const int natural = measureText("All 9 ›", kBodyText, area.w, 0).width;
+    CHECK(kids[2].rect.w >= natural);
+    CHECK(kids[2].rect.w <= natural + 4);
+    CHECK(kids[1].rect.w == room - kids[0].rect.w - kids[2].rect.w);
+    CHECK(kids[0].rect.x == area.x);
+    CHECK(kids[1].rect.x == kids[0].rect.x + kids[0].rect.w + 18);
+    CHECK(kids[2].rect.x + kids[2].rect.w == area.x + area.w);
+    // auto text is laid out on one line at that width
+    CHECK(kids[2].rect.h == measureText("All 9 ›", kBodyText, area.w, 0).height);
+}
+
+TEST_CASE("plugin primitives: percents over 100% scale down to fit; an auto keeps its width") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = rowTree(json::parse(R"([{"kind":"text","text":"A","width":"100%"},{"kind":"text","text":"B","width":"50%"},
+                                           {"kind":"text","text":"All ›","width":"auto"}])"));
+    const Rect area = blocksArea();
+    const Laid l = layoutTree(t, area, 0);
+    const auto& kids = l.children.at(0).children;
+    REQUIRE(kids.size() == 3);
+    const int natural = measureText("All ›", kBodyText, area.w, 0).width;
+    CHECK(kids[2].rect.w >= natural);
+    CHECK(std::abs(kids[0].rect.w - 2 * kids[1].rect.w) <= 1);
+    CHECK(kids[0].rect.w + kids[1].rect.w + kids[2].rect.w + 2 * 18 <= area.w);
+    CHECK(kids[0].rect.w + kids[1].rect.w + kids[2].rect.w + 2 * 18 >= area.w - 2);
+    CHECK(kids[2].rect.x + kids[2].rect.w <= area.x + area.w);
+}
+
+TEST_CASE("plugin primitives: a stretched row — every child the row's height; a spacer pushes the last text to the bottom") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    json children = json::array({coverBox(), json::parse(R"({"kind":"column","children":[
+        {"kind":"text","text":"Pride and Prejudice","style":"title"},{"kind":"spacer"},{"kind":"text","text":"13% · today","style":"meta"}]})")});
+    const Block t = rowTree(children, {{"align", "stretch"}, {"gap", "medium"}});
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    const Laid& row = l.children.at(0);
+    const Laid& box = row.children.at(0);
+    const Laid& col = row.children.at(1);
+    CHECK(box.rect.h == row.rect.h);
+    CHECK(col.rect.h == row.rect.h);
+    REQUIRE(col.children.size() == 3);
+    CHECK(col.children[0].rect.y == row.rect.y);
+    CHECK(col.children[1].rect.h > 200);  // the spacer took what was left
+    const Rect last = col.children[2].rect;
+    CHECK(last.y + last.h == row.rect.y + row.rect.h);
+    CHECK(last.h > 0);
+
+    // the same column elsewhere: the spacer takes no room
+    const Block plain = tree(json::parse(R"({"kind":"column","children":[
+        {"kind":"text","text":"Pride and Prejudice","style":"title"},{"kind":"spacer"},{"kind":"text","text":"13% · today","style":"meta"}]})"));
+    const Laid p = layoutTree(plain, blocksArea(), 0);
+    REQUIRE(p.children.size() == 3);
+    CHECK(p.children[1].rect.h == 0);
+}
+
+TEST_CASE("plugin primitives: a row's align puts shorter children at the top, centre or bottom") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    for (const char* a : {"top", "center", "bottom"}) {
+        INFO(a);
+        const Block t = rowTree(json::array({coverBox(), json{{"kind", "text"}, {"text", "Jane Austen"}}}), {{"align", a}});
+        const Laid l = layoutTree(t, blocksArea(), 0);
+        const Laid& row = l.children.at(0);
+        const Rect box = row.children.at(0).rect, text = row.children.at(1).rect;
+        CHECK(box.h == row.rect.h);
+        CHECK(text.h < row.rect.h / 2);
+        if (std::string(a) == "top") CHECK(text.y == row.rect.y);
+        if (std::string(a) == "center") CHECK(std::abs((text.y - row.rect.y) - (row.rect.y + row.rect.h - text.y - text.h)) <= 1);
+        if (std::string(a) == "bottom") CHECK(text.y + text.h == row.rect.y + row.rect.h);
+    }
+}
+
+TEST_CASE("plugin primitives: a box insets its child by its border and padding, and is as tall as both") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    struct Case {
+        const char* border;
+        const char* pad;
+        int inset;
+    };
+    for (const Case& c : {Case{"thin", "medium", 2 + 36}, Case{"thick", "xsmall", 3 + 6}, Case{"none", "none", 0}, Case{"thin", "none", 2}}) {
+        INFO(c.border << " " << c.pad);
+        const Block t = tree({{"kind", "column"},
+                              {"children", json::array({json{{"kind", "box"}, {"border", c.border}, {"pad", c.pad},
+                                                             {"child", {{"kind", "text"}, {"text", "Inside a box"}}}}})}});
+        const Laid l = layoutTree(t, blocksArea(), 0);
+        const Laid& box = l.children.at(0);
+        REQUIRE(box.children.size() == 1);
+        const Rect in = box.children[0].rect;
+        CHECK(in.x == box.rect.x + c.inset);
+        CHECK(in.y == box.rect.y + c.inset);
+        CHECK(in.w == box.rect.w - 2 * c.inset);
+        CHECK(in.h == measureText("Inside a box", kBodyText, in.w, 0).height);
+        CHECK(box.rect.h == in.h + 2 * c.inset);
+    }
+}
+
+TEST_CASE("plugin primitives: caps text is drawn uppercase (and tracked); options change the text's size") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const auto label = [](const std::string& s, bool caps) {
+        return tree({{"kind", "column"}, {"children", json::array({json{{"kind", "text"}, {"text", s}, {"style", "label"}, {"caps", caps}}})}});
+    };
+    const Block lower = label("reading desk", true), upper = label("READING DESK", true), plain = label("READING DESK", false);
+    CHECK(drawn(lower) == drawn(upper));
+    CHECK(drawn(upper) != drawn(plain));  // tracked
+
+    const auto sized = [](const char* size) {
+        return tree({{"kind", "column"}, {"children", json::array({json{{"kind", "text"}, {"text", "Middlemarch"}, {"size", size}}})}});
+    };
+    const Block xs = sized("xsmall"), ti = sized("title");
+    CHECK(layoutTree(xs, blocksArea(), 0).children.at(0).rect.h < layoutTree(ti, blocksArea(), 0).children.at(0).rect.h);
+}
+
+TEST_CASE("plugin primitives: a 300-character text on one line stays in its rect, in a column and at auto width in a row") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        std::string longText;
+        while (longText.size() < 300) longText += "Mastering the game of Go without human knowledge ";
+        const json text = {{"kind", "text"}, {"text", longText}, {"lines", 1}, {"style", "title"}};
+        json autoText = text;
+        autoText["width"] = "auto";
+        const Block t = tree({{"kind", "column"},
+                              {"children", json::array({text, json{{"kind", "row"},
+                                                                   {"children", json::array({autoText, json{{"kind", "text"},
+                                                                                                             {"text", "today"},
+                                                                                                             {"width", "auto"}}})}}})}});
+        const Rect area = blocksArea();
+        const Laid l = layoutTree(t, area, 0);
+        const int oneLine = measureText("Xg", {"Bookerly", 11, 700, false, 0, true}, 1000, 1).height;
+        CHECK(l.children.at(0).rect.h == oneLine);
+        const Laid& row = l.children.at(1);
+        CHECK(row.children.at(0).rect.h == oneLine);
+        for (const Laid& c : row.children) {
+            INFO(c.rect.x << " " << c.rect.w);
+            CHECK(inside(c.rect, area));
+        }
+        checkFits(t);
+    }
+}
+
+TEST_CASE("plugin primitives: a text or a box with an id is tapped as itself; text without an id is not") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = tree(json::parse(R"({"kind":"column","children":[
+      {"kind":"text","text":"All 9 ›","id":"all-pinned"},
+      {"kind":"text","text":"Just words"},
+      {"kind":"box","id":"pinned","border":"thin","pad":"small","child":{"kind":"text","text":"Pinned"}},
+      {"kind":"box","border":"thin","child":{"kind":"text","text":"A frame, not a button"}}]})"));
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    REQUIRE(l.children.size() == 4);
+    auto hit = hitTest(l, l.children[0].rect.center());
+    REQUIRE(hit);
+    CHECK(hit->id == "all-pinned");
+    CHECK(hit->kind == K::Text);
+    CHECK(hit->rect == l.children[0].rect);
+    CHECK_FALSE(hitTest(l, l.children[1].rect.center()));
+    hit = hitTest(l, l.children[2].rect.center());
+    REQUIRE(hit);
+    CHECK(hit->id == "pinned");
+    CHECK(hit->kind == K::Box);
+    CHECK(hit->rect == l.children[2].rect);
+    CHECK_FALSE(hitTest(l, l.children[3].rect.center()));
+}
+
+TEST_CASE("plugin primitives: golden on PW5 — styled text") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", true);
+    const Block t = tree(json::parse(R"({"kind":"column","gap":"small","children":[
+      {"kind":"text","text":"Book","style":"label","caps":true,"size":"small"},
+      {"kind":"text","text":"Pride and Prejudice","font":"serif","weight":"bold","size":"title"},
+      {"kind":"text","text":"Jane Austen","font":"sans","tone":"secondary","size":"body"},
+      {"kind":"text","text":"Inbox · 4 new","caps":true,"font":"sans","weight":"bold","size":"small","tone":"secondary"},
+      {"kind":"text","text":"Deep Residual Learning for Image Recognition","font":"serif","weight":"bold","size":"large","lines":1},
+      {"kind":"text","text":"He, Zhang, Ren, Sun · 2016","style":"meta"},
+      {"kind":"text","text":"An italic aside, medium weight","italic":true,"weight":"medium"},
+      {"kind":"text","text":"Centred","align":"center","size":"large"},
+      {"kind":"text","text":"At the end","align":"end"},
+      {"kind":"text","text":"xsmall · small · body","size":"xsmall"},
+      {"kind":"text","text":"All 9 ›","id":"all","weight":"bold","align":"end","size":"large"},
+      {"kind":"box","fill":"ink","pad":"small","child":{"kind":"text","text":"White on ink, tone auto","size":"large","weight":"bold"}},
+      {"kind":"box","fill":"ink","pad":"small","child":{"kind":"text","text":"Secondary on ink, tone given","tone":"secondary"}},
+      {"kind":"box","fill":"light","pad":"small","child":{"kind":"text","text":"Ink on light"}}]})"));
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    checkGolden(c, "tests/golden/plugin-primitives-text.png");
+}
+
+TEST_CASE("plugin primitives: golden on PW5 — rows: widths, a heading with a link, a stretched pair side") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", true);
+    json j = json::parse(R"({"kind":"column","gap":"medium","children":[
+      {"kind":"row","children":[{"kind":"text","text":"Pinned","caps":true,"style":"label","size":"small"},
+                                {"kind":"text","text":"All 9 ›","id":"all","width":"auto","weight":"bold","size":"large"}],"align":"center"},
+      {"kind":"row","children":[
+        {"kind":"box","width":"30%","border":"thin","pad":"xsmall","child":{"kind":"text","text":"30%"}},
+        {"kind":"box","border":"thin","pad":"xsmall","child":{"kind":"text","text":"fill"}},
+        {"kind":"box","width":"auto","border":"thin","pad":"xsmall","child":{"kind":"text","text":"auto"}}]},
+      {"kind":"row","children":[
+        {"kind":"box","width":"100%","border":"thin","pad":"xsmall","child":{"kind":"text","text":"100%, scaled"}},
+        {"kind":"box","width":"50%","border":"thin","pad":"xsmall","child":{"kind":"text","text":"50%"}}]},
+      {"kind":"row","align":"stretch","gap":"medium","children":[
+        {"kind":"box","width":"35%","fill":"ink","pad":"medium","child":{"kind":"text","text":"Pride and Prejudice\n\n\n\n\n\nJane Austen","weight":"bold","size":"large"}},
+        {"kind":"column","gap":"xsmall","children":[
+          {"kind":"text","text":"Pride and Prejudice","font":"serif","weight":"bold","size":"title","lines":3},
+          {"kind":"text","text":"Jane Austen","font":"sans","tone":"secondary","size":"large"},
+          {"kind":"spacer"},
+          {"kind":"text","text":"13% · today","font":"sans","tone":"secondary","size":"large"}]}]},
+      {"kind":"row","align":"bottom","children":[
+        {"kind":"box","width":"20%","fill":"light","pad":"large","child":{"kind":"text","text":"tall\n\n\nbox"}},
+        {"kind":"text","text":"at the bottom"}]}]})");
+    const Block t = tree(j);
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    checkGolden(c, "tests/golden/plugin-primitives-row.png");
+}
+
+TEST_CASE("plugin primitives: golden on PW5 — boxes: borders, fills, radii, a segmented switch") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Your desk", true);
+    const Block t = tree(json::parse(R"({"kind":"column","gap":"medium","children":[
+      {"kind":"box","border":"thin","radius":"small","child":{"kind":"row","gap":"none","children":[
+        {"kind":"box","id":"reading","pad":"small","child":{"kind":"text","text":"Reading","align":"center","font":"sans","weight":"medium","size":"large"}},
+        {"kind":"box","id":"pinned","pad":"small","fill":"ink","child":{"kind":"text","text":"Pinned","align":"center","font":"sans","weight":"medium","size":"large"}},
+        {"kind":"box","id":"inbox","pad":"small","child":{"kind":"text","text":"Inbox 4","align":"center","font":"sans","weight":"medium","size":"large"}}]}},
+      {"kind":"box","border":"thin","pad":"medium","child":{"kind":"text","text":"A thin border, medium padding"}},
+      {"kind":"box","border":"thick","pad":"medium","radius":"small","child":{"kind":"text","text":"A thick border, small radius"}},
+      {"kind":"box","fill":"light","pad":"medium","radius":"small","child":{"kind":"text","text":"A light fill"}},
+      {"kind":"box","fill":"ink","pad":"medium","radius":"round","child":{"kind":"text","text":"An ink pill","align":"center"}},
+      {"kind":"row","children":[
+        {"kind":"box","width":"auto","border":"thin","radius":"round","pad":"small","child":{"kind":"text","text":"round","font":"sans"}},
+        {"kind":"box","width":"auto","fill":"light","radius":"round","pad":"small","child":{"kind":"text","text":"light pill","font":"sans"}},
+        {"kind":"box","border":"thin","pad":"small","child":{"kind":"box","fill":"ink","pad":"small","child":{"kind":"box","fill":"light","pad":"small",
+          "child":{"kind":"text","text":"nested"}}}}]}]})"));
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    checkGolden(c, "tests/golden/plugin-primitives-box.png");
+}

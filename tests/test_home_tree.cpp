@@ -66,9 +66,9 @@ struct HomeRig {
     SyncStatus status;
     std::string choice = "desk/desk";
 
-    explicit HomeRig(std::optional<json> kept = std::nullopt) {
+    explicit HomeRig(std::optional<json> kept = std::nullopt, const char* script = kDesk) {
         fillFixtureLibrary(lib, 10);
-        fp.add("desk", kDesk, {}, "Reading Desk");
+        fp.add("desk", script, {}, "Reading Desk");
         if (kept) store.save("desk", "desk", *kept);
         PluginHostDeps d = fp.deps();
         d.renderBudgetMs = 500;
@@ -289,4 +289,22 @@ TEST_CASE("home tree: the chosen screen gone from its plugin: the kept tree goes
     REQUIRE(r.until([&] { return !r.home().pluginBody(); }));
     CHECK_FALSE(r.store.load("desk", "gone"));
     CHECK_FALSE(r.fp.exists("state/home-tree.json"));
+}
+
+TEST_CASE("home tree: a tap on a text or a box with an id brings {tap, id} to the Home body, as a quote's does") {
+    HomeRig r(std::nullopt, R"JS(
+let said = "fresh";
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.text("All ›", { id: "all-inbox" }),
+                              zk.ui.box(zk.ui.text("Reading"), { id: "reading", border: "thin" })]),
+  onEvent(e) { if (e.kind === "tap") said = "tapped " + e.id; },
+});
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "fresh"; }));
+    r.tap("all-inbox");
+    REQUIRE(r.until([&] { return r.shownText() == "tapped all-inbox"; }));
+    r.tap("reading");
+    REQUIRE(r.until([&] { return r.shownText() == "tapped reading"; }));
 }
