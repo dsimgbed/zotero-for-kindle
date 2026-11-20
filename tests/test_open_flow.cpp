@@ -307,3 +307,40 @@ TEST_CASE("library rowFor: a file the item doesn't have leaves the row not exact
     CHECK_FALSE(base->exactFile);
     CHECK(rig.lib.rowFor(r.key, r.attachmentKey)->exactFile);
 }
+
+// ---- audit C1: which screen the download was asked from ----
+
+TEST_CASE("open flow fix: a new screen at the old one's address doesn't open the book") {
+    Rig rig;
+    const ItemRow r = rig.row(2);
+    auto open = [&rig](const ItemRow& row) { rig.flow.open(row, rig.nav); };
+    // One slot for both screens, so the second has the first's address (as the allocator may give it).
+    alignas(LibraryScreen) unsigned char slot[sizeof(LibraryScreen)];
+    auto* first = new (slot) LibraryScreen(open, rig.flow.statusFn());
+    rig.nav.visible = first;
+    rig.flow.open(r, rig.nav);
+    first->~LibraryScreen();
+    auto* second = new (slot) LibraryScreen(open, rig.flow.statusFn());
+    REQUIRE(static_cast<const void*>(second) == static_cast<const void*>(first));
+    rig.nav.visible = second;
+    rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    rig.flow.onSyncEvent(rig.download(SyncEvent::Kind::DownloadFinished, r), rig.nav);
+    CHECK(rig.nav.pushed.empty());
+    second->~LibraryScreen();
+    rig.nav.visible = rig.screen.get();
+}
+
+TEST_CASE("open flow fix: a file kept later after a failed tap doesn't open by itself") {
+    Rig rig;
+    const ItemRow r = rig.row(0);
+    rig.screen->onGesture(tapAt(rig.rowRect(0).center()), rig.nav);
+    SyncEvent failed = rig.download(SyncEvent::Kind::DownloadFinished, r);
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", ""};
+    rig.event(failed);
+    // Later the same file comes down as a kept collection's (no tap): it isn't opened, and the
+    // row no longer shows the old error.
+    rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    rig.event(rig.download(SyncEvent::Kind::DownloadFinished, r));
+    CHECK(rig.nav.pushed.empty());
+    CHECK(rig.flow.statusFor(r.attachmentKey).empty());
+}

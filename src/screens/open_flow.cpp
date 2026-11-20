@@ -83,7 +83,7 @@ void OpenFlow::start(const ItemRow& row, Nav& nav, std::optional<AnnotationRecor
         return;
     }
     if (it != pending_.end()) tell(it->second.done, "Cancelled");  // a retry replaces the failed one
-    Pending p{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true, std::move(at), listKey, {}};
+    Pending p{row, nav.top() ? nav.top()->serial() : 0, nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true, std::move(at), listKey, {}};
     if (done) p.done.push_back(std::move(done));
     pending_[row.attachmentKey] = std::move(p);
     nav.sync().openBook(row.key, row.attachmentKey);
@@ -97,6 +97,10 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
         if (e.error) p.status = e.error->message;  // waiting, and why (Zotero asked to)
         else p.status = e.total > 0 ? "Downloading " + std::to_string(100 * e.done / e.total) + "%" : "Downloading…";
     } else if (e.kind == SyncEvent::Kind::DownloadFinished) {
+        if (!p.running) {  // the failed one came down since without a tap (a kept collection's): no surprise book
+            if (!e.error) pending_.erase(it);
+            return;
+        }
         p.running = false;
         if (e.error) {
             p.status = e.error->message + (e.error->details.empty() ? "" : " (" + e.error->details + ")");
@@ -105,7 +109,7 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
         }
         const ItemRow row = p.row;
         const auto at = p.at;
-        const bool stillThere = p.from && nav.top() == p.from;
+        const bool stillThere = p.from && nav.top() && nav.top()->serial() == p.from;
         auto done = std::move(p.done);
         pending_.erase(it);
         if (stillThere) {

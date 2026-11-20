@@ -3,6 +3,7 @@
 // (the app adds the tab bar), react to gestures, keys and sync events, and report which
 // parts of the window changed with which e-ink waveform.
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -108,6 +109,12 @@ public:
     virtual bool showsTabBar() const { return true; }
     // Closed (with what is above it) when its tab is left, instead of kept hidden (plugin screens).
     virtual bool closesWhenHidden() const { return false; }
+    // Which screen this is. Unlike its address, never that of a screen made later in its place.
+    uint64_t serial() const { return serial_; }
+
+private:
+    static inline std::atomic<uint64_t> nextSerial_{1};
+    uint64_t serial_ = nextSerial_++;
 };
 
 }  // namespace zk
