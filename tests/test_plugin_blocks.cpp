@@ -587,3 +587,237 @@ TEST_CASE("plugin items fix: a card shows its download's status, as a row does")
     const bool same = shot() == plain;
     CHECK_FALSE(same);
 }
+
+// ---- quote (0.11) ----------------------------------------------------------------------------------
+
+namespace {
+
+const char* kPride =
+    "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife. "
+    "However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so "
+    "well fixed in the minds of the surrounding families, that he is considered as the rightful property of some one or other "
+    "of their daughters. “My dear Mr. Bennet,” said his lady to him one day, “have you heard that Netherfield Park is let at last?”";
+
+json quoteScreen() {
+    json j = json::parse(R"({"kind":"column","gap":"medium","children":[
+      {"kind":"text","text":"A passage","style":"label"},
+      {"kind":"quote","id":"passage","text":"It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.","source":"Pride and Prejudice · p. 1"},
+      {"kind":"quote","text":"Call me Ishmael."},
+      {"kind":"quote","id":"long","text":"","source":"Pride and Prejudice · Austen · p. 1"},
+      {"kind":"button","id":"more","title":"Another"}]})");
+    j["children"][3]["text"] = kPride;
+    return j;
+}
+
+}  // namespace
+
+TEST_CASE("plugin blocks: golden on PW5 — quotes with and without a source, a long one ellipsized at 5 lines") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", true);
+    const Block t = tree(quoteScreen());
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    checkGolden(c, "tests/golden/plugin-blocks-quote.png");
+}
+
+TEST_CASE("plugin blocks: a quote is at most 5 lines and its source tall; a short one only as tall as its text") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const Block t = tree(quoteScreen());
+        const Laid l = layoutTree(t, blocksArea(), 0);
+        REQUIRE(l.pages == 1);
+        REQUIRE(l.children.size() == 5);
+        const int shortH = l.children[2].rect.h, longH = l.children[3].rect.h;
+        CHECK(shortH > 0);
+        CHECK(longH > shortH);
+        // the long one's text alone would be far more than 5 lines: the block stops at 5 and its source
+        json more = quoteScreen();
+        more["children"][3]["text"] = std::string(kPride) + " " + kPride + " " + kPride;
+        const Block t2 = tree(more);
+        CHECK(layoutTree(t2, blocksArea(), 0).children[3].rect.h == longH);
+        checkFits(t);
+        checkFits(t2);
+    }
+}
+
+TEST_CASE("plugin blocks: a quote with an id is tapped as itself; one without is not") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = tree(quoteScreen());
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    const auto hit = hitTest(l, l.children[1].rect.center());
+    REQUIRE(hit);
+    CHECK(hit->id == "passage");
+    CHECK(hit->kind == K::Quote);
+    CHECK(hit->rect == l.children[1].rect);
+    CHECK_FALSE(hitTest(l, l.children[2].rect.center()));
+}
+
+// ---- shelf (0.11) ----------------------------------------------------------------------------------
+
+namespace {
+
+// `n` books: some opened, one read, one new, a PDF and a web page among them.
+FakeItems shelfItems(int n) {
+    FakeItems f;
+    const char* titles[] = {"Pride and Prejudice", "Moby-Dick; or, The Whale", "The Brothers Karamazov",
+                            "Gaussian random fields on compact Riemannian manifolds", "Middlemarch", "Anna Karenina",
+                            "A web page about the Laplace–Beltrami operator", "Bleak House"};
+    for (int i = 0; i < n; ++i) {
+        const std::string k = "S" + std::to_string(i);
+        const int t = i % 8;
+        ItemRow& r = f.add(k, titles[t], t == 0 ? 0.13 : t == 1 ? 0.62 : t == 2 ? 0.05 : -1, t == 3 ? "PDF" : t == 6 ? "WEB" : "EPUB");
+        r.byline = t == 0 ? "Jane Austen · 1813" : t == 1 ? "Herman Melville · 1851" : "Adler · 2024";
+        if (t == 4) r.read = true, r.progress = 1.0;
+    }
+    return f;
+}
+
+json shelfScreen(int n) {
+    json j = json::parse(R"({"kind":"column","children":[
+      {"kind":"text","text":"On the shelf","style":"label"},
+      {"kind":"items","id":"shelf","style":"shelf","items":[]},
+      {"kind":"button","id":"more","title":"More"}]})");
+    for (int i = 0; i < n; ++i) j["children"][1]["items"].push_back("S" + std::to_string(i));
+    return j;
+}
+
+// The tiles of a laid shelf in its first row.
+std::vector<Rect> firstRow(const Laid& shelf) {
+    std::vector<Rect> out;
+    for (const auto& p : shelf.parts)
+        if (p.rect.y == shelf.parts.at(0).rect.y) out.push_back(p.rect);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("plugin shelf: tiles per row from the width — PW5 4, KT4 4, Scribe 6; ~240 px (200 at least), gaps of 32 px or more") {
+    if (!fonts()) return;
+    CHECK(shelfColumns(kPw5.width - 2 * kMargin) == 4);
+    CHECK(shelfColumns(kKt4.width - 2 * kMargin) == 4);
+    CHECK(shelfColumns(400) == 1);  // two tiles would be under 200 px
+    CHECK(shelfColumns(kScribe.width - 2 * kMargin) == 6);
+    CHECK(shelfColumns(200) == 1);  // never none
+    for (const auto& [dev, cols] : {std::pair{&kPw5, 4}, std::pair{&kKt4, 4}, std::pair{&kScribe, 6}}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        FakeItems items = shelfItems(30);
+        const Block t = tree(shelfScreen(30));
+        const Laid l = layoutTree(t, blocksArea(), 0, &items);
+        const Laid& shelf = l.children[1];
+        const auto row = firstRow(shelf);
+        REQUIRE(static_cast<int>(row.size()) == cols);
+        for (size_t i = 0; i < row.size(); ++i) {
+            CHECK(row[i].w == row[0].w);
+            CHECK(row[i].w >= 200);
+            CHECK(row[i].w <= 320);
+            if (i) CHECK(row[i].x - (row[i - 1].x + row[i - 1].w) >= 32);
+        }
+        CHECK(row.front().x == shelf.rect.x);  // the row spans the content width
+        CHECK(row.back().x + row.back().w == shelf.rect.x + shelf.rect.w);
+        CHECK(row[0].h > row[0].w * 3 / 2);  // a 2:3 cover and the lines under it
+    }
+}
+
+TEST_CASE("plugin shelf: 30 items page by rows; every item shown once, the button kept, nothing outside") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        FakeItems items = shelfItems(30);
+        const Block t = tree(shelfScreen(30));
+        const Laid first = layoutTree(t, blocksArea(), 0, &items);
+        CHECK(first.pages > 1);
+        const int cols = shelfColumns(blocksArea().w);
+        CHECK(first.children[1].first == 0);
+        std::map<std::string, int> seen;
+        Rect button = first.children[2].rect;
+        for (int p = 0; p < first.pages; ++p) {
+            const Laid l = layoutTree(t, blocksArea(), p, &items);
+            const Laid& shelf = l.children[1];
+            CHECK(shelf.parts.size() <= static_cast<size_t>(shelf.count * cols));
+            CHECK(shelf.parts.at(0).index == shelf.first * cols);  // a page starts on a row
+            for (const auto& part : shelf.parts) {
+                REQUIRE(part.item);
+                CHECK(part.item->key == shelf.items[part.index].key);
+                ++seen[part.item->key];
+            }
+            CHECK(l.children[2].rect == button);
+        }
+        CHECK(seen.size() == 30);
+        for (const auto& [k, n] : seen) CHECK(n == 1);
+        checkFits(t, &items);
+    }
+}
+
+TEST_CASE("plugin shelf: hit-testing a tile returns its ItemRow; the gap between tiles is no item") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(6);
+    const Block t = tree(shelfScreen(6));
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    const Laid& shelf = l.children[1];
+    REQUIRE(shelf.parts.size() == 6);
+    const auto h = hitTest(l, shelf.parts[5].rect.center());
+    REQUIRE(h);
+    CHECK(h->kind == K::Items);
+    CHECK(h->id == "shelf");
+    CHECK(h->part == "S5");
+    REQUIRE(h->item);
+    CHECK(h->item->title == "Anna Karenina");
+    CHECK(h->rect == shelf.parts[5].rect);
+    const Rect a = shelf.parts[0].rect, b = shelf.parts[1].rect;
+    const auto gap = hitTest(l, {(a.x + a.w + b.x) / 2, a.y + a.h / 2});
+    CHECK_FALSE(gap);
+}
+
+TEST_CASE("plugin shelf: a tile's line — the progress, New, Read; a download's status in its place") {
+    ItemRow r;
+    r.progress = 0.13;
+    CHECK(shelfMeta(r) == "13%");
+    r.progress = 0;
+    CHECK(shelfMeta(r) == "0%");
+    r.progress = -1;
+    CHECK(shelfMeta(r) == "New");
+    r.read = true;
+    CHECK(shelfMeta(r) == "Read");
+    r.progress = 0.4;
+    CHECK(shelfMeta(r) == "Read");
+
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items = shelfItems(4);
+    const Block t = tree(shelfScreen(4));
+    const auto shot = [&] {
+        fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+        const Laid l = layoutTree(t, blocksArea(), 0, &items);
+        drawTree(c.cr(), l, {}, &items);
+        std::vector<uint8_t> px(static_cast<size_t>(c.width()) * static_cast<size_t>(c.height()));
+        c.toGray(px.data(), c.width(), l.children[1].parts.at(1).rect);
+        return px;
+    };
+    const auto plain = shot();
+    items.download["AS1"] = "Downloading 42%";
+    const bool same = shot() == plain;
+    CHECK_FALSE(same);
+    CHECK(layoutTree(t, blocksArea(), 0, &items).children[1].itemMetas.at(1) == "62%");
+}
+
+TEST_CASE("plugin shelf: golden on PW5 — covers, bars, New / Read / %, a PDF and a web mark, a download") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items = shelfItems(8);
+    items.download["AS5"] = "Downloading 42%";
+    const Block t = tree(shelfScreen(8));
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", true);
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
+    checkGolden(c, "tests/golden/plugin-items-shelf.png");
+}

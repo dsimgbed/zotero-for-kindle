@@ -44,7 +44,7 @@ void searchIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_stroke(cr);
 }
 
-void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark) {
+void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark, double titlePt, int pad) {
     fillRect(cr, r, dark ? 42 : 255);
     if (!dark) {
         gray(cr, kInk);
@@ -53,9 +53,8 @@ void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::st
         cairo_stroke(cr);
     }
     uint8_t ink = dark ? 255 : kInk, soft = dark ? 200 : kSecondary;
-    int pad = 26;
     int ruleY = r.y + r.h - 112, titleY = r.y + pad + 6;
-    drawText(cr, title, {kSerif, 9, 700, false, ink}, {r.x + pad, titleY, r.w - 2 * pad, ruleY - 16 - titleY}, 5);
+    drawText(cr, title, {kSerif, titlePt, 700, false, ink}, {r.x + pad, titleY, r.w - 2 * pad, ruleY - 16 - titleY}, 5);
     hRule(cr, ruleY, r.x + pad, r.x + pad + 60, soft);
     drawText(cr, authors, {kSans, 6.5, 400, false, soft}, {r.x + pad, r.y + r.h - 92, r.w - 2 * pad, 80}, 2);
 }

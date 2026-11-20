@@ -19,6 +19,7 @@
 #include "plugins/plugin_ctx.h"
 #include "plugins/plugin_log.h"
 #include "plugins/state.h"
+#include "ui/metrics.h"
 
 using namespace zk;
 using namespace zk::test;
@@ -828,6 +829,37 @@ TEST_CASE("host: zk.plugin, zk.settings, console formatting and the error classe
     std::string logB = fp.log("b");
     CHECK(contains(logB, "settings {}"));
     CHECK(contains(logB, "settings.json"));  // a warning about the broken file
+}
+
+TEST_CASE("host: zk.display is the app's window, read-only") {
+    auto shown = [](const Metrics& m) {
+        ScopedMetrics scoped(m);
+        FakePlugins fp;
+        fp.add("a", R"(
+            const d = zk.display;
+            console.log("display", d.width, d.height, d.model, d.landscape);
+            try { d.width = 1; } catch (e) { console.log("assign", e instanceof TypeError); }
+            console.log("frozen", Object.isFrozen(d), JSON.stringify(Object.keys(d).sort()));
+        )");
+        PluginHost host(fp.deps());
+        host.setEnabled("a", true);
+        host.start();
+        host.dispatch(kSync);
+        REQUIRE(host.waitIdle(3000));
+        return fp.log("a");
+    };
+    std::string pw5 = shown(kPw5);
+    CHECK(contains(pw5, "display 1236 1547 pw5 false"));
+    CHECK(contains(pw5, "assign true"));
+    CHECK(contains(pw5, "frozen true [\"height\",\"landscape\",\"model\",\"width\"]"));
+    CHECK(contains(shown(kKt4), "display 1078 1337 kt4 false"));
+    CHECK(contains(shown(kScribe), "display 1860 2379 scribe false"));
+    Metrics turned = kPw5;
+    turned.width = 1648;
+    turned.height = 1135;
+    CHECK(contains(shown(turned), "display 1648 1135 pw5 true"));
+    Metrics other{1072, 1448, {0, 0}, 300, "Voyage"};
+    CHECK(contains(shown(other), "display 1072 1448 voyage false"));
 }
 
 TEST_CASE("host: logs go to the sink too, and rotate at their size limit") {

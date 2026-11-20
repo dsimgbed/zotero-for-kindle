@@ -33,6 +33,11 @@ const TextStyle kRowTitle{kSans, 9.5, 500};
 const TextStyle kRowSub{kSans, 7, 400, false, kSecondary};
 const TextStyle kRowMeta{kSans, 7.5, 400, false, kTertiary};
 const TextStyle kEmpty{kSerif, 10, 400, false, kSecondary};
+// A quote (0.11): a passage set apart by a rule on its left, not by a box (the reader's own
+// highlights are boxes enough); at most 5 lines, so a long highlight can't take Home's body.
+const TextStyle kQuoteText{kSerif, 9, 400, true};
+const TextStyle kQuoteSource{kSans, 7, 400, false, kSecondary};
+constexpr int kQuoteRuleW = 6, kQuoteIndent = kQuoteRuleW + 30, kQuoteLines = 5, kQuoteSourceGap = 14, kQuotePadY = 4;
 
 int gapPx(Block::Gap g) {
     switch (g) {
@@ -121,7 +126,9 @@ const Resolved& resolved(const Block& b) {
     Resolved r;
     for (const ItemRef& ref : b.items)
         if (auto row = gSource->row(ref)) {
-            r.metas.push_back(b.itemStyle == Block::ItemStyle::Card ? gSource->cardMeta(*row) : std::string());
+            r.metas.push_back(b.itemStyle == Block::ItemStyle::Card    ? gSource->cardMeta(*row)
+                              : b.itemStyle == Block::ItemStyle::Shelf ? shelfMeta(*row)
+                                                                       : std::string());
             r.rows.push_back(std::move(*row));
             r.labels.push_back(ref.label);
         }
@@ -131,8 +138,23 @@ const Resolved& resolved(const Block& b) {
 // A card is as tall as Home's (cover 400), a gap under it; a row is the app's row.
 constexpr int kItemCardH = 400, kItemCardGap = 36;
 bool itemCards(const Block& b) { return b.itemStyle == Block::ItemStyle::Card; }
+bool shelf(const Block& b) { return b.itemStyle == Block::ItemStyle::Shelf; }
 int itemUnitH(const Block& b) { return itemCards(b) ? kItemCardH + kItemCardGap : kRowH; }
 int itemH(const Block& b) { return itemCards(b) ? kItemCardH : kRowH; }
+
+// A shelf (0.11): tiles of about kTileW (shelfColumns) in rows that span the width, at least kTileGap apart; a
+// tile is its 2:3 cover, the bar and one line (widgets.h, drawItemTile). Its page units are rows.
+constexpr int kTileW = 240, kTileMinW = 200, kTileGap = 36, kTileMaxW = 320, kTileRowGap = 40, kTileUnder = 18 + 8 + 12;
+const TextStyle kTileLine{kSans, 7, 400, false, kSecondary};
+int tileW(int w) {
+    const int n = shelfColumns(w);
+    return n == 1 ? std::min(w, kTileMaxW) : (w - (n - 1) * kTileGap) / n;
+}
+int tileH(int w) { return tileW(w) * 3 / 2 + kTileUnder + textH("Xg", kTileLine, 1000, 1); }
+int shelfRows(size_t items, int w) {
+    const size_t n = static_cast<size_t>(shelfColumns(w));
+    return static_cast<int>((items + n - 1) / n);
+}
 
 int rowH(const Block& list) {
     for (const auto& r : list.rows)
@@ -241,7 +263,10 @@ Units unitsOf(const Block& b, int w) {
             const size_t n = resolved(b).rows.size();
             if (!gSource) break;  // no source: no room
             if (n == 0) u.head = b.empty.empty() ? 0 : 112;
-            else {
+            else if (shelf(b)) {
+                u.h.assign(static_cast<size_t>(shelfRows(n, w)), tileH(w) + kTileRowGap);
+                u.h.back() = tileH(w);
+            } else {
                 u.h.assign(n, itemUnitH(b));
                 u.h.back() = itemH(b);
             }
@@ -285,6 +310,11 @@ int naturalH(const Block& b, int w) {
         case K::Divider: return kDividerH;
         case K::Space: return spacePx(b.gap);
         case K::Notice: return textH(b.text, kNotice, w, 3);
+        case K::Quote: {
+            const int inner = w - kQuoteIndent;
+            return 2 * kQuotePadY + textH(b.text, kQuoteText, inner, kQuoteLines) +
+                   (b.meta.empty() ? 0 : kQuoteSourceGap + textH(b.meta, kQuoteSource, inner, 1));
+        }
         default: return unitsOf(b, w).natural();
     }
 }
@@ -346,6 +376,16 @@ Laid place(const Block& b, Rect r, int first, int count) {
             l.items = res.rows;
             l.itemLabels = res.labels;
             l.itemMetas = res.metas;
+            if (shelf(b)) {  // the rows first..first+count, each item a tile
+                const int n = shelfColumns(r.w), tw = tileW(r.w), th = tileH(r.w);
+                const int size = static_cast<int>(res.rows.size());
+                for (int i = first * n; i < (first + count) * n && i < size; ++i) {
+                    const int col = i % n, row = i / n - first;
+                    const int x = n == 1 ? r.x : r.x + (r.w - tw) * col / (n - 1);
+                    l.parts.push_back({i, Rect{x, r.y + row * (th + kTileRowGap), tw, th}.intersected(r), res.rows[i]});
+                }
+                break;
+            }
             for (int i = first; i < first + count && i < static_cast<int>(res.rows.size()); ++i)
                 l.parts.push_back({i, Rect{r.x, r.y + (i - first) * itemUnitH(b), r.w, itemH(b)}.intersected(r), res.rows[i]});
             break;
@@ -507,7 +547,8 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             if (l.items.empty()) centredText(cr, b.empty, kEmpty, r);
             for (const auto& p : l.parts) {
                 if (!p.item) continue;
-                if (itemCards(b))
+                if (shelf(b)) drawItemTile(cr, p.rect, *p.item, gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
+                else if (itemCards(b))
                     drawItemCard(cr, p.rect, *p.item, l.itemLabels[p.index], l.itemMetas[p.index],
                                  gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
                 else drawItemRow(cr, p.rect, *p.item, gDrawSource ? gDrawSource->status(p.item->attachmentKey) : "");
@@ -536,6 +577,15 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
         case K::Divider: hRule(cr, r.y + r.h / 2 - 1, r.x, r.x + r.w, kRule); break;
         case K::Space: break;
         case K::Notice: drawText(cr, b.text, kNotice, r, 3); break;
+        case K::Quote: {
+            fillRect(cr, {r.x, r.y, kQuoteRuleW, r.h}, kInk);
+            const int x = r.x + kQuoteIndent, w = r.w - kQuoteIndent;
+            const int th = textH(b.text, kQuoteText, w, kQuoteLines);
+            drawText(cr, b.text, kQuoteText, {x, r.y + kQuotePadY, w, th}, kQuoteLines);
+            if (!b.meta.empty())
+                drawText(cr, b.meta, kQuoteSource, {x, r.y + kQuotePadY + th + kQuoteSourceGap, w, r.h}, 1);
+            break;
+        }
     }
     cairo_restore(cr);
 }
@@ -551,6 +601,7 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
         case K::Field:
         case K::Deck: hit = Hit{b.id, "", b.kind, l.rect}; break;
         case K::Notice:
+        case K::Quote:
             if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
             break;
         case K::Buttons:
@@ -570,6 +621,14 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
 }
 
 }  // namespace
+
+int shelfColumns(int width) {
+    // As many tiles of about kTileW as fit, rounded (a KT4's 958 px takes 4 of 212, not 3 of 298:
+    // a row of 3 is too tall to leave room for anything else), never narrower than kTileMinW.
+    int n = std::max(1, (width + kTileGap + (kTileW + kTileGap) / 2) / (kTileW + kTileGap));
+    while (n > 1 && (width - (n - 1) * kTileGap) / n < kTileMinW) --n;
+    return n;
+}
 
 Rect blocksArea() {
     const Metrics& m = metrics();

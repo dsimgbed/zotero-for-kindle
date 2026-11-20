@@ -26,8 +26,13 @@ inline const Metrics kScribe{1860, 2379, {0, 101}, 300, "Scribe"};
 // estimated: not measured on one) at 300 ppi.
 inline const Metrics kKt4{1078, 1337, {0, 56}, 167, "Kindle 10", 167.0 / 300};
 
-const Metrics& metrics();
+const Metrics& metrics();  // on the UI thread
 void setMetrics(const Metrics&);
+// A copy, safe from any thread (plugins read the window from theirs).
+Metrics metricsSnapshot();
+// The device's short name for plugins: "pw5", "kt4", "scribe", else FBInk's name in lower case
+// without spaces ("PaperWhite 4" -> "paperwhite4").
+std::string deviceModel(const std::string& fbinkName);
 
 // For tests: these metrics until the end of the scope.
 class ScopedMetrics {

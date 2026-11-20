@@ -570,6 +570,34 @@ TEST_CASE("plugin screen: a tap on the deck's card posts {tap, id: the deck}; a 
     CHECK(r.link.sent.size() == 2);
 }
 
+TEST_CASE("plugin screen, end to end: zk.ui.quote draws a quote; a tap on one with an id brings {tap, id}") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([
+    zk.ui.text(said),
+    zk.ui.quote({ id: "passage", text: "It is a truth universally acknowledged.", source: "Pride and Prejudice · p. 1" }),
+    zk.ui.quote({ text: "Call me Ishmael." }),
+  ]),
+  onEvent(e) { if (e.kind === "tap") said = "tapped " + e.id; },
+});
+)JS");
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    const Block& root = *r.top()->laid()->block;
+    REQUIRE(root.children.size() == 3);
+    CHECK(root.children[1].kind == Block::Kind::Quote);
+    CHECK(root.children[1].meta == "Pride and Prejudice · p. 1");
+    CHECK(root.children[2].kind == Block::Kind::Quote);
+    CHECK(root.children[2].id.empty());
+    r.tapButton("passage");
+    REQUIRE(r.until([&] { return r.shown("tapped passage"); }));
+}
+
 TEST_CASE("plugin screen, end to end: zk.reader.open opens over the screen; the promise resolves; Back brings a `reader` event") {
     if (!fonts()) return;
     ScopedMetrics m(kPw5);
@@ -730,7 +758,7 @@ zk.screen("deck", {
   render: () => zk.ui.column([zk.ui.text(said), zk.ui.button({ id: "read", title: "Read" }), zk.ui.button({ id: "lost", title: "Lost" })]),
   async onEvent(e) {
     if (e.kind === "tap") {
-      try { await zk.library.open(e.id === "read" ? { key: "BOOK0001", library: 0 } : "GONE", { attachment: "FILE0001" }); said = "opened"; }
+      try { await zk.library.open(e.id === "read" ? { key: "BOOK0001", library: 0 } : "GONE", { attachment: "FILE0001", annotation: "NOTE0001" }); said = "opened"; }
       catch (err) { said = "rejected: " + err.message; }
     }
     if (e.kind === "reader") said = "back from the reader";
@@ -742,12 +770,13 @@ zk.screen("deck", {
         void onGesture(const Gesture&, Nav&) override {}
     };
     ItemRef asked;
-    std::optional<std::string> file;
-    r.events->setItemOpener([&](App& a, const ItemRef& ref, std::optional<std::string> attachment,
+    std::optional<std::string> file, note;
+    r.events->setItemOpener([&](App& a, const ItemRef& ref, std::optional<std::string> attachment, std::optional<std::string> annotation,
                                 std::function<void(const std::string&)> answer) {
         if (ref.key == "GONE") return answer("Item not found");
         asked = ref;
         file = attachment;
+        note = annotation;
         a.push(std::make_unique<Shown>());
         answer("");
     });
@@ -760,6 +789,7 @@ zk.screen("deck", {
     CHECK(asked.key == "BOOK0001");
     CHECK(asked.library == 0);
     CHECK(file == "FILE0001");
+    CHECK(note == "NOTE0001");
     r.app.pop();  // out of the reader
     REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
 }

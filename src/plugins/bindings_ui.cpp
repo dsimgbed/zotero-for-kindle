@@ -99,6 +99,7 @@ zk.ui = Object.freeze({
   divider: () => ({ kind: "divider" }),
   space: (size) => (size === undefined ? { kind: "space" } : { kind: "space", size }),
   notice: (text, opts) => ({ kind: "notice", text, ...opts }),
+  quote: (quote) => ({ kind: "quote", ...quote }),
   open(screenId, params) {
     if (typeof screenId !== "string") throw new TypeError("zk.ui.open: the screen id must be a string");
     n.open(screenId, json(params, "zk.ui.open: params"));

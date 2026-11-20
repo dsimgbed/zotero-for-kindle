@@ -44,21 +44,21 @@ struct ItemRef {
 };
 
 struct Block {
-    enum class Kind { Column, Row, Text, Card, Deck, Items, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice };
+    enum class Kind { Column, Row, Text, Card, Deck, Items, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice, Quote };
     enum class Gap { None, Small, Medium, Large };  // also a space's size
     enum class Style { Title, Body, Meta, Label };
     enum class Select { None, One, Many };
-    enum class ItemStyle { Card, Row };
+    enum class ItemStyle { Card, Row, Shelf };  // Shelf (0.11): cover tiles in rows; a ref's label isn't drawn
 
     Kind kind = Kind::Column;
-    std::string id;                // deck, list, search, field, chips, button; a notice's (optional)
+    std::string id;                // deck, list, search, field, chips, button; a notice's and a quote's (optional)
     std::vector<Block> children;   // column, row; a deck's card (0 or 1); the buttons of `buttons`
     Gap gap = Gap::Small;          // column, row; space (default Medium)
     std::vector<Span> spans;       // text ("\n" breaks a line)
     Style style = Style::Body;     // text
     int lines = 0;                 // text: at most (0: no cap); field: lines tall (1 by default)
-    std::string title, meta, body, badge;  // card; a button's title
-    std::string text;              // notice
+    std::string title, meta, body, badge;  // card; a button's title; a quote's source (meta)
+    std::string text;              // notice, quote (its line breaks kept)
     std::string empty;             // deck, list, items
     std::vector<ListRow> rows;     // list
     std::vector<ItemRef> items;    // items

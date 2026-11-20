@@ -42,8 +42,10 @@ void displayIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void lightIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g);
-// Typographic cover for items without one: title in Bookerly, authors in Ember.
-void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark);
+// Typographic cover for items without one: title in Bookerly, authors in Ember, `pad` from the
+// edges. A shelf's narrower covers set a smaller titlePt and pad, so a word doesn't break.
+void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark, double titlePt = 9,
+                    int pad = 26);
 void typeBadge(cairo_t* cr, Rect r, const std::string& type);
 void progressBar(cairo_t* cr, Rect r, double fraction);
 

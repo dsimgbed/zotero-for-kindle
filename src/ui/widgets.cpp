@@ -72,11 +72,61 @@ std::string itemCardMeta(Library& lib, const ItemRow& row, int64_t nowMs) {
     return cardMetaText(row, static_cast<int>(highlights), opened, nowMs);
 }
 
+void drawCover(cairo_t* cr, Rect r, const ItemRow& item) {
+    // Home's card is 290 wide; a narrower cover (a shelf's tile) has narrower margins and sets its
+    // title smaller in proportion (7 pt at least), and smaller still (to 6 pt) until its longest word fits unbroken.
+    const std::string title = item.title.empty() ? "Untitled" : item.title;
+    double titlePt = 9;
+    const int pad = r.w < 230 ? 16 : r.w < 290 ? 20 : 26;
+    if (r.w < 290) {
+        titlePt = std::max(7.0, std::round(9.0 * r.w / 290 * 2) / 2);
+        std::vector<std::string> words;
+        for (size_t at = 0; at < title.size();) {
+            const size_t end = std::min(title.find(' ', at), title.size());
+            if (end > at) words.push_back(title.substr(at, end - at));
+            at = end + 1;
+        }
+        const int room = r.w - 2 * pad;
+        const auto fits = [&](double pt) {
+            for (const auto& w : words)
+                if (measureText(w, {kSerif, pt, 700}, 10000, 1).width > room) return false;
+            return true;
+        };
+        while (titlePt > 6 && !fits(titlePt)) titlePt -= 0.5;
+    }
+    generatedCover(cr, r, title, authorsOf(item.byline), true, titlePt, pad);
+}
+
+std::string shelfMeta(const ItemRow& item) {
+    if (item.read) return "Read";
+    if (item.progress < 0) return "New";
+    return std::to_string(static_cast<int>(item.progress * 100 + 0.5)) + "%";
+}
+
+void drawItemTile(cairo_t* cr, Rect r, const ItemRow& item, const std::string& status) {
+    fillRect(cr, r, 255);
+    const Rect cover{r.x, r.y, r.w, r.w * 3 / 2};
+    drawCover(cr, cover, item);
+    if (!item.badge.empty() && item.badge != "EPUB") {  // the file's format, in white on the cover's corner
+        // A tab in the very corner, above the title's first line (which starts 32 px down).
+        const TextStyle st{kSans, 5, 700, false, kInk};
+        const int w = measureText(item.badge, st, cover.w, 1).width + 20, h = 30;
+        const Rect mark{cover.x + cover.w - w, cover.y, w, h};
+        fillRect(cr, mark, 255);
+        centredText(cr, item.badge, st, mark);
+    }
+    const int barY = cover.y + cover.h + 18;
+    if (item.progress >= 0) progressBar(cr, {r.x, barY, r.w, 8}, item.progress);
+    const int lineY = barY + 8 + 12;
+    if (status.empty()) drawText(cr, shelfMeta(item), {kSans, 7, 400, false, kSecondary}, {r.x, lineY, r.w, r.y + r.h - lineY}, 1);
+    else drawText(cr, status, {kSans, 7, 500, false, kInk}, {r.x, lineY, r.w, r.y + r.h - lineY}, 1);
+}
+
 void drawItemCard(cairo_t* cr, Rect r, const ItemRow& item, const std::string& label, const std::string& meta,
                   const std::string& status) {
     const std::string title = item.title.empty() ? "Untitled" : item.title;
     const Rect cover{r.x, r.y, 290, r.h};
-    generatedCover(cr, cover, title, authorsOf(item.byline), true);
+    drawCover(cr, cover, item);
     const int colX = cover.x + cover.w + 48, colW = r.x + r.w - colX;
     int top = r.y + 6;
     if (!label.empty()) {

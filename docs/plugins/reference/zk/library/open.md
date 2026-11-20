@@ -19,6 +19,12 @@ is gone or unreadable (`"Item not found"`), the download failed, or the user can
 looked up in that library; with `library` omitted (or a plain key) the app finds the item
 by its key across the libraries it shows.
 
+With `annotation` (an [Annotation](../Annotation.md)'s key, needs app 0.11.0) the reader opens the file
+that annotation is in and goes to it, as a tap in the app's Notes does. An annotation that
+is unknown, deleted, another item's, or not in the `attachment` given rejects with
+`"Annotation not found"`; on an app before 0.11.0 the option is ignored and the item opens
+where it was left.
+
 **Permission**: `library:read`. Needs app 0.10.0.
 
 ## Parameters
@@ -26,7 +32,8 @@ by its key across the libraries it shows.
 | Parameter | Type |
 | ------ | ------ |
 | `item` | \| `string` \| \{ `key`: `string`; `library?`: `number`; \} |
-| `options?` | \{ `attachment?`: `string`; \} |
+| `options?` | \{ `annotation?`: `string`; `attachment?`: `string`; \} |
+| `options.annotation?` | `string` |
 | `options.attachment?` | `string` |
 
 ## Returns
@@ -41,4 +48,9 @@ if (e.kind === "tap" && e.id === "continue") await zk.library.open(lastKey);
 
 ```ts
 await zk.library.open({ key: item.key, library: item.libraryId }, { attachment: pdf.key });
+```
+
+```ts
+// a highlight, tapped: the reader opens at it (app 0.11.0)
+await zk.library.open(passage.itemKey, { annotation: passage.key });
 ```

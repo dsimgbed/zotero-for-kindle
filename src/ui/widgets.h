@@ -32,6 +32,15 @@ std::string itemRowMeta(const ItemRow&);
 // A `status` (download progress or an error, as a row's) shows in place of `meta`.
 void drawItemCard(cairo_t*, Rect, const ItemRow&, const std::string& label, const std::string& meta,
                   const std::string& status = {});
+// The app's generated cover for an item (no item has a real one): a dark fill, its title in white
+// serif, a short rule and its authors. Home's card and a plugin's shelf draw it.
+void drawCover(cairo_t*, Rect, const ItemRow&);
+// A shelf's tile (0.11): the cover (2:3, the tile's width; "PDF" or "WEB" in its top-right corner
+// for a file that isn't an EPUB), a thin progress bar under it once the item was opened, and one
+// line: shelfMeta, or `status` (a download's progress or an error) in its place.
+void drawItemTile(cairo_t*, Rect, const ItemRow&, const std::string& status);
+// A tile's line: "Read", "13%" once opened, "New" before.
+std::string shelfMeta(const ItemRow&);
 // The card's meta line: "13% · 3 highlights · opened today"; "new" / "2 highlights · new" before it was opened.
 // openedMs 0: never opened.
 std::string cardMetaText(const ItemRow&, int highlights, int64_t openedMs, int64_t nowMs);

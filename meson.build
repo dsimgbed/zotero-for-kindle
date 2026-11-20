@@ -192,8 +192,8 @@ plugins_lib = static_library('zk-plugins',
   'src/plugins/plugin_http.cpp',
   'src/plugins/ui_tree.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep])
-plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep],
+  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep])  # ui: zk.display reads the metrics
+plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep],
   include_directories : include_directories('third_party', is_system : true))
 
 # Plugin catalog (part 3): the signed registry, the release check and the installer.

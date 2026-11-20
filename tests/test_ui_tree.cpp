@@ -217,9 +217,22 @@ TEST_CASE("ui tree: an items block takes keys, refs with a library and a label; 
     CHECK(whyNot(json{{"kind", "items"}, {"id", "x"}, {"style", "row"}, {"items", refs}}).find("more than 2,000 blocks") != std::string::npos);
 }
 
+TEST_CASE("ui tree: an items block in the shelf style (0.11); a ref's label is kept, the shelf just doesn't draw it") {
+    const Block t = ok(json::parse(R"({"kind":"items","id":"shelf","style":"shelf","items":["ABCD2345",{"key":"EFGH6789","label":"x"}],"empty":"No books"})"));
+    CHECK(t.kind == K::Items);
+    CHECK(t.itemStyle == Block::ItemStyle::Shelf);
+    REQUIRE(t.items.size() == 2);
+    CHECK(t.items[1].label == "x");
+    CHECK(t.empty == "No books");
+    // allowed in Home's body
+    std::string why;
+    CHECK(parseTree(json::parse(R"({"kind":"items","id":"shelf","style":"shelf","items":["A"]})"), &why, TreeUse::HomeBody));
+    CHECK(why.empty());
+}
+
 TEST_CASE("ui tree: an items block with a bad style, ref or field is refused, naming where") {
     CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"grid","items":[]})")) ==
-          "items: \"style\" must be one of \"card\", \"row\"");
+          "items: \"style\" must be one of \"card\", \"row\", \"shelf\"");
     CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","items":[]})")) == "items: \"style\" is missing");
     CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row"})")) == "items: \"items\" is missing");
     CHECK(whyNot(json::parse(R"({"kind":"items","id":"x","style":"row","items":[3]})")) ==
@@ -244,4 +257,30 @@ TEST_CASE("ui tree: Home's body refuses a search and a field, other blocks pass"
                           &why, TreeUse::HomeBody));
     CHECK(why == "column[0].row[0]: field can't be on Home");
     CHECK(parseTree(json{{"kind", "column"}, {"children", json::array({search})}}, &why));  // fine on a screen
+}
+
+TEST_CASE("ui tree: a quote takes text, an optional source and id; it counts one block and may be on Home") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"quote","text":"It is a truth\nuniversally acknowledged","source":"Pride and Prejudice · p. 1","id":"passage"},
+      {"kind":"quote","text":"  Alone  "}]})"));
+    REQUIRE(t.children.size() == 2);
+    const Block& q = t.children[0];
+    CHECK(q.kind == K::Quote);
+    CHECK(q.text == "It is a truth\nuniversally acknowledged");  // its line breaks kept, as a text block's
+    CHECK(q.meta == "Pride and Prejudice · p. 1");
+    CHECK(q.id == "passage");
+    CHECK(t.children[1].text == "Alone");
+    CHECK(t.children[1].meta.empty());
+    CHECK(t.children[1].id.empty());
+    CHECK(blockCount(t) == 3);
+    std::string why;
+    CHECK(parseTree(json::parse(R"({"kind":"quote","text":"x"})"), &why, TreeUse::HomeBody));
+}
+
+TEST_CASE("ui tree: a quote without text, with an unknown field or a duplicate id is refused, naming where") {
+    CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"quote","source":"s"}]})")) == "column[0].quote: \"text\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"quote","text":"t","author":"a"})")) == "quote: unknown field \"author\"");
+    CHECK(whyNot(json::parse(R"({"kind":"quote","text":7})")) == "quote: \"text\" must be a string");
+    CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"button","id":"q","title":"B"},{"kind":"quote","id":"q","text":"t"}]})")) ==
+          "column[1].quote: another block already has the id \"q\"");
 }
