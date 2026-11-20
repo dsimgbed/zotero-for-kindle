@@ -66,9 +66,9 @@ struct HomeRig {
     SyncStatus status;
     std::string choice = "desk/desk";
 
-    explicit HomeRig(std::optional<json> kept = std::nullopt) {
+    explicit HomeRig(std::optional<json> kept = std::nullopt, const char* script = kDesk) {
         fillFixtureLibrary(lib, 10);
-        fp.add("desk", kDesk, {}, "Reading Desk");
+        fp.add("desk", script, {}, "Reading Desk");
         if (kept) store.save("desk", "desk", *kept);
         PluginHostDeps d = fp.deps();
         d.renderBudgetMs = 500;
@@ -289,4 +289,99 @@ TEST_CASE("home tree: the chosen screen gone from its plugin: the kept tree goes
     REQUIRE(r.until([&] { return !r.home().pluginBody(); }));
     CHECK_FALSE(r.store.load("desk", "gone"));
     CHECK_FALSE(r.fp.exists("state/home-tree.json"));
+}
+
+TEST_CASE("home tree: a tap on a text or a box with an id brings {tap, id} to the Home body, as a quote's does") {
+    HomeRig r(std::nullopt, R"JS(
+let said = "fresh";
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.text("All ›", { id: "all-inbox" }),
+                              zk.ui.box(zk.ui.text("Reading"), { id: "reading", border: "thin" })]),
+  onEvent(e) { if (e.kind === "tap") said = "tapped " + e.id; },
+});
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "fresh"; }));
+    r.tap("all-inbox");
+    REQUIRE(r.until([&] { return r.shownText() == "tapped all-inbox"; }));
+    r.tap("reading");
+    REQUIRE(r.until([&] { return r.shownText() == "tapped reading"; }));
+}
+
+TEST_CASE("home tree: an item piece opens the item sheet on a long-press; an image comes from the plugin's package") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([
+    zk.ui.item("IT000009", zk.ui.row([zk.ui.cover("IT000009", { width: "20%" }), zk.ui.text("Pinned one")])),
+    zk.ui.image({ src: "art/pic.png", id: "pic", width: "25%" }),
+  ]),
+});
+)JS");
+    {  // a 40×20 PNG in the plugin's folder
+        cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 40, 20);
+        std::filesystem::create_directories(r.fp.path("desk/art"));
+        REQUIRE(cairo_surface_write_to_png(s, r.fp.path("desk/art/pic.png").c_str()) == CAIRO_STATUS_SUCCESS);
+        cairo_surface_destroy(s);
+    }
+    r.start();
+    REQUIRE(r.until([&] {
+        const PluginBody* b = r.home().pluginBody();
+        return r.home().showsPluginBody() && b->laid() && findLaid(*b->laid(), "pic");
+    }));
+    const Laid& laid = *r.home().pluginBody()->laid();
+    const Rect pic = findLaid(laid, "pic")->rect;
+    CHECK(pic.w > 0);
+    CHECK(pic.h == pic.w / 2);
+    const Rect piece = laid.children.at(0).rect;
+    const Point at = piece.center();
+    r.home().onGesture(Gesture{GestureType::LongPress, at, at}, r.app);
+    REQUIRE(r.home().pluginBody()->sheet());
+    CHECK(r.home().pluginBody()->sheet()->row().key == "IT000009");
+}
+
+TEST_CASE("home tree: a body with fit \"trim\" never pages: what doesn't fit is left out from the end; swipes change nothing") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column(Array.from({ length: 40 }, (_, i) => zk.ui.text("Line " + i, { id: "l" + i })), { fit: "trim" }),
+});
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "Line 0"; }));
+    const Laid laid = *r.home().pluginBody()->laid();
+    CHECK(laid.pages == 1);
+    CHECK(pageIndicatorRect(laid).empty());
+    REQUIRE(laid.children.size() > 1);
+    REQUIRE(laid.children.size() < 40);
+    const Laid& last = laid.children.back();
+    CHECK(last.block->id == "l" + std::to_string(laid.children.size() - 1));
+    CHECK(last.rect.y + last.rect.h <= laid.rect.y + laid.rect.h);
+    CHECK_FALSE(findLaid(laid, "l" + std::to_string(laid.children.size())));
+    const Point mid = laid.rect.center();
+    r.home().onGesture(Gesture{GestureType::Swipe, {mid.x - 400, mid.y}, mid, Direction::Left}, r.app);
+    r.app.step(0);
+    CHECK(r.home().pluginBody()->laid()->page == 0);
+    CHECK(r.home().pluginBody()->laid()->children.size() == laid.children.size());
+}
+
+TEST_CASE("home tree: zk.ui.open from a Home body's tap pushes that screen over Home with the params; back returns to the body") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([zk.ui.text("home body"), zk.ui.text("Pinned ›", { id: "go" })]),
+  onEvent(e) { if (e.kind === "tap" && e.id === "go") zk.ui.open("shelf", { tab: "pinned" }); },
+});
+zk.screen("shelf", { title: "Shelf", render: (p) => zk.ui.text("shelf " + p.tab) });
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "home body"; }));
+    r.tap("go");
+    REQUIRE(r.until([&] { return dynamic_cast<const PluginScreen*>(r.app.top()) != nullptr; }));
+    auto* p = dynamic_cast<const PluginScreen*>(r.app.top());
+    CHECK(r.until([&] { return p->laid() && plainText(*p->laid()->block) == "shelf pinned"; }));
+    r.app.pop();
+    REQUIRE(r.until([&] { return dynamic_cast<const HomeScreen*>(r.app.top()) != nullptr; }));
+    CHECK(r.until([&] { return r.shownText() == "home body"; }));
 }

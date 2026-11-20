@@ -42,10 +42,16 @@ void displayIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void lightIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g);
-// Typographic cover for items without one: title in Bookerly, authors in Ember, `pad` from the
-// edges. A shelf's narrower covers set a smaller titlePt and pad, so a word doesn't break.
-void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark, double titlePt = 9,
-                    int pad = 26);
+// The generated covers' painters (widgets.h, drawCover, picks one and its sizes). A book's: `fill`,
+// its title in Bookerly bold in `ink` top-left, `pad` from the edges, a short rule in `rule` and its
+// authors in Ember in `soft` bottom-left; `framed`: a 2 px ink border and a 1.5 px inner frame 5% in.
+void bookCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, uint8_t fill, uint8_t ink,
+               uint8_t soft, uint8_t rule, bool framed, double titlePt, int pad);
+// A paper's, a first page: white, a 2 px ink border; `venue` and `year` (in caps; "" for none) small,
+// bold and tracked (a long venue is cut, the year stays), the title (Bookerly bold, at most 4 lines), the authors (Ember, small, 1 line),
+// then five grey text lines, the last one short (as many as fit).
+void paperCover(cairo_t* cr, Rect r, const std::string& venue, const std::string& year, const std::string& title,
+                const std::string& authors, double titlePt, int pad);
 void typeBadge(cairo_t* cr, Rect r, const std::string& type);
 void progressBar(cairo_t* cr, Rect r, double fraction);
 

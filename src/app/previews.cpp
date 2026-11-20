@@ -149,6 +149,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
     // As the app's plugin screens: `items` blocks read the library (no download status here).
     LibraryItemSource items(lib, {}, shotWallMs);
     PluginScreen ps(link, instance, name, title, &items);
+    ps.setPackage(host.packageDir(id));
     ps.onShow(nav);
     for (int i = 0; i < 500 && ps.state() == PluginScreen::State::Loading; ++i) {
         ps.onTick(nav);

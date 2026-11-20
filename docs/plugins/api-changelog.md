@@ -6,6 +6,45 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.12.0 (unreleased): composing screens from primitives
+
+General building pieces, so a plugin lays out its own screen without the app gaining a widget for
+it. All additive: 0.11 trees parse, lay out and draw as before. Looks stay the app's: sizes, fonts,
+spacing and greys are named tokens, never pixels or colours. See [Composing screens](composing.md).
+
+- Row children take a `width`: `"fill"` (the default; buttons are `"auto"`), `"auto"` (natural
+  width) or `"<n>%"` of the row's inner width; a long `"auto"` leaves a `"fill"` at least 120 px.
+  A row holds up to 12 children (6 before).
+- `zk.ui.row(children, { align })`: `"top"`, `"center"` (the default, as rows were), `"bottom"` or
+  `"stretch"` (each child as tall as the row).
+- `zk.ui.spacer()`: flexible empty space; in a column inside a stretched row it takes the leftover
+  height (a title at the top, a bar at the bottom); elsewhere no room.
+- `zk.ui.box(child, { id?, pad?, border?, fill?, radius?, width? })`: a frame. Text in an `"ink"`
+  box is drawn white. With an `id` it is tappable (`tap`): links, segmented switches, buttons.
+- `zk.ui.text` options: `font` (`"serif"` / `"sans"`), `size`, `weight`, `tone`
+  (`"ink"` / `"secondary"` / `"inverse"`), `italic`, `caps` (uppercase, tracked: a section label),
+  `align`, `lines`, and `id` (a tappable link). They override `style`.
+- `zk.ui.cover(item, { width? })`: the app's generated cover of an item, 2:3.
+  `zk.ui.progress(fraction, { width? })`: the app's thin progress bar.
+- `zk.ui.item(item, child)`: makes any piece an item. A tap opens it as the app opens items, a
+  long-press shows the item sheet, a download's status is drawn over the piece's bottom. A ref that
+  doesn't resolve leaves the piece drawn but inert.
+- `zk.ui.grid(children, { columns, minWidth, gap, rows })`: cells in rows; `columns: "auto"` fits as
+  many as `minWidth` allows. Pages by row, except with `rows`: at most that many rows, the rest
+  not drawn, never a pager.
+- `zk.ui.grid`, `cover`, `progress`, `box` and `image` also take `width` like a row's children.
+- `zk.ui.image({ src, width?, id? })`: a PNG from the plugin's package, drawn in greys, aspect kept;
+  refused if missing or over 2 MB.
+- `zk.ui.column(children, { fit: "trim" })` on a Home body's root: children in order while they
+  fit; the first that doesn't is trimmed if it can be (a grid to the rows that fit, a column to its
+  children that fit) and dropped otherwise, with all after it. No pager. Taps and diffs see only
+  what's shown.
+- `zk.ui.open(screen)` from a Home body pushes the plugin's screen over Home; back returns.
+- Covers, wherever the app draws one: books get one of three looks (ink, grey, framed), chosen by
+  the item's key so an item always looks the same; papers get a first-page look (venue and year,
+  title, authors, grey text lines); the PDF / WEB corner tab on shelves is gone; a cover never
+  breaks a word across lines.
+
 ## 0.11.0 (unreleased): a shelf, quotes, opening at an annotation, and the window's size
 
 - `zk.ui.items({ style: "shelf" })` — the items as cover tiles in rows (4 on a Paperwhite or a

@@ -19,7 +19,14 @@ type Block =
   | DividerBlock
   | SpaceBlock
   | NoticeBlock
-  | QuoteBlock;
+  | QuoteBlock
+  | SpacerBlock
+  | BoxBlock
+  | CoverBlock
+  | ProgressBlock
+  | ItemBlock
+  | GridBlock
+  | ImageBlock;
 ```
 
 A building block: what `render` returns, and what layout blocks contain.

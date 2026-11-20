@@ -82,6 +82,7 @@ test_sources = files(
   'test_app_shell.cpp',
   'test_sync_service.cpp',
   'test_home.cpp',
+  'test_widgets_cover.cpp',
   'test_home_tree.cpp',
   'test_library_screens_ui.cpp',
   'test_search_screen.cpp',

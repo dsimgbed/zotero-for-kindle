@@ -93,6 +93,7 @@ public:
     struct Opened {
         uint64_t instance = 0;
         std::string pluginName, title;
+        std::string package;  // the plugin's folder (its images)
     };
     bool homeAvailable(const std::string& pluginId, const std::string& screenId);
     Opened openHome(const std::string& pluginId, const std::string& screenId);
@@ -134,7 +135,7 @@ private:
     bool running_ = true;
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
-    void pushScreen(App&, uint64_t instance, const std::string& pluginName, const std::string& title);
+    void pushScreen(App&, uint64_t instance, const std::string& pluginId, const std::string& pluginName, const std::string& title);
     App* app_ = nullptr;
     // The entries version at the last wake(): sleeping plugins are woken again only after something
     // changed (one turned on, one failed to load), so a plugin that can't load isn't asked forever.

@@ -244,3 +244,126 @@ TEST_CASE("plugin diff: a quote's new text redraws it with Fast in place, Ui whe
     REQUIRE_FALSE(d.empty());
     CHECK(d[0].wave == Waveform::Ui);
 }
+
+TEST_CASE("plugin diff: a top-level cover, grid or item piece redraws with Quality, as a shelf does") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    for (const char* piece : {R"({"kind":"cover","item":"B","width":"20%"})",
+                              R"({"kind":"grid","columns":3,"children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"}]})",
+                              R"({"kind":"item","item":"B","child":{"kind":"cover","item":"B","width":"20%"}})"}) {
+        INFO(piece);
+        const std::string j = std::string(R"({"kind":"column","children":[{"kind":"text","text":"Shelf","style":"label"},)") + piece + "]}";
+        Rows before, after;
+        after.rows["B"].progress = 0.5;
+        const Block a = tree(j), b = tree(j);
+        const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &after);
+        CHECK(diffTrees(la, layoutTree(b, blocksArea(), 0, &before)).empty());
+        const auto d = diffTrees(la, lb);
+        REQUIRE(d.size() == 1);
+        CHECK(d[0].rect == lb.children[1].rect);
+        CHECK(d[0].wave == Waveform::Quality);
+    }
+}
+
+TEST_CASE("plugin diff: a section holding covers (a grid in a column, an item piece in a row) redraws with Quality") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    for (const char* section :
+         {R"({"kind":"column","children":[{"kind":"text","text":"Pinned","style":"label"},
+              {"kind":"grid","columns":3,"children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"}]}]})",
+          R"({"kind":"row","children":[{"kind":"item","item":"B","child":{"kind":"cover","item":"B","width":"20%"}},
+              {"kind":"text","text":"Item B"}]})"}) {
+        INFO(section);
+        const std::string j = std::string(R"({"kind":"column","children":[{"kind":"text","text":"Desk","style":"label"},)") + section + "]}";
+        Rows before, after;
+        after.rows["B"].progress = 0.5;
+        const Block a = tree(j), b = tree(j);
+        const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &after);
+        CHECK(diffTrees(la, layoutTree(b, blocksArea(), 0, &before)).empty());
+        const auto d = diffTrees(la, lb);
+        REQUIRE(d.size() == 1);
+        CHECK(d[0].rect == lb.children[1].rect);
+        CHECK(d[0].wave == Waveform::Quality);
+    }
+    // A column of text only is still Ui.
+    const char* texts = R"({"kind":"column","children":[{"kind":"text","text":"Desk","style":"label"},
+      {"kind":"column","children":[{"kind":"button","id":"x","title":"One"}]}]})";
+    const Block a = tree(texts), b = tree(with(texts, "\"One\"", "\"Two\""));
+    const auto d = diffTrees(layoutTree(a, blocksArea(), 0), layoutTree(b, blocksArea(), 0));
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].wave == Waveform::Ui);
+}
+
+TEST_CASE("plugin diff: on a trimming Home body, a render that moves the trim point redraws what was dropped or shown") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const auto home = [](const std::string& first) {
+        json j = json::parse(R"({"kind":"column","fit":"trim","children":[{"kind":"text","text":"Inbox","style":"label"},
+          {"kind":"text","id":"in1","text":""},{"kind":"text","id":"in2","text":"Random walks on percolation clusters"},
+          {"kind":"text","id":"in3","text":"Schramm–Loewner evolution, a survey"}]})");
+        j["children"][1]["text"] = first;
+        std::string why;
+        auto t = parseTree(j, &why, TreeUse::HomeBody);
+        INFO(why);
+        REQUIRE(t);
+        return *t;
+    };
+    const Block a = home("Brownian loops and the central charge");
+    const Block b = home("Brownian loops and the central charge, with a title long enough to take two lines");
+    const Rect tall{blocksArea().x, blocksArea().y, blocksArea().w, 5000};
+    const Laid fa = layoutTree(a, tall, 0);
+    const Rect area{tall.x, tall.y, tall.w, fa.children[2].rect.y + fa.children[2].rect.h + 5 - tall.y};  // in3 dropped
+    const Laid la = layoutTree(a, area, 0), lb = layoutTree(b, area, 0);
+    REQUIRE(la.pages == 1);
+    REQUIRE(lb.pages == 1);
+    REQUIRE(la.children.size() == 3);
+    REQUIRE(lb.children.size() == 2);  // in1 takes two lines: in2 no longer fits
+    CHECK(lb.children[1].rect.h > la.children[1].rect.h);
+    const auto d = diffTrees(la, lb);
+    REQUIRE_FALSE(d.empty());
+    Rect all;
+    for (const auto& x : d) all = all.united(x.rect);
+    CHECK(all.united(la.children[2].rect) == all);  // the dropped line is wiped
+    CHECK(all.united(lb.children[1].rect) == all);  // the longer first line drawn
+    CHECK(diffTrees(lb, layoutTree(b, area, 0)).empty());
+}
+
+TEST_CASE("plugin diff: a block holding covers that appears or goes (a moved trim point) redraws with Quality") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const auto home = [](const std::string& first) {
+        json j = json::parse(R"({"kind":"column","fit":"trim","children":[{"kind":"text","text":"","id":"top"},
+          {"kind":"column","children":[{"kind":"text","text":"Pinned","style":"label"},
+            {"kind":"grid","columns":3,"children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"}]}]}]})");
+        j["children"][0]["text"] = first;
+        std::string why;
+        auto t = parseTree(j, &why, TreeUse::HomeBody);
+        INFO(why);
+        REQUIRE(t);
+        return *t;
+    };
+    Rows rows;
+    const Block a = home("Desk"), b = home("Desk, with a line long enough to take two lines and push the pinned covers off");
+    const Rect tall{blocksArea().x, blocksArea().y, blocksArea().w, 5000};
+    const Laid fa = layoutTree(a, tall, 0, &rows);
+    const Rect area{tall.x, tall.y, tall.w, fa.children[1].rect.y + fa.children[1].rect.h + 5 - tall.y};
+    const Laid la = layoutTree(a, area, 0, &rows), lb = layoutTree(b, area, 0, &rows);
+    REQUIRE(la.children.size() == 2);
+    REQUIRE(lb.children.size() == 1);  // the covers went
+    for (const auto& d : {diffTrees(la, lb), diffTrees(lb, la)}) {  // gone, then back
+        REQUIRE_FALSE(d.empty());
+        bool covered = false;
+        for (const auto& x : d)
+            if (x.rect.united(la.children[1].rect) == x.rect) {
+                covered = true;
+                CHECK(x.wave == Waveform::Quality);
+            }
+        CHECK(covered);
+    }
+    // A block without pictures that appears is still Ui.
+    const char* plain = R"({"kind":"column","children":[{"kind":"text","text":"Desk","style":"label"}]})";
+    const Block c = tree(plain), e = tree(with(plain, "}]}", R"(},{"kind":"button","id":"x","title":"New"}]})"));
+    const auto d = diffTrees(layoutTree(c, blocksArea(), 0), layoutTree(e, blocksArea(), 0));
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].wave == Waveform::Ui);
+}

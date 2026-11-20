@@ -71,8 +71,11 @@ void configure(Layout& l, cairo_t* cr, std::string_view utf8, const TextStyle& s
     else pango_layout_set_text(l.layout, utf8.data(), static_cast<int>(utf8.size()));
 }
 
+long gLayouts = 0;
+
 Layout makeLayout(cairo_t* cr, std::string_view utf8, const TextStyle& style, int width, int max_lines,
                   Align align) {
+    ++gLayouts;
     PangoContext* ctx = pango_font_map_create_context(fontMap());
     Layout l{ctx, pango_layout_new(ctx)};
     configure(l, cr, utf8, style, width, max_lines, align);
@@ -126,6 +129,8 @@ int firstOfLastLines(std::string_view utf8, const TextStyle& style, int width, i
     if (utf8.empty()) return 0;
     return std::max(0, measureText(utf8, style, width, 0).lines - count);
 }
+
+long layoutsMade() { return gLayouts; }
 
 TextResult measureText(std::string_view utf8, const TextStyle& style, int width, int max_lines) {
     if (utf8.empty()) return {};
@@ -187,14 +192,14 @@ void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, R
     showLines(cr, l.layout, style.gray, box, first, count);
 }
 
-KeptText::KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines) : gray_(style.gray) {
+KeptText::KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines, Align align) : gray_(style.gray) {
     if (utf8.empty()) {
         tops_ = {0};
         return;
     }
     // Laid out without a cairo context, as lineTops and measureText are: the plugin screens draw
     // untransformed, so the lines come out as a layout made for the canvas would.
-    Layout l = makeLayout(nullptr, utf8, style, width, max_lines, Align::Left);
+    Layout l = makeLayout(nullptr, utf8, style, width, max_lines, align);
     tops_ = topsOf(l.layout);
     layout_ = l.layout;
     ctx_ = l.ctx;

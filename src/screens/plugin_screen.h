@@ -28,6 +28,9 @@ public:
     PluginScreen(ScreenLink&, uint64_t instance, std::string pluginName, std::string title, ItemSource* items = nullptr,
                  ItemTap tap = {});
 
+    // The plugin's folder, where its images are (none: images take no room).
+    void setPackage(std::string dir) { body_.setPackage(std::move(dir)); }
+
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onKey(const KeyEvent&, Nav&) override;

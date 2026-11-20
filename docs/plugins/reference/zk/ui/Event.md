@@ -59,7 +59,7 @@ screen, so a tap on "File" sees the note just typed.
   it returns). For set-up slower than `render`'s 1 s.
 - `tap` — a [button](button.md), or one of [buttons](buttons.md), by its `id`; the [deck](deck.md)'s card,
   by the deck's `id`; a [notice](notice.md) with an `id` (the last two need app 0.9.0); a
-  [quote](quote.md) with an `id` (app 0.11.0).
+  [quote](quote.md) with an `id` (app 0.11.0); a [box](box.md), an [image](image.md) or a [text](text.md) with an `id` (app 0.12.0).
 - `select` — a [list](list.md) row: `id` is the list's, `row` the row's.
 - `swipe` — the [deck](deck.md)'s card, left or right.
 - `change` / `submit` — a [search](search.md) or [field](field.md): its whole text.

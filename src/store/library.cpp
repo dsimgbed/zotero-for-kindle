@@ -1218,7 +1218,7 @@ const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
     "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, ''), "
     "(SELECT count(*) FROM attachments f WHERE f.parentKey = i.key AND f.contentType IN ('application/epub+zip', "
-    "'application/pdf', 'text/html') AND f.linkMode NOT IN ('linked_file', 'linked_url')), i.lib";
+    "'application/pdf', 'text/html') AND f.linkMode NOT IN ('linked_file', 'linked_url')), i.lib, i.publication";
 const char* kRowJoins =
     " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key "
     "LEFT JOIN read_marks m ON m.itemKey = i.key ";
@@ -1228,6 +1228,17 @@ bool isReadNow(const std::vector<std::string>& tags, bool marked, bool markRead,
                const std::string& readTag) {
     if (marked && markTag == readTag) return markRead;
     return std::find(tags.begin(), tags.end(), readTag) != tags.end();
+}
+
+// The year of "1962" or "2017-06-12"; 0 if it doesn't start with four digits.
+int yearOf(const std::string& s) {
+    if (s.size() < 4) return 0;
+    int y = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (s[i] < '0' || s[i] > '9') return 0;
+        y = y * 10 + (s[i] - '0');
+    }
+    return y;
 }
 
 std::vector<ItemRow> readRows(Stmt& st, const std::string& readTag) {
@@ -1251,6 +1262,8 @@ std::vector<ItemRow> readRows(Stmt& st, const std::string& readTag) {
         r.read = isReadNow(strings(st.text(9)), st.integer(10) >= 0, st.integer(10) == 1, st.text(11), readTag);
         r.files = static_cast<int>(st.integer(12));
         r.lib = st.integer(13);
+        r.publication = st.text(14);
+        r.year = yearOf(rec.year);
         out.push_back(std::move(r));
     }
     return out;

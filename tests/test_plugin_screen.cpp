@@ -598,6 +598,30 @@ zk.screen("deck", {
     REQUIRE(r.until([&] { return r.shown("tapped passage"); }));
 }
 
+TEST_CASE("plugin screen, end to end: a tap on a text or a box with an id brings {tap, id}, as a quote's does") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([
+    zk.ui.text(said),
+    zk.ui.text("All 9 ›", { id: "all-pinned", weight: "bold" }),
+    zk.ui.box(zk.ui.text("Pinned"), { id: "pinned", border: "thin", pad: "small" }),
+  ]),
+  onEvent(e) { if (e.kind === "tap") said = "tapped " + e.id; },
+});
+)JS");
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("all-pinned");
+    REQUIRE(r.until([&] { return r.shown("tapped all-pinned"); }));
+    r.tapButton("pinned");
+    REQUIRE(r.until([&] { return r.shown("tapped pinned"); }));
+}
+
 TEST_CASE("plugin screen, end to end: zk.reader.open opens over the screen; the promise resolves; Back brings a `reader` event") {
     if (!fonts()) return;
     ScopedMetrics m(kPw5);
@@ -877,4 +901,59 @@ TEST_CASE("plugin body: the plugin closing its screen stops the body and tells i
     CHECK(link.sent.empty());  // nothing goes to a screen the plugin closed
     body.onClose(nav);
     CHECK(link.leftScreens.empty());  // the plugin closed it: no `left`
+}
+
+TEST_CASE("plugin screen items: a tap on an item piece opens it through ItemTap; a long-press shows its sheet") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    ItemsRig r;
+    r.link.mail.push_back(treeEvent(json::parse(R"({"kind":"column","children":[
+      {"kind":"item","item":"IT000003","child":{"kind":"row","children":[{"kind":"cover","item":"IT000003","width":"20%"},{"kind":"text","text":"Third"}]}},
+      {"kind":"item","item":"GONE","child":{"kind":"text","text":"Gone"}}]})"), 0));
+    r.screen->onTick(r.nav);
+    const Laid& laid = *r.screen->laid();
+    const Point at = laid.children.at(0).rect.center();
+    r.screen->onGesture(tapAt(at), r.nav);
+    REQUIRE(r.opened.size() == 1);
+    CHECK(r.opened[0].key == "IT000003");
+    CHECK(r.link.sent.empty());
+    r.screen->onGesture(Gesture{GestureType::LongPress, at, at}, r.nav);
+    REQUIRE(r.screen->sheet());
+    CHECK(r.screen->sheet()->row().key == "IT000003");
+    r.screen->onGesture(tapAt({metrics().width / 2, 20}), r.nav);  // above the sheet: closed
+    REQUIRE_FALSE(r.screen->sheet());
+    // An unresolved ref: inert.
+    const Point gone = r.screen->laid()->children.at(1).rect.center();
+    r.screen->onGesture(tapAt(gone), r.nav);
+    r.screen->onGesture(Gesture{GestureType::LongPress, gone, gone}, r.nav);
+    CHECK(r.opened.size() == 1);
+    CHECK_FALSE(r.screen->sheet());
+    CHECK(r.link.sent.empty());
+}
+
+TEST_CASE("plugin screen, end to end: images come from the plugin's package, on a screen opened by the app and by zk.ui.open") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+zk.screen("deck", {
+  title: "Riffle",
+  main: true,
+  render: () => zk.ui.column([zk.ui.text("deck"), zk.ui.image({ src: "pic.png", id: "pic" }), zk.ui.button({ id: "more", title: "More" })]),
+  onEvent(e) { if (e.kind === "tap") zk.ui.open("more", {}); },
+});
+zk.screen("more", { title: "More", render: () => zk.ui.column([zk.ui.text("more"), zk.ui.image({ src: "pic.png", id: "pic", width: "50%" })]) });
+)JS");
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 40, 20);
+    REQUIRE(cairo_surface_write_to_png(s, r.fp.path("riffle/pic.png").c_str()) == CAIRO_STATUS_SUCCESS);
+    cairo_surface_destroy(s);
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("deck"); }));
+    const Rect deck = findLaid(*r.top()->laid(), "pic")->rect;
+    CHECK(deck.w == blocksArea().w);
+    CHECK(deck.h == deck.w / 2);
+    r.tapButton("more");
+    REQUIRE(r.until([&] { return r.shown("more"); }));
+    const Rect more = findLaid(*r.top()->laid(), "pic")->rect;
+    CHECK(more.w == blocksArea().w / 2);
+    CHECK(more.h == more.w / 2);
 }

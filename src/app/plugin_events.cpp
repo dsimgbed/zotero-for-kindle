@@ -113,9 +113,12 @@ void PluginEvents::openScreen(const std::string& pluginId, const std::string& sc
     if (app_) openScreen(*app_, pluginId, screenId);
 }
 
-void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginName, const std::string& title) {
+void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginId, const std::string& pluginName,
+                              const std::string& title) {
     screens_[instance] = pluginName;
-    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title, items_, itemTap_));
+    auto screen = std::make_unique<PluginScreen>(*this, instance, pluginName, title, items_, itemTap_);
+    if (host_) screen->setPackage(host_->packageDir(pluginId));
+    app.push(std::move(screen));
 }
 
 uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
@@ -137,7 +140,7 @@ uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const s
         return instance;
     }
     const uint64_t instance = host_->openScreen(pluginId, screenId, std::move(params));
-    pushScreen(app, instance, name, title);
+    pushScreen(app, instance, pluginId, name, title);
     return instance;
 }
 
@@ -164,6 +167,7 @@ PluginEvents::Opened PluginEvents::openHome(const std::string& pluginId, const s
             if (e.kind == "screen" && e.id == screenId) o.title = e.title;
     }
     o.instance = host_->openScreen(pluginId, screenId, nullptr, TreeUse::HomeBody);
+    o.package = host_->packageDir(pluginId);
     screens_[o.instance] = o.pluginName;
     return o;
 }
@@ -269,7 +273,7 @@ void PluginEvents::poll(App& app) {
                 break;
             case PluginHostEvent::Kind::ScreenOpen:
                 if (ev.parent != 0 && !screens_.count(ev.parent)) host_->closeScreen(ev.instance);  // its parent went
-                else pushScreen(app, ev.instance, ev.pluginName, ev.text);
+                else pushScreen(app, ev.instance, ev.pluginId, ev.pluginName, ev.text);
                 break;
             case PluginHostEvent::Kind::ScreenClose:
                 if (screens_.erase(ev.instance)) mail_[ev.instance].push_back(std::move(ev));  // the screen pops itself

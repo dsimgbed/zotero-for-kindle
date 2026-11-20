@@ -32,21 +32,6 @@ std::string megabytes(int64_t bytes) {
 
 }  // namespace
 
-std::string itemTypeLabel(const std::string& itemType) {
-    if (itemType.empty() || itemType == "attachment") return "File";
-    std::string s;
-    for (char c : itemType) {
-        if (std::isupper(static_cast<unsigned char>(c))) {
-            s += ' ';
-            s += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        } else {
-            s += c;
-        }
-    }
-    s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
-    return s;
-}
-
 std::string peopleLine(const ItemRecord& item, int max) {
     std::vector<std::string> names;
     for (const auto& c : item.creators) names.push_back(personName(c));

@@ -108,6 +108,70 @@ struct Parser {
         bad(where, std::string("\"") + name + "\" must be one of " + all);
     }
 
+    template <class E>
+    std::optional<E> optChoice(const json& o, const char* name, const std::string& where,
+                               std::initializer_list<std::pair<const char*, E>> options) {
+        if (!field(o, name)) return std::nullopt;
+        return choice<E>(o, name, where, E{}, options);
+    }
+
+    // "<n>%" with n from lo to hi, as n; else bad.
+    int percent(const json& v, const char* name, const std::string& where, int lo, int hi, const std::string& said = "") {
+        const std::string msg = !said.empty() ? said
+            : std::string("\"") + name + "\" must be a percentage from " + std::to_string(lo) + "% to " + std::to_string(hi) + "%";
+        if (!v.is_string()) bad(where, msg);
+        const std::string& s = v.get_ref<const std::string&>();
+        if (s.size() < 2 || s.size() > 4 || s.back() != '%') bad(where, msg);
+        int n = 0;
+        for (size_t i = 0; i + 1 < s.size(); ++i) {
+            if (s[i] < '0' || s[i] > '9') bad(where, msg);
+            n = n * 10 + (s[i] - '0');
+        }
+        if (n < lo || n > hi) bad(where, msg);
+        return n;
+    }
+
+    void widthOf(const json& o, const std::string& where, Block& b) {
+        const json* v = field(o, "width");
+        if (!v) return;
+        if (v->is_string() && *v == "fill") b.width = Block::Width::Fill;
+        else if (v->is_string() && *v == "auto") b.width = Block::Width::Auto;
+        else {
+            b.width = Block::Width::Percent;
+            b.widthPct = percent(*v, "width", where, 1, 100, "\"width\" must be \"fill\", \"auto\" or a percentage from 1% to 100%");
+        }
+    }
+
+    // An item as a ref: its key, or { key, library?, label? }.
+    ItemRef itemRef(const json& r, const std::string& at) {
+        ItemRef ref;
+        if (r.is_string()) {
+            const std::string& s = r.get_ref<const std::string&>();
+            text += s.size();
+            if (text > kMaxTreeText) bad(at, "the tree has more than 256 KB of text");
+            ref.key = oneLine(s);
+        } else if (r.is_object()) {
+            onlyFieldsPlain(r, at, {"key", "library", "label"});
+            ref.key = str(r, "key", at, true);
+            ref.label = str(r, "label", at, false);
+            if (const json* lib = field(r, "library")) {
+                if (!lib->is_number_integer() || lib->get<long long>() < 0) bad(at, "\"library\" must be a whole number, 0 or more");
+                ref.library = lib->get<long long>();
+            }
+        } else {
+            bad(at, "an item must be a key or { key, library?, label? }");
+        }
+        if (ref.key.empty()) bad(at, "an item needs a key");
+        return ref;
+    }
+
+    // The one block a box or an item holds, in `children[0]`.
+    Block onlyChild(const json& o, const char* name, const std::string& where, int depth) {
+        const json* v = field(o, name);
+        if (!v || falsy(*v)) bad(where, std::string("\"") + name + "\" is missing");
+        return block(*v, where, true, depth + 1);
+    }
+
     std::string id(const json& o, const std::string& where) {
         std::string s = str(o, "id", where, true);
         if (s.empty()) bad(where, "\"id\" must not be empty");
@@ -115,9 +179,11 @@ struct Parser {
         return s;
     }
 
+    const json* widthOn = nullptr;  // the block being parsed: any block may carry a width (0.12)
+
     void onlyFields(const json& o, const std::string& where, std::initializer_list<const char*> names) {
         for (auto it = o.begin(); it != o.end(); ++it) {
-            bool known = it.key() == "kind";
+            bool known = it.key() == "kind" || (&o == widthOn && it.key() == "width");
             for (const char* n : names) known = known || it.key() == n;
             if (!known) bad(where, "unknown field \"" + it.key() + "\"");
         }
@@ -125,7 +191,7 @@ struct Parser {
 
     Block::Gap gapOf(const json& o, const char* name, const std::string& where, Block::Gap def, bool none) {
         using G = Block::Gap;
-        if (none) return choice<G>(o, name, where, def, {{"none", G::None}, {"small", G::Small}, {"medium", G::Medium}, {"large", G::Large}});
+        if (none) return choice<G>(o, name, where, def, {{"none", G::None}, {"xsmall", G::XSmall}, {"small", G::Small}, {"medium", G::Medium}, {"large", G::Large}});
         return choice<G>(o, name, where, def, {{"small", G::Small}, {"medium", G::Medium}, {"large", G::Large}});
     }
 
@@ -181,27 +247,58 @@ struct Parser {
             {"search", Block::Kind::Search}, {"field", Block::Kind::Field},     {"chips", Block::Kind::Chips},
             {"button", Block::Kind::Button}, {"buttons", Block::Kind::Buttons}, {"divider", Block::Kind::Divider},
             {"space", Block::Kind::Space},   {"notice", Block::Kind::Notice},   {"quote", Block::Kind::Quote},
+            {"spacer", Block::Kind::Spacer}, {"box", Block::Kind::Box},         {"cover", Block::Kind::Cover},
+            {"progress", Block::Kind::Progress}, {"item", Block::Kind::Item},   {"grid", Block::Kind::Grid},
+            {"image", Block::Kind::Image},
         };
         const auto* found = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return kind == p.first; });
         if (found == std::end(kinds)) bad(prefix.empty() ? "the screen" : prefix, "unknown block kind \"" + kind + "\"");
         if (depth > kMaxTreeDepth) bad(where, "blocks nested more than 16 deep");
         if (use == TreeUse::HomeBody && (found->second == Block::Kind::Search || found->second == Block::Kind::Field))
             bad(prefix, kind + " can't be on Home");
-        if (found->second == Block::Kind::Button) return button(o, where);
+        widthOn = &o;
+        if (found->second == Block::Kind::Button) {
+            Block btn = button(o, where);
+            widthOf(o, where, btn);
+            return btn;
+        }
         count(where);
         Block b;
         b.kind = found->second;
+        widthOf(o, where, b);
         using K = Block::Kind;
         switch (b.kind) {
             case K::Column:
             case K::Row:
-                onlyFields(o, where, {"children", "gap"});
+                if (b.kind == K::Row) onlyFields(o, where, {"children", "gap", "align"});
+                else onlyFields(o, where, {"children", "gap", "fit"});
                 b.gap = gapOf(o, "gap", where, Block::Gap::Small, true);
+                if (b.kind == K::Row)
+                    b.align = choice<Block::Align>(o, "align", where, Block::Align::Center,
+                                                   {{"top", Block::Align::Top}, {"center", Block::Align::Center},
+                                                    {"bottom", Block::Align::Bottom}, {"stretch", Block::Align::Stretch}});
+                else {
+                    b.fit = choice<Block::Fit>(o, "fit", where, Block::Fit::Page, {{"page", Block::Fit::Page}, {"trim", Block::Fit::Trim}});
+                    if (field(o, "fit") && !(use == TreeUse::HomeBody && depth == 1)) bad(where + ".fit", "only on a Home body's root");
+                }
                 b.children = children(o, "children", where, depth);
-                if (b.kind == K::Row && b.children.size() > kMaxRowBlocks) bad(where, "a row holds at most 6 blocks");
+                if (b.kind == K::Row && b.children.size() > kMaxRowBlocks) bad(where, "a row holds at most 12 blocks");
                 break;
             case K::Text: {
-                onlyFields(o, where, {"text", "style", "lines"});
+                onlyFields(o, where, {"text", "style", "lines", "font", "size", "weight", "tone", "italic", "caps", "align", "id"});
+                if (o.contains("id")) b.id = id(o, where);  // a link (0.12)
+                b.font = optChoice<Block::Font>(o, "font", where, {{"serif", Block::Font::Serif}, {"sans", Block::Font::Sans}});
+                b.size = optChoice<Block::Size>(o, "size", where,
+                                                {{"xsmall", Block::Size::XSmall}, {"small", Block::Size::Small}, {"body", Block::Size::Body},
+                                                 {"large", Block::Size::Large}, {"title", Block::Size::Title}});
+                b.weight = optChoice<Block::Weight>(o, "weight", where,
+                                                    {{"regular", Block::Weight::Regular}, {"medium", Block::Weight::Medium}, {"bold", Block::Weight::Bold}});
+                b.tone = optChoice<Block::Tone>(o, "tone", where,
+                                                {{"ink", Block::Tone::Ink}, {"secondary", Block::Tone::Secondary}, {"inverse", Block::Tone::Inverse}});
+                b.textAlign = optChoice<Block::TextAlign>(o, "align", where,
+                                                          {{"start", Block::TextAlign::Start}, {"center", Block::TextAlign::Center}, {"end", Block::TextAlign::End}});
+                b.italic = flag(o, "italic", where);
+                b.caps = flag(o, "caps", where);
                 b.style = choice<Block::Style>(o, "style", where, Block::Style::Body,
                                                {{"title", Block::Style::Title}, {"body", Block::Style::Body},
                                                 {"meta", Block::Style::Meta}, {"label", Block::Style::Label}});
@@ -263,22 +360,7 @@ struct Parser {
                 if (!refs->is_array()) bad(where, "\"items\" must be a list");
                 for (size_t i = 0; i < refs->size(); ++i) {
                     const std::string at = where + ".items[" + std::to_string(i) + "]";
-                    const json& r = (*refs)[i];
-                    ItemRef ref;
-                    if (r.is_string()) {
-                        ref.key = str(*refs, i, at);
-                    } else if (r.is_object()) {
-                        onlyFieldsPlain(r, at, {"key", "library", "label"});
-                        ref.key = str(r, "key", at, true);
-                        ref.label = str(r, "label", at, false);
-                        if (const json* lib = field(r, "library")) {
-                            if (!lib->is_number_integer() || lib->get<long long>() < 0) bad(at, "\"library\" must be a whole number, 0 or more");
-                            ref.library = lib->get<long long>();
-                        }
-                    } else {
-                        bad(at, "an item must be a key or { key, library?, label? }");
-                    }
-                    if (ref.key.empty()) bad(at, "an item needs a key");
+                    ItemRef ref = itemRef((*refs)[i], at);
                     count(at);
                     b.items.push_back(std::move(ref));
                 }
@@ -391,6 +473,77 @@ struct Parser {
                 b.meta = str(o, "source", where, false);
                 if (o.contains("id")) b.id = id(o, where);
                 break;
+            case K::Spacer: onlyFields(o, where, {}); break;
+            case K::Box: {
+                onlyFields(o, where, {"child", "id", "pad", "border", "fill", "radius"});
+                if (o.contains("id")) b.id = id(o, where);  // tappable
+                b.pad = gapOf(o, "pad", where, Block::Gap::None, true);
+                b.border = choice<Block::Border>(o, "border", where, Block::Border::None,
+                                                 {{"none", Block::Border::None}, {"thin", Block::Border::Thin}, {"thick", Block::Border::Thick}});
+                b.fill = choice<Block::Fill>(o, "fill", where, Block::Fill::None,
+                                             {{"none", Block::Fill::None}, {"light", Block::Fill::Light}, {"ink", Block::Fill::Ink}});
+                b.radius = choice<Block::Radius>(o, "radius", where, Block::Radius::None,
+                                                 {{"none", Block::Radius::None}, {"small", Block::Radius::Small}, {"round", Block::Radius::Round}});
+                b.children.push_back(onlyChild(o, "child", where, depth));
+                break;
+            }
+            case K::Cover: {
+                onlyFields(o, where, {"item", "width"});
+                const json* it = field(o, "item");
+                if (!it) bad(where, "\"item\" is missing");
+                b.items.push_back(itemRef(*it, where + ".item"));
+                break;
+            }
+            case K::Progress: {
+                onlyFields(o, where, {"value", "width"});
+                const json* v = field(o, "value");
+                if (!v) bad(where, "\"value\" is missing");
+                if (!v->is_number() || !(v->get<double>() >= 0 && v->get<double>() <= 1)) bad(where, "\"value\" must be a number from 0 to 1");
+                b.fraction = v->get<double>();
+                break;
+            }
+            case K::Item: {
+                onlyFields(o, where, {"item", "child"});
+                const json* it = field(o, "item");
+                if (!it) bad(where, "\"item\" is missing");
+                b.items.push_back(itemRef(*it, where + ".item"));
+                b.children.push_back(onlyChild(o, "child", where, depth));
+                break;
+            }
+            case K::Grid: {
+                onlyFields(o, where, {"children", "columns", "minWidth", "gap", "rows"});
+                b.gap = gapOf(o, "gap", where, Block::Gap::Small, true);
+                if (const json* c = field(o, "columns")) {
+                    if (c->is_string() && *c == "auto") b.columns = 0;
+                    else if (c->is_number_integer() && c->get<long long>() >= 1 && c->get<long long>() <= 12) b.columns = c->get<int>();
+                    else bad(where, "\"columns\" must be \"auto\" or a whole number from 1 to 12");
+                }
+                if (const json* m = field(o, "minWidth")) b.minWidthPct = percent(*m, "minWidth", where, 5, 100);
+                if (const json* r = field(o, "rows")) {
+                    if (!r->is_number_integer() || r->get<long long>() < 1 || r->get<long long>() > 20)
+                        bad(where, "\"rows\" must be a whole number from 1 to 20");
+                    b.maxRows = r->get<int>();
+                }
+                b.children = children(o, "children", where, depth);
+                break;
+            }
+            case K::Image: {
+                onlyFields(o, where, {"src", "width", "id"});
+                if (o.contains("id")) b.id = id(o, where);
+                b.src = str(o, "src", where, true);
+                const std::string& p = b.src;
+                bool dotdot = false;
+                for (size_t a = 0; a <= p.size();) {
+                    size_t e = p.find_first_of("/\\", a);
+                    if (e == std::string::npos) e = p.size();
+                    if (p.compare(a, e - a, "..") == 0) dotdot = true;
+                    a = e + 1;
+                }
+                if (p.empty()) bad(where, "\"src\" must not be empty");
+                if (p[0] == '/' || p[0] == '\\' || (p.size() > 1 && p[1] == ':')) bad(where, "\"src\" must be a path inside the plugin, not an absolute one");
+                if (dotdot) bad(where, "\"src\" must not contain \"..\"");
+                break;
+            }
             case K::Button: break;  // handled above
         }
         return b;
@@ -429,7 +582,8 @@ std::optional<Block> parseTree(const json& j, std::string* why, TreeUse use) {
 }
 
 size_t blockCount(const Block& b) {
-    size_t n = 1 + b.rows.size() + b.chips.size() + b.items.size();
+    // an items block counts its refs; a cover's or an item's one ref is part of the block
+    size_t n = 1 + b.rows.size() + b.chips.size() + (b.kind == Block::Kind::Items ? b.items.size() : 0);
     for (const auto& c : b.children) n += blockCount(c);
     return n;
 }

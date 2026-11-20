@@ -78,6 +78,10 @@ with no params, so its `render` must not need any.
 | button, buttons (3 at most) | `zk.ui.button({ id, title, primary })` | `tap` |
 | divider, space, notice | `zk.ui.divider()`, `zk.ui.space()`, `zk.ui.notice(text, { id })` | `tap`, with an `id` (0.9) |
 
+From 0.12 there are also primitives (`spacer`, `box`, styled `text`, `cover`, `progress`, `item`,
+`grid`, `image`, row widths and alignment) to compose your own layouts: see
+[Composing screens](composing.md).
+
 A screen with `home: true` can be the body of Home; see [Home, written by a plugin](concepts.md#home-written-by-a-plugin).
 
 Children skip falsy values, so `message && zk.ui.notice(message)` works. A block the user can act
@@ -85,8 +89,8 @@ on needs an `id`, unique on its screen. There are no sizes, colours or images; t
 blocks out on every Kindle. A screen taller than the display is paged by swipes. A deck in the
 screen's column takes all the height left (app 0.9.0): every card has the same size, the blocks
 after it sit at the bottom, and a long card pages inside itself. Caps: 2,000 blocks (every list row, chip and
-button counts as one), 256 KB of text, 16 levels deep, at most 6
-children in a row.
+button counts as one), 256 KB of text, 16 levels deep, at most 12
+children in a row (6 before app 0.12.0).
 
 ### Events
 

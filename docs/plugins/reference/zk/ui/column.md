@@ -13,8 +13,10 @@ Stacks blocks top to bottom. The usual root of a screen.
 | Parameter | Type |
 | ------ | ------ |
 | `children` | [`Child`](Child.md)[] |
-| `opts?` | \{ `gap?`: [`Gap`](Gap.md); \} |
+| `opts?` | \{ `fit?`: `"trim"` \| `"page"`; `gap?`: [`Gap`](Gap.md); `width?`: [`Width`](Width.md); \} |
+| `opts.fit?` | `"trim"` \| `"page"` |
 | `opts.gap?` | [`Gap`](Gap.md) |
+| `opts.width?` | [`Width`](Width.md) |
 
 ## Returns
 

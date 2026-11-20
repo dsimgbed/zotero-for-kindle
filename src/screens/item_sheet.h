@@ -10,6 +10,7 @@
 
 #include "screens/screen.h"
 #include "store/library.h"
+#include "ui/widgets.h"
 
 namespace zk {
 
@@ -44,7 +45,7 @@ private:
 };
 
 // Shared with the details page.
-std::string itemTypeLabel(const std::string& itemType);  // "journalArticle" -> "Journal article"
+// itemTypeLabel ("journalArticle" -> "Journal article"): ui/widgets.h.
 std::string peopleLine(const ItemRecord&, int max);        // "Jane Austen and Vivien Jones"
 // "EPUB · 0.8 MB · on this Kindle · 13% read · 2 highlights"
 std::string fileLine(const ItemDetails::File&, double progress);

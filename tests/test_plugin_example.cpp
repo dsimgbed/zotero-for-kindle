@@ -507,7 +507,8 @@ TEST_CASE("example: Feed Riffle — open, render, swipe, keep into a collection,
 namespace {
 
 void deskItem(Library& lib, const std::string& key, const std::string& type, const std::string& title,
-              const std::string& added, const std::string& collection, const std::string& fileType) {
+              const std::string& added, const std::string& collection, const std::string& fileType,
+              const std::vector<std::pair<std::string, std::string>>& authors = {}, const std::string& year = "") {
     ItemRecord r;
     r.key = key;
     r.version = 1;
@@ -516,6 +517,8 @@ void deskItem(Library& lib, const std::string& key, const std::string& type, con
     r.dateAdded = added;
     r.dateModified = added;
     r.json = "{}";
+    for (const auto& [first, last] : authors) r.creators.push_back({first, last, "", "author"});
+    r.date = r.year = year;
     if (!collection.empty()) r.collections.push_back(collection);
     lib.upsertItem(r);
     if (fileType.empty()) return;
@@ -528,52 +531,145 @@ void deskItem(Library& lib, const std::string& key, const std::string& type, con
     lib.upsertAttachment(a);
 }
 
-using Keys = std::vector<std::pair<std::string, std::string>>;
+constexpr int64_t kDayMs = 86400000;
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+// An ISO 8601 instant (UTC) `ago` milliseconds before now, as Zotero writes dateAdded.
+std::string isoAgo(int64_t ago) {
+    const std::time_t t = static_cast<std::time_t>((nowMs() - ago) / 1000);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
 
-// A Home body tree, read the way a test needs it: its items blocks by id ({key, label}, and the
-// style), its label texts in order, the tabs' chips, and the quote.
-struct DeskTree {
-    json tree;
-    std::map<std::string, Keys> items;
-    std::map<std::string, std::string> styles;
-    std::vector<std::string> labels;  // text blocks of style "label", in order
-    std::vector<std::string> order;   // the root's children: an items block's id, "label:<text>", or a kind
-    std::vector<std::string> tabs;    // chip titles
-    std::vector<std::string> selected;
-    json quote;  // null when there is none
+using Strings = std::vector<std::string>;
+using Sides = std::vector<std::pair<std::string, std::string>>;  // {kicker, key}
 
-    explicit DeskTree(json t) : tree(std::move(t)) {
-        std::function<void(const json&, bool)> walk = [&](const json& n, bool top) {
-            if (!n.is_object()) return;  // a falsy child, skipped as the app skips it
-            const std::string kind = n.value("kind", "");
-            if (kind == "items") {
-                const std::string id = n["id"].get<std::string>();
-                auto& v = items[id];
-                styles[id] = n.value("style", "");
-                for (const auto& e : n["items"])
-                    v.push_back(e.is_string() ? std::make_pair(e.get<std::string>(), std::string())
-                                              : std::make_pair(e["key"].get<std::string>(), e.value("label", "")));
-                if (top) order.push_back(id);
-            } else if (kind == "text" && n.value("style", "") == "label") {
-                labels.push_back(n["text"].get<std::string>());
-                if (top) order.push_back("label:" + labels.back());
-            } else if (kind == "chips" && n.value("id", "") == "tabs") {
-                for (const auto& c : n["chips"]) tabs.push_back(c["title"].get<std::string>());
-                for (const auto& c : n["selected"]) selected.push_back(c.get<std::string>());
-                if (top) order.push_back("tabs");
-            } else if (kind == "quote") {
-                quote = n;
-                if (top) order.push_back("quote");
-            } else if (top) {
-                order.push_back(kind);
-            }
-            if (n.contains("children"))
-                for (const auto& c : n["children"]) walk(c, kind == "column" && &n == &tree ? true : false);
-        };
-        walk(tree, false);
+// An item piece (zk.ui.item) of a tree: its key, its texts in order, its bar, whether it has a cover.
+struct Piece {
+    std::string key;
+    Strings texts;
+    std::optional<double> progress;
+    bool cover = false;
+    const Block* block = nullptr;
+};
+
+// A part of a tree (a band of Home's body, or a whole screen), read the way a test needs it.
+struct Part {
+    std::string kind;  // on Home: "pair", "pinned", "inbox", "link" (Your desk ›), "quote", "text"
+    Strings labels;    // caps texts: section labels and kickers, in order
+    std::vector<std::pair<std::string, std::string>> links;  // a tappable text's or box's id, its text
+    std::string selected;  // the tappable box filled with ink (a switch's selected segment)
+    std::vector<Piece> items;
+    Strings texts;  // other texts, outside items and links
+    const Block* grid = nullptr;
+    const Block* block = nullptr;
+    std::shared_ptr<const Block> tree;  // a whole screen's: what the pointers above point into
+
+    std::string link(const std::string& id) const {
+        for (const auto& [i, t] : links)
+            if (i == id) return t;
+        return "";
     }
-    bool has(const std::string& id) const { return items.count(id) > 0; }
-    Keys at(const std::string& id) const { return has(id) ? items.at(id) : Keys{}; }
+    Strings keys() const {
+        Strings out;
+        for (const auto& p : items) out.push_back(p.key);
+        return out;
+    }
+};
+
+void piece(const Block& b, Piece& p) {
+    if (b.kind == Block::Kind::Text) p.texts.push_back(plainText(b));
+    if (b.kind == Block::Kind::Progress) p.progress = b.fraction;
+    if (b.kind == Block::Kind::Cover) p.cover = true;
+    for (const auto& c : b.children) piece(c, p);
+}
+
+std::string textsOf(const Block& b) {
+    std::string out = b.kind == Block::Kind::Text ? plainText(b) : "";
+    for (const auto& c : b.children) out += textsOf(c);
+    return out;
+}
+
+void gather(const Block& b, Part& p) {
+    using K = Block::Kind;
+    if (b.kind == K::Item) {
+        Piece it;
+        it.key = b.items.empty() ? "" : b.items[0].key;
+        it.block = &b;
+        for (const auto& c : b.children) piece(c, it);
+        p.items.push_back(std::move(it));
+        return;
+    }
+    if (b.kind == K::Box && !b.id.empty()) {
+        p.links.emplace_back(b.id, textsOf(b));
+        if (b.fill == Block::Fill::Ink) p.selected = b.id;
+        return;
+    }
+    if (b.kind == K::Grid) p.grid = &b;
+    if (b.kind == K::Text) {
+        if (!b.id.empty()) p.links.emplace_back(b.id, plainText(b));
+        else if (b.caps) p.labels.push_back(plainText(b));
+        else p.texts.push_back(plainText(b));
+    }
+    for (const auto& c : b.children) gather(c, p);
+}
+
+const Block* firstOf(const Block& b, Block::Kind kind) {
+    if (b.kind == kind) return &b;
+    for (const auto& c : b.children)
+        if (const Block* f = firstOf(c, kind)) return f;
+    return nullptr;
+}
+
+// Home's body: its bands, top to bottom.
+struct HomeTree {
+    std::shared_ptr<const Block> root;
+    std::vector<Part> parts;
+
+    explicit HomeTree(std::shared_ptr<const Block> r) : root(std::move(r)) {
+        for (const auto& c : root->children) {
+            Part p;
+            p.block = &c;
+            gather(c, p);
+            if (c.kind == Block::Kind::Quote) p.kind = "quote";
+            else if (!p.link("all-pinned").empty()) p.kind = "pinned";
+            else if (!p.link("all-inbox").empty()) p.kind = "inbox";
+            else if (!p.link("your-desk").empty()) p.kind = "link";
+            else if (!p.items.empty()) p.kind = "pair";
+            else p.kind = "text";
+            parts.push_back(std::move(p));
+        }
+    }
+    Strings order() const {
+        Strings out;
+        for (const auto& p : parts) out.push_back(p.kind);
+        return out;
+    }
+    bool has(const std::string& kind) const {
+        return std::any_of(parts.begin(), parts.end(), [&](const Part& p) { return p.kind == kind; });
+    }
+    Part at(const std::string& kind) const {
+        for (const auto& p : parts)
+            if (p.kind == kind) return p;
+        return {};
+    }
+    // The pair's sides, left to right: {kicker, key}.
+    Sides pair() const {
+        const Part p = at("pair");
+        Sides out;
+        for (size_t i = 0; i < p.items.size(); ++i) out.emplace_back(i < p.labels.size() ? p.labels[i] : "", p.items[i].key);
+        return out;
+    }
+    const Block* quote() const {
+        for (const auto& p : parts)
+            if (p.kind == "quote") return p.block;
+        return nullptr;
+    }
+    std::string quoteText() const { return quote() ? quote()->text : ""; }
 };
 
 // Today on this machine, as the plugin dates its passage ("2026-11-20").
@@ -600,16 +696,17 @@ struct Desk {
         lib.upsertCollection({"COLLINBX", "Inbox", "", 1});
         lib.upsertCollection({"COLLOTHR", "Reading", "", 1});
         // Books (by type, or by an EPUB file), papers, and the inbox (added dates differ).
-        deskItem(lib, "BOOK0001", "book", "A Book", "2024-01-01T00:00:00Z", "", "application/pdf");
+        deskItem(lib, "BOOK0001", "book", "A Book", "2024-01-01T00:00:00Z", "", "application/pdf", {{"Jane", "Austen"}}, "1813");
         deskItem(lib, "BOOK0002", "bookSection", "A Chapter", "2024-01-01T01:00:00Z", "", "application/pdf");
         deskItem(lib, "BOOK0003", "book", "A Pinned Book", "2024-01-01T02:00:00Z", "", "application/pdf");
         deskItem(lib, "EPUB0001", "journalArticle", "An EPUB", "2024-01-02T00:00:00Z", "", "application/epub+zip");
         deskItem(lib, "PAPR0001", "journalArticle", "A Paper", "2024-01-03T00:00:00Z", "", "application/pdf");
-        deskItem(lib, "PAPR0002", "journalArticle", "Another Paper", "2024-01-04T00:00:00Z", "", "application/pdf");
-        deskItem(lib, "INBX0001", "journalArticle", "Old", "2024-02-01T00:00:00Z", "COLLINBX", "application/pdf");
-        deskItem(lib, "INBX0002", "journalArticle", "Newest", "2024-03-01T00:00:00Z", "COLLINBX", "application/pdf");
-        deskItem(lib, "INBX0003", "journalArticle", "Middle", "2024-02-15T00:00:00Z", "COLLINBX", "application/pdf");
-        deskItem(lib, "INBX0004", "journalArticle", "Done", "2024-04-01T00:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "PAPR0002", "journalArticle", "Another Paper", "2024-01-04T00:00:00Z", "", "application/pdf",
+                 {{"Ashish", "Vaswani"}, {"Noam", "Shazeer"}, {"Niki", "Parmar"}, {"Jakob", "Uszkoreit"}, {"Llion", "Jones"}}, "2017");
+        deskItem(lib, "INBX0001", "journalArticle", "Old", "2024-02-01T12:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0002", "journalArticle", "Newest", "2024-03-01T12:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0003", "journalArticle", "Middle", "2024-02-15T12:00:00Z", "COLLINBX", "application/pdf");
+        deskItem(lib, "INBX0004", "journalArticle", "Done", "2024-04-01T12:00:00Z", "COLLINBX", "application/pdf");
         lib.markRead("INBX0004", true);
         PluginHostDeps d = fp.deps();
         d.dbPath = fp.path("library.db");
@@ -652,38 +749,58 @@ struct Desk {
     }
     // Home's body, rendered afresh: opens the screen the first time, then rerenders.
     uint64_t inst = 0;
-    DeskTree render() {
+    HomeTree render() {
         if (!inst) inst = host->openScreen("reading-desk", "desk", nullptr, TreeUse::HomeBody);
         else host->rerender(inst);
         return tree(inst);
     }
     // The latest tree of `instance` once the plugin is idle (a pin's zk.ui.refresh renders too).
-    std::shared_ptr<const Block> latest(uint64_t instance, json* value = nullptr) {
+    std::shared_ptr<const Block> latest(uint64_t instance) {
         auto t = next(PluginHostEvent::Kind::ScreenTree, instance);
         CAPTURE(fp.log("reading-desk"));
         REQUIRE(t);
         REQUIRE(host->waitIdle(8000));
         while (auto more = next(PluginHostEvent::Kind::ScreenTree, instance, 50)) t = more;
-        if (value) *value = t->value;
+        REQUIRE(t->tree);
         return t->tree;
     }
-    DeskTree tree(uint64_t instance) {
-        json value;
-        latest(instance, &value);
-        REQUIRE(value.is_object());
-        return DeskTree(value);
-    }
+    HomeTree tree(uint64_t instance) { return HomeTree(latest(instance)); }
     std::string text(uint64_t instance) { return allText(*latest(instance)); }
     // What the user did on Home's body; the tree that answers it.
-    DeskTree event(const json& e) {
+    HomeTree event(const json& e) {
         host->screenEvent(inst, e);
         return tree(inst);
     }
     // Home shows again later: a new instance of the body (what it keeps is in storage).
-    DeskTree reopen() {
+    HomeTree reopen() {
         host->closeScreen(inst);
         inst = 0;
         return render();
+    }
+    // The screen Home's body opened on a tap (zk.ui.open): its id and params.
+    std::pair<std::string, json> tapOpens(const std::string& id) {
+        host->screenEvent(inst, {{"kind", "tap"}, {"id", id}});
+        auto o = next(PluginHostEvent::Kind::ScreenOpen, inst);
+        REQUIRE(o);
+        tree(inst);
+        return {o->screenId, o->value};
+    }
+    // Your desk, opened with `params`: the whole screen as one part.
+    uint64_t all = 0;
+    Part allPart(std::shared_ptr<const Block> b) {
+        Part p;
+        p.tree = b;
+        gather(*b, p);
+        p.texts.push_back(allText(*b));
+        return p;
+    }
+    Part openAll(const json& params) {
+        all = host->openScreen("reading-desk", "all", params);
+        return allPart(latest(all));
+    }
+    Part allEvent(const json& e) {
+        host->screenEvent(all, e);
+        return allPart(latest(all));
     }
     std::string pin(const std::string& key) {
         const uint64_t run = host->runAction("reading-desk", "itemAction", "pin", {{"key", key}, {"libraryId", 0}});
@@ -694,14 +811,14 @@ struct Desk {
     }
     // The passage is picked off the render (a timer, then a quiet refresh, merged to one a
     // second): the trees that follow, until one whose quote satisfies `ok`.
-    DeskTree passage(const std::function<bool(const json&)>& ok, int ms = 6000) {
-        DeskTree t = render();
+    HomeTree passage(const std::function<bool(const Block*)>& ok, int ms = 6000) {
+        HomeTree t = render();
         const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-        while (!ok(t.quote) && std::chrono::steady_clock::now() < end)
-            if (auto more = next(PluginHostEvent::Kind::ScreenTree, inst, 200)) t = DeskTree(more->value);
+        while (!ok(t.quote()) && std::chrono::steady_clock::now() < end)
+            if (auto more = next(PluginHostEvent::Kind::ScreenTree, inst, 200)) t = HomeTree(more->tree);
         return t;
     }
-    DeskTree withPassage() { return passage([](const json& q) { return !q.is_null(); }); }
+    HomeTree withPassage() { return passage([](const Block* q) { return q != nullptr; }); }
     // What the passage's tap did: the ItemOpen it asked for, answered with `error` ("" opened).
     json tapPassage(const std::string& error) {
         host->screenEvent(inst, {{"kind", "tap"}, {"id", "passage"}});
@@ -718,162 +835,257 @@ struct Desk {
         if (!st.step()) return std::nullopt;
         return json::parse(st.text(0));
     }
-    DeskTree tab(const std::string& id) { return event({{"kind", "chips"}, {"id", "tabs"}, {"chip", id}, {"selected", {id}}}); }
 };
+
+const char* const kLongPassage = "A passage long enough to be shown under the desk, every day of the week.";
 
 }  // namespace
 
-TEST_CASE("example: Reading Desk — Now reading is the item opened last of any kind: a card on a tall screen, a label over a row on a short one") {
+TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and paper side by side, BOOK and PAPER, a bar and when") {
+    ScopedMetrics pw5(kPw5);
     Desk d("");
-    d.lib.markOpened("PAPR0001", "FAPR0001", 1000);
-    d.lib.markOpened("BOOK0001", "FOOK0001", 2000);
-    d.lib.markOpened("PAPR0002", "FAPR0002", 3000);  // the newest: a paper
-    {
-        ScopedMetrics tall(kScribe);
-        DeskTree t = d.render();
-        CHECK(t.at("now") == Keys{{"PAPR0002", "CONTINUE · PAPER"}});
-        CHECK(t.styles["now"] == "card");
-        CHECK(t.order.front() == "now");
-    }
-    {
-        ScopedMetrics short_(kKt4);
-        DeskTree t = d.render();
-        CHECK(t.at("now") == Keys{{"PAPR0002", ""}});
-        CHECK(t.styles["now"] == "row");
-        REQUIRE_FALSE(t.labels.empty());
-        CHECK(t.labels.front() == "CONTINUE · PAPER");
-        CHECK(t.order.front() == "column");  // the label and its row: one block, never paged apart
-    }
-    // Read: the next one opened takes its place; an EPUB counts as a book whatever its type.
-    ScopedMetrics tall(kScribe);
+    const int64_t now = nowMs();
+    d.lib.markOpened("PAPR0001", "FAPR0001", now - 3 * kDayMs);
+    d.lib.markOpened("BOOK0001", "FOOK0001", now - kDayMs);
+    d.lib.markOpened("PAPR0002", "FAPR0002", now);
+    d.lib.saveReading("BOOK0001", "", 0.13);
+    d.lib.saveReading("PAPR0002", "", 0.67);
+    HomeTree t = d.render();
+    CHECK(t.root->fit == Block::Fit::Trim);  // never pages
+    CHECK(t.order() == Strings{"pair", "link"});  // no All › on Home: Your desk › instead
+    CHECK(t.at("link").link("your-desk") == "Your desk ›");
+    CHECK(t.pair() == Sides{{"Book", "BOOK0001"}, {"Paper", "PAPR0002"}});
+    const Part pair = t.at("pair");
+    REQUIRE(pair.items.size() == 2);
+    CHECK(pair.items[0].cover);
+    CHECK(pair.items[0].progress == 0.13);
+    CHECK(pair.items[0].texts == Strings{"A Book", "Jane Austen", "13% · yesterday"});
+    CHECK(pair.items[1].texts == Strings{"Another Paper", "Vaswani et al.", "67% · today"});
+    const Block* twoUp = firstOf(*pair.items[0].block, Block::Kind::Cover);
+    REQUIRE(twoUp);
+
+    // Read: the next paper opened takes its place; an EPUB is a book whatever its type.
     d.lib.markRead("PAPR0002", true);
-    CHECK(d.render().at("now") == Keys{{"BOOK0001", "CONTINUE · BOOK"}});
-    d.lib.markOpened("EPUB0001", "FPUB0001", 4000);
-    CHECK(d.render().at("now") == Keys{{"EPUB0001", "CONTINUE · BOOK"}});
-}
-
-TEST_CASE("example: Reading Desk — nothing opened: START HERE with the newest unread pin, else no Now reading; the empty texts") {
-    ScopedMetrics tall(kScribe);
-    Desk d("");
-    DeskTree t = d.render();
-    CHECK_FALSE(t.has("now"));
-    CHECK(t.tabs == std::vector<std::string>{"Books", "Papers", "Pinned"});  // no inbox: no New tab
-    CHECK(t.selected == std::vector<std::string>{"books"});
-    CHECK(t.at("books").empty());
-    CHECK(t.tree.dump().find("Books you open show up here.") != std::string::npos);
-    CHECK(d.tab("pinned").tree.dump().find("Long-press an item → More… → Pin.") != std::string::npos);
-
-    CHECK(d.pin("PAPR0001") == "Pinned to Home");
-    CHECK(d.pin("BOOK0003") == "Pinned to Home");
-    CHECK(d.pin("INBX0004") == "Pinned to Home");  // read: not a place to start
+    d.lib.markOpened("EPUB0001", "FPUB0001", now + 1000);
     t = d.render();
-    CHECK(t.at("now") == Keys{{"BOOK0003", "START HERE"}});
-    CHECK(t.at("pinned") == Keys{{"PAPR0001", ""}, {"INBX0004", ""}});  // pin order, minus the hero
-    CHECK(t.styles["pinned"] == "shelf");
+    CHECK(t.pair() == Sides{{"Book", "EPUB0001"}, {"Paper", "PAPR0001"}});
 
-    CHECK(d.pin("BOOK0003") == "Unpinned");
-    CHECK(d.render().at("now") == Keys{{"PAPR0001", "START HERE"}});
+    // A kind with nothing at all: the other side alone, full width (a narrower share for its cover).
+    d.lib.markRead("PAPR0001", true);
+    t = d.render();
+    CHECK(t.pair() == Sides{{"Book", "EPUB0001"}});
+    REQUIRE(t.at("pair").items.size() == 1);
+    const Block* alone = firstOf(*t.at("pair").items[0].block, Block::Kind::Cover);
+    REQUIRE(alone);
+    CHECK(alone->widthPct < twoUp->widthPct);
 }
 
-TEST_CASE("example: Reading Desk — the tabs: Books by default, a chip picks one and Home keeps it; the Books shelf") {
-    ScopedMetrics tall(kScribe);
+TEST_CASE("example: Reading Desk — nothing opened of a kind: its first pin never opened and not read, UP NEXT, Not started; Pinned is a row of covers minus the pair") {
+    ScopedMetrics pw5(kPw5);
     Desk d("");
-    d.lib.markOpened("BOOK0002", "FOOK0002", 1000);
-    d.lib.markOpened("PAPR0001", "FAPR0001", 1500);
-    d.lib.markOpened("EPUB0001", "FPUB0001", 2000);
-    d.lib.markOpened("BOOK0001", "FOOK0001", 3000);  // the hero
-    d.pin("BOOK0003");                                // a pinned book not started
-    d.pin("BOOK0002");                                // pinned and in progress: listed once
-    d.pin("PAPR0002");                                // a paper: not on the Books shelf
-    DeskTree t = d.render();
-    CHECK(t.selected == std::vector<std::string>{"books"});
-    CHECK(t.at("books") == Keys{{"EPUB0001", ""}, {"BOOK0002", ""}, {"BOOK0003", ""}});
-    CHECK(t.styles["books"] == "shelf");
-
-    t = d.tab("papers");
-    CHECK(t.selected == std::vector<std::string>{"papers"});
-    CHECK_FALSE(t.has("books"));
-    CHECK(t.has("papers"));
-    // Kept: Home's body shows again (a new instance) on the same tab.
-    t = d.reopen();
-    CHECK(t.selected == std::vector<std::string>{"papers"});
-    CHECK(t.has("papers"));
-    // A tab that can't show (New without an inbox) falls back to Books.
-    d.store("tab", "new");
-    CHECK(d.render().selected == std::vector<std::string>{"books"});
-}
-
-TEST_CASE("example: Reading Desk — Papers: papers in progress, most recent first, then UP NEXT: pinned papers not started") {
-    ScopedMetrics tall(kScribe);
-    Desk d("");
-    d.lib.markOpened("PAPR0001", "FAPR0001", 1000);
-    d.lib.markOpened("PAPR0002", "FAPR0002", 2000);
-    d.lib.markOpened("INBX0001", "FNBX0001", 3000);
-    d.lib.markOpened("BOOK0001", "FOOK0001", 4000);  // the hero, a book
-    d.store("tab", "papers");
-    DeskTree t = d.render();
-    CHECK(t.at("papers") == Keys{{"INBX0001", ""}, {"PAPR0002", ""}, {"PAPR0001", ""}});
-    CHECK(t.styles["papers"] == "row");
-    CHECK_FALSE(t.has("next"));
-
-    d.pin("INBX0003");
-    d.pin("PAPR0002");  // in progress: listed above, not under Up next
-    d.pin("BOOK0003");  // a book: not here
-    d.pin("INBX0002");
-    d.pin("INBX0004");  // read: not up next
-    d.lib.markOpened("EPUB0001", "FPUB0001", 500);
-    d.lib.markRead("EPUB0001", true);
+    d.lib.markOpened("BOOK0001", "FOOK0001", nowMs());
     deskItem(d.lib, "PAPR0003", "journalArticle", "Started, then read", "2024-01-05T00:00:00Z", "", "application/pdf");
     d.lib.markOpened("PAPR0003", "FAPR0003", 600);
     d.lib.saveReading("PAPR0003", "", 0.5);
     d.lib.markRead("PAPR0003", true);
-    d.pin("PAPR0003");  // started (and read): not up next
-    t = d.render();
-    CHECK(t.at("next") == Keys{{"INBX0003", ""}, {"INBX0002", ""}});
-    const std::vector<std::string> order = {"tabs", "papers", "label:UP NEXT", "next"};
-    CHECK(std::vector<std::string>(t.order.begin() + 1, t.order.begin() + 5) == order);
+    CHECK(d.pin("PAPR0003") == "Pinned to Home");  // opened (and read): not up next
+    d.pin("INBX0004");                             // read: not up next
+    d.pin("BOOK0001");                             // the pair's book: not in the row
+    d.pin("PAPR0001");                             // the first paper never opened and not read: up next
+    d.pin("PAPR0002");
+    d.pin("BOOK0003");
+    HomeTree t = d.render();
+    CHECK(t.order() == Strings{"pair", "pinned"});
+    CHECK(t.pair() == Sides{{"Book", "BOOK0001"}, {"Up next", "PAPR0001"}});
+    const Part pair = t.at("pair");
+    REQUIRE(pair.items.size() == 2);
+    CHECK_FALSE(pair.items[1].progress);
+    CHECK(pair.items[1].texts.back() == "Not started");
 
-    // The hero, a paper now, isn't listed again.
-    d.lib.markOpened("PAPR0001", "FAPR0001", 5000);
-    t = d.render();
-    CHECK(t.at("now") == Keys{{"PAPR0001", "CONTINUE · PAPER"}});
-    CHECK(t.at("papers") == Keys{{"INBX0001", ""}, {"PAPR0002", ""}});
+    // Pinned: a heading with All n › (n: every pin), one row of covers in pin order minus the pair,
+    // no captions, a bar only once opened.
+    const Part pinned = t.at("pinned");
+    CHECK(pinned.labels == Strings{"Pinned"});
+    CHECK(pinned.link("all-pinned") == "All 6 ›");
+    REQUIRE(pinned.grid);
+    CHECK(pinned.grid->maxRows == 1);
+    REQUIRE(pinned.keys() == Strings{"PAPR0003", "INBX0004", "PAPR0002", "BOOK0003"});
+    for (const auto& p : pinned.items) {
+        CHECK(p.cover);
+        CHECK(p.texts.empty());
+    }
+    CHECK(pinned.items[0].progress == 0.5);
+    CHECK_FALSE(pinned.items[1].progress);
+
+    // Nothing opened at all: both sides are pins, the book's first too.
+    d.lib.markRead("BOOK0001", true);
+    CHECK(d.render().pair() == Sides{{"Up next", "BOOK0003"}, {"Up next", "PAPR0001"}});
+    CHECK(d.pin("BOOK0003") == "Unpinned");
+    CHECK(d.render().pair() == Sides{{"Up next", "PAPR0001"}});
+
+    // All › opens Your desk on Pinned.
+    d.render();
+    CHECK(d.tapOpens("all-pinned") == std::pair<std::string, json>{"all", {{"tab", "pinned"}}});
 }
 
-TEST_CASE("example: Reading Desk — New: the inbox's unread items, newest added first, minus the hero; settings.json's inbox still works") {
-    ScopedMetrics tall(kScribe);
+TEST_CASE("example: Reading Desk — the pinned row holds as many covers as fit whole: 5 on a Paperwhite, 4 on a basic Kindle, 7 on a Scribe") {
+    Desk d("");
+    d.lib.markOpened("BOOK0001", "FOOK0001", nowMs());
+    d.lib.markOpened("PAPR0001", "FAPR0001", nowMs() - 1000);
+    for (int i = 0; i < 10; ++i) {
+        const std::string key = "PINX000" + std::to_string(i);
+        deskItem(d.lib, key, "book", "Pinned book " + std::to_string(i), "2024-01-05T00:00:00Z", "", "application/pdf");
+        d.pin(key);
+    }
+    for (const auto& [dev, n] : {std::pair{&kPw5, 5}, std::pair{&kKt4, 4}, std::pair{&kScribe, 7}}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const HomeTree t = d.render();
+        CHECK(t.at("pinned").keys().size() == static_cast<size_t>(n));
+    }
+}
+
+TEST_CASE("example: Reading Desk — first use: the hint and the passage; nothing else") {
+    ScopedMetrics pw5(kPw5);
+    Desk d("");
+    addHighlight(d.lib, "ANNOLONG", "FOOK0001", kLongPassage, "", "12", "00001|000100|00100");
+    HomeTree t = d.withPassage();
+    CHECK(t.order() == Strings{"text", "link", "quote"});
+    REQUIRE_FALSE(t.at("text").texts.empty());
+    CHECK(t.at("text").texts.front() ==
+          "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press → More… → Pin to Home.");
+    d.lib.markOpened("PAPR0001", "FAPR0001", nowMs());
+    t = d.render();
+    CHECK(t.order() == Strings{"pair", "link", "quote"});  // no inbox: the passage takes its band
+    CHECK(d.tapOpens("your-desk") == std::pair<std::string, json>{"all", {{"tab", "reading"}}});
+}
+
+TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus the pair, bylines and when added; up to 5 and the passage on a Scribe, else 2") {
     Desk d(R"({"inbox":"COLLINBX"})");
-    DeskTree t = d.render();
-    CHECK(t.tabs == std::vector<std::string>{"Books", "Papers", "Pinned", "New 3"});
-    t = d.tab("new");
-    CHECK(t.at("new") == Keys{{"INBX0002", ""}, {"INBX0003", ""}, {"INBX0001", ""}});  // INBX0004 is read
-    CHECK(t.styles["new"] == "row");
+    deskItem(d.lib, "INBX0005", "journalArticle", "Deep Residual Learning for Image Recognition", isoAgo(0), "COLLINBX",
+             "application/pdf", {{"Kaiming", "He"}, {"Xiangyu", "Zhang"}, {"Shaoqing", "Ren"}, {"Jian", "Sun"}}, "2016");
+    deskItem(d.lib, "INBX0006", "journalArticle", "Mastering the game of Go", isoAgo(kDayMs), "COLLINBX", "application/pdf",
+             {{"David", "Silver"}, {"Julian", "Schrittwieser"}, {"Karen", "Simonyan"}, {"Ioannis", "Antonoglou"}, {"Aja", "Huang"}},
+             "2017");
+    deskItem(d.lib, "INBX0007", "journalArticle", "Three days ago", isoAgo(3 * kDayMs), "COLLINBX", "application/pdf");
+    addHighlight(d.lib, "ANNOLONG", "FOOK0001", kLongPassage, "", "12", "00001|000100|00100");
+    {
+        ScopedMetrics scribe(kScribe);
+        HomeTree t = d.withPassage();
+        CHECK(t.order() == Strings{"inbox", "quote"});
+        const Part inbox = t.at("inbox");
+        CHECK(inbox.labels == Strings{"Inbox · 6 new"});
+        CHECK(inbox.link("all-inbox") == "All ›");
+        REQUIRE(inbox.keys() == Strings{"INBX0005", "INBX0006", "INBX0007", "INBX0002", "INBX0003"});
+        CHECK(inbox.items[0].texts == Strings{"Deep Residual Learning for Image Recognition", "He, Zhang, Ren, Sun · 2016", "today"});
+        CHECK(inbox.items[1].texts == Strings{"Mastering the game of Go", "Silver et al. · 2017", "yesterday"});
+        static const char* kDays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        const std::time_t t3 = static_cast<std::time_t>((nowMs() - 3 * kDayMs) / 1000);
+        std::tm tm{};
+        localtime_r(&t3, &tm);
+        CHECK(inbox.items[2].texts == Strings{"Three days ago", kDays[tm.tm_wday]});  // no authors, no year: no byline
+    }
+    ScopedMetrics pw5(kPw5);
+    HomeTree t = d.render();
+    CHECK(t.order() == Strings{"inbox"});  // with an inbox, the passage only on a Scribe
+    CHECK(t.at("inbox").keys() == Strings{"INBX0005", "INBX0006"});
 
-    d.lib.markOpened("INBX0002", "FNBX0002", 5000);  // the hero now
-    d.pin("INBX0003");                               // pinned: still new
+    // The pair's item is neither a line nor counted; older ones say their date.
+    d.lib.markOpened("INBX0005", "FNBX0005", nowMs());
+    d.lib.markOpened("INBX0006", "FNBX0006", nowMs() - 1000);
+    for (const char* k : {"INBX0007", "INBX0003", "INBX0001"}) d.lib.markRead(k, true);
     t = d.render();
-    CHECK(t.at("now") == Keys{{"INBX0002", "CONTINUE · PAPER"}});
-    CHECK(t.at("new") == Keys{{"INBX0003", ""}, {"INBX0001", ""}});
-    CHECK(t.tabs.back() == "New 2");
+    CHECK(t.pair() == Sides{{"Paper", "INBX0005"}});
+    CHECK(t.at("inbox").labels == Strings{"Inbox · 3 new"});  // every unread item, the pair's too
+    REQUIRE(t.at("inbox").keys() == Strings{"INBX0006", "INBX0002"});
+    CHECK(t.at("inbox").items[1].texts.back().find("2024") != std::string::npos);  // "Mar 1, 2024"
+    CHECK(d.tapOpens("all-inbox") == std::pair<std::string, json>{"all", {{"tab", "inbox"}}});
 
-    for (const char* k : {"INBX0001", "INBX0003"}) d.lib.markRead(k, true);
+    // Within the year, older than a week: "Nov 12" (the year only for another year's).
+    deskItem(d.lib, "INBX0008", "journalArticle", "Ten days ago", isoAgo(10 * kDayMs), "COLLINBX", "application/pdf");
     t = d.render();
-    CHECK(t.tabs.back() == "New");
-    CHECK(t.tree.dump().find("Nothing new in the inbox.") != std::string::npos);
+    REQUIRE(t.at("inbox").keys() == Strings{"INBX0006", "INBX0008"});
+    {
+        static const char* kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        const std::time_t now = std::time(nullptr), then = static_cast<std::time_t>((nowMs() - 10 * kDayMs) / 1000);
+        std::tm n{}, a{};
+        localtime_r(&now, &n);
+        localtime_r(&then, &a);
+        std::string want = std::string(kMonths[a.tm_mon]) + " " + std::to_string(a.tm_mday);
+        if (a.tm_year != n.tm_year) want += ", " + std::to_string(1900 + a.tm_year);
+        CHECK(t.at("inbox").items[1].texts.back() == want);
+    }
+    d.lib.markRead("INBX0008", true);
+
+    // Nothing unread in it: the passage takes the band.
+    for (const char* k : {"INBX0006", "INBX0002"}) d.lib.markRead(k, true);
+    t = d.render();
+    CHECK(t.order() == Strings{"pair", "link", "quote"});
+}
+
+TEST_CASE("example: Reading Desk — Your desk: a switch Reading · Pinned · Inbox n on the tab asked for, a grid of covers with title and author · 42%") {
+    ScopedMetrics pw5(kPw5);
+    Desk d(R"({"inbox":"COLLINBX"})");
+    d.lib.markOpened("PAPR0001", "FAPR0001", 1000);
+    d.lib.markOpened("BOOK0001", "FOOK0001", 2000);
+    d.lib.saveReading("BOOK0001", "", 0.42);
+    d.lib.markOpened("EPUB0001", "FPUB0001", 3000);
+    d.lib.markRead("EPUB0001", true);
+    d.pin("BOOK0003");
+    d.pin("BOOK0001");
+    d.pin("INBX0004");
+
+    Part a = d.openAll({{"tab", "pinned"}});
+    CHECK(a.links == std::vector<std::pair<std::string, std::string>>{
+                         {"tab-reading", "Reading"}, {"tab-pinned", "Pinned"}, {"tab-inbox", "Inbox 3"}});
+    CHECK(a.selected == "tab-pinned");
+    REQUIRE(a.keys() == Strings{"BOOK0003", "BOOK0001", "INBX0004"});
+    REQUIRE(a.grid);
+    CHECK(a.grid->maxRows == 0);  // it pages
+    CHECK(a.items[0].texts == Strings{"A Pinned Book"});  // never opened, no author: the title alone
+    CHECK_FALSE(a.items[0].progress);
+    CHECK(a.items[1].texts == Strings{"A Book", "Austen · 42%"});
+    CHECK(a.items[1].progress == 0.42);
+    CHECK(a.items[2].texts == Strings{"Done", "Read"});
+    for (const auto& p : a.items) {
+        CHECK(p.cover);
+        CHECK(firstOf(*p.block, Block::Kind::Box));  // the bar's slot, reserved with or without a bar
+    }
+
+    // Reading: opened and not read, books and papers together, most recent first.
+    a = d.allEvent({{"kind", "tap"}, {"id", "tab-reading"}});
+    CHECK(a.selected == "tab-reading");
+    CHECK(a.keys() == Strings{"BOOK0001", "PAPR0001"});
+    // Inbox: unread, newest added first.
+    a = d.allEvent({{"kind", "tap"}, {"id", "tab-inbox"}});
+    CHECK(a.selected == "tab-inbox");
+    CHECK(a.keys() == Strings{"INBX0002", "INBX0003", "INBX0001"});
+    CHECK_FALSE(d.stored("tab"));  // the tab is the screen's, never stored
+
+    // No inbox: no Inbox segment (asked for, Reading shows); no params: Reading; the empty texts.
+    Desk e("");
+    a = e.openAll({{"tab", "inbox"}});
+    CHECK(a.links.size() == 2);
+    CHECK(a.selected == "tab-reading");
+    CHECK(a.texts.back().find("Books and papers you open show up here.") != std::string::npos);
+    a = e.openAll(nullptr);
+    CHECK(a.selected == "tab-reading");
+    a = e.allEvent({{"kind", "tap"}, {"id", "tab-pinned"}});
+    CHECK(a.texts.back().find("Nothing pinned yet. Long-press an item → More… → Pin to Home / Unpin.") != std::string::npos);
 }
 
 TEST_CASE("example: Reading Desk — the settings screen picks the inbox (over settings.json), turns the passage off, and unpins") {
     ScopedMetrics tall(kScribe);
     Desk d("");
-    addHighlight(d.lib, "ANNO0001", "FOOK0001", "A passage long enough to be shown under the desk, every day of the week.",
-                 "", "12", "00001|000100|00100");
-    CHECK(d.render().tabs.size() == 3);
+    addHighlight(d.lib, "ANNO0001", "FOOK0001", kLongPassage, "", "12", "00001|000100|00100");
+    d.lib.markOpened("PAPR0001", "FAPR0001", nowMs());
+    CHECK_FALSE(d.render().has("inbox"));
 
     // Plugins → Reading Desk: the settings; its Inbox row opens the picker.
     const uint64_t settings = d.host->openScreen("reading-desk", "settings");
     std::string shown = d.text(settings);
     CHECK(shown.find("Inbox collection") != std::string::npos);
-    CHECK(shown.find("None: the New tab is hidden") != std::string::npos);
+    CHECK(shown.find("None: no inbox on Home") != std::string::npos);
     d.host->screenEvent(settings, {{"kind", "select"}, {"id", "prefs"}, {"row", "inbox"}});
     auto opened = d.next(PluginHostEvent::Kind::ScreenOpen, settings);
     REQUIRE(opened);
@@ -888,57 +1100,56 @@ TEST_CASE("example: Reading Desk — the settings screen picks the inbox (over s
     CHECK(shown.find("Reading") == std::string::npos);  // the search narrows the list
     d.host->screenEvent(picker, {{"kind", "select"}, {"id", "collections"}, {"row", "0:COLLINBX"}});
     REQUIRE(d.next(PluginHostEvent::Kind::ScreenClose, picker));
-    CHECK(d.render().tabs.back() == "New 3");
+    CHECK(d.render().at("inbox").labels == Strings{"Inbox · 3 new"});
 
-    // The passage: on by default; the settings' row turns it off.
-    CHECK_FALSE(d.withPassage().quote.is_null());
+    // The passage: on by default (under the inbox on a Scribe); the settings' row turns it off.
+    CHECK(d.withPassage().quote());
     d.host->screenEvent(settings, {{"kind", "select"}, {"id", "prefs"}, {"row", "passage"}});
     shown = d.text(settings);
     CHECK(shown.find("A passage each day Off") != std::string::npos);
-    CHECK(d.render().quote.is_null());
+    CHECK_FALSE(d.render().quote());
 
     // Pins: a row asks, Unpin unpins.
-    d.pin("PAPR0001");
     d.pin("PAPR0002");
+    d.pin("INBX0004");  // a paper, read: in the row (the pair's paper is the one opened)
     d.host->rerender(settings);
     shown = d.text(settings);
     CHECK(shown.find("PINNED (2)") != std::string::npos);
-    d.host->screenEvent(settings, {{"kind", "select"}, {"id", "pins"}, {"row", "0:PAPR0001"}});
+    d.host->screenEvent(settings, {{"kind", "select"}, {"id", "pins"}, {"row", "0:PAPR0002"}});
     shown = d.text(settings);
-    CHECK(shown.find("Unpin “A Paper”?") != std::string::npos);
+    CHECK(shown.find("Unpin “Another Paper”?") != std::string::npos);
     d.host->screenEvent(settings, {{"kind", "tap"}, {"id", "unpin"}});
     shown = d.text(settings);
     CHECK(shown.find("PINNED (1)") != std::string::npos);
-    CHECK(d.render().at("now") == Keys{{"PAPR0002", "START HERE"}});  // the one pin left
+    CHECK(d.render().at("pinned").link("all-pinned") == "All 1 ›");
 
     // "None" overrides settings.json's inbox.
     Desk e(R"({"inbox":"COLLINBX"})");
-    CHECK(e.render().tabs.back() == "New 3");
+    CHECK(e.render().has("inbox"));
     const uint64_t p2 = e.host->openScreen("reading-desk", "inbox");
     REQUIRE(e.next(PluginHostEvent::Kind::ScreenTree, p2));
     e.host->screenEvent(p2, {{"kind", "select"}, {"id", "collections"}, {"row", "none"}});
     REQUIRE(e.next(PluginHostEvent::Kind::ScreenClose, p2));
-    CHECK(e.render().tabs.back() == "Pinned");
+    CHECK_FALSE(e.render().has("inbox"));
 }
 
 TEST_CASE("example: Reading Desk — the passage: a highlight of 40 to 400 characters, the same all day; a tap opens the reader at it") {
     ScopedMetrics tall(kScribe);
     Desk d("");
     addHighlight(d.lib, "ANNOSHRT", "FOOK0001", "Too short to show.", "", "3", "00001|000010|00010");
-    addHighlight(d.lib, "ANNOLONG", "FOOK0001", "  A passage long enough to be shown under the desk, every day of the week.  ",
-                 "", "12", "00001|000100|00100");
+    addHighlight(d.lib, "ANNOLONG", "FOOK0001", std::string("  ") + kLongPassage + "  ", "", "12", "00001|000100|00100");
     addHighlight(d.lib, "ANNOPAPR", "FAPR0001", "Another passage, from a paper this time, also long enough to be picked.",
                  "", "", "00001|000200|00200");
-    DeskTree t = d.withPassage();
-    REQUIRE_FALSE(t.quote.is_null());
-    const std::string text = t.quote["text"];
+    HomeTree t = d.withPassage();
+    REQUIRE(t.quote());
+    const std::string text = t.quoteText();
     const bool book = text.rfind("A passage long enough", 0) == 0;
     CHECK((book || text.rfind("Another passage", 0) == 0));
-    CHECK(t.quote["source"] == (book ? "A Book · p. 12" : "A Paper"));  // trimmed; no page: the title alone
-    CHECK(t.order.back() == "quote");
+    CHECK(t.quote()->meta == (book ? "A Book · p. 12" : "A Paper"));  // trimmed; no page: the title alone
+    CHECK(t.order().back() == "quote");
     // Stable: the same passage on every render that day, kept in storage.
-    for (int i = 0; i < 3; ++i) CHECK(d.render().quote["text"] == text);
-    CHECK(d.reopen().quote["text"] == text);
+    for (int i = 0; i < 3; ++i) CHECK(d.render().quoteText() == text);
+    CHECK(d.reopen().quoteText() == text);
 
     // A tap opens the item at that highlight.
     d.host->screenEvent(d.inst, {{"kind", "tap"}, {"id", "passage"}});
@@ -953,20 +1164,19 @@ TEST_CASE("example: Reading Desk — the passage: a highlight of 40 to 400 chara
     json kept = {{"day", localToday()},
                  {"pick", {{"key", "ANNOPAPR"}, {"itemKey", "PAPR0001"}, {"library", 0}, {"text", "Kept for today."}, {"source", "A Paper"}}}};
     d.store("passage", kept);
-    CHECK(d.render().quote["text"] == "Kept for today.");
+    CHECK(d.render().quoteText() == "Kept for today.");
     // Yesterday's pick shows until today's is picked, off the render.
     kept["day"] = "2000-01-01";
     d.store("passage", kept);
-    t = d.passage([](const json& q) { return !q.is_null() && q["text"] != "Kept for today."; });
-    CHECK(t.quote["text"] != "Kept for today.");
+    t = d.passage([](const Block* q) { return q && q->text != "Kept for today."; });
+    CHECK(t.quoteText() != "Kept for today.");
 }
 
 TEST_CASE("example: Reading Desk — a tapped passage that can't open: the item gone re-picks, the highlight gone opens the item, Cancelled is quiet") {
     ScopedMetrics tall(kScribe);
     Desk d("");
-    addHighlight(d.lib, "ANNOLONG", "FOOK0001", "A passage long enough to be shown under the desk, every day of the week.",
-                 "", "12", "00001|000100|00100");
-    REQUIRE_FALSE(d.withPassage().quote.is_null());
+    addHighlight(d.lib, "ANNOLONG", "FOOK0001", kLongPassage, "", "12", "00001|000100|00100");
+    REQUIRE(d.withPassage().quote());
 
     // Cancelled (the download): nothing more, no error, the pick kept.
     CHECK(d.tapPassage("Cancelled")["annotation"] == "ANNOLONG");
@@ -976,11 +1186,11 @@ TEST_CASE("example: Reading Desk — a tapped passage that can't open: the item 
     // Today's pick, as kept (its text marks it): a pick that can't open is dropped and picked again.
     const json kept = {{"day", localToday()},
                        {"pick", {{"key", "ANNOLONG"}, {"itemKey", "BOOK0001"}, {"library", 0}, {"text", "Kept for today."}, {"source", "A Book"}}}};
-    auto repicked = [&] { return d.passage([](const json& q) { return !q.is_null() && q["text"] != "Kept for today."; }); };
+    auto repicked = [&] { return d.passage([](const Block* q) { return q && q->text != "Kept for today."; }); };
 
     // The highlight was deleted: the item opens where it was left, and the pick is dropped.
     d.store("passage", kept);
-    CHECK(d.render().quote["text"] == "Kept for today.");
+    CHECK(d.render().quoteText() == "Kept for today.");
     CHECK(d.tapPassage("Annotation not found")["annotation"] == "ANNOLONG");
     auto again = d.next(PluginHostEvent::Kind::ItemOpen, d.inst);
     REQUIRE(again);
@@ -988,20 +1198,21 @@ TEST_CASE("example: Reading Desk — a tapped passage that can't open: the item 
     CHECK_FALSE(again->value.contains("annotation"));
     d.host->answerReader(again->requestId, "");
     d.tree(d.inst);
-    CHECK(repicked().quote["text"] != "Kept for today.");
+    CHECK(repicked().quoteText() != "Kept for today.");
 
     // The item is gone (trashed): no error pop-up, and the pick is dropped too.
     d.store("passage", kept);
-    CHECK(d.render().quote["text"] == "Kept for today.");
+    CHECK(d.render().quoteText() == "Kept for today.");
     d.tapPassage("Item not found");
     d.tree(d.inst);
-    CHECK(repicked().quote["text"] != "Kept for today.");
+    CHECK(repicked().quoteText() != "Kept for today.");
     for (const auto& e : d.got) CHECK(e.kind != PluginHostEvent::Kind::ScreenActionError);
 }
 
-TEST_CASE("example: Reading Desk — a big inbox stays inside the app's 1 s render: the walk stops at 100, New 99+") {
-    ScopedMetrics short_(kPw5);
+TEST_CASE("example: Reading Desk — a big library stays inside the app's 1 s render: 1,500 in the inbox (99+), 250 opened, 40 pins") {
+    ScopedMetrics pw5(kPw5);
     Desk d(R"({"inbox":"COLLINBX"})", 1000);
+    const int64_t now = nowMs();
     {
         auto tx = d.lib.begin();
         for (int i = 0; i < 1500; ++i) {
@@ -1010,41 +1221,35 @@ TEST_CASE("example: Reading Desk — a big inbox stays inside the app's 1 s rend
             std::snprintf(added, sizeof added, "2025-%02d-%02dT%02d:00:00Z", 1 + i / 500, 1 + i % 500 / 20, i % 20);  // rising
             deskItem(d.lib, key, "journalArticle", std::string("Inbox paper ") + key, added, "COLLINBX", "application/pdf");
         }
+        // 250 papers opened, none a book: the pair's walk goes to its cap looking for one.
+        for (int i = 0; i < 250; ++i) {
+            char key[16], file[16];
+            std::snprintf(key, sizeof key, "BIG%05d", i);
+            std::snprintf(file, sizeof file, "FIG%05d", i);
+            d.lib.markOpened(key, file, now - (250 - i) * 1000);
+        }
         tx.commit();
     }
     for (int i = 0; i < 40; ++i) d.pin("BIG" + std::string(i < 10 ? "0000" : "000") + std::to_string(i));
-    d.store("tab", "new");
     for (int round = 0; round < 3; ++round) {
         const auto t0 = std::chrono::steady_clock::now();
-        DeskTree t = d.render();
+        HomeTree t = d.render();
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-        MESSAGE("render with a 1,500-item inbox: " << ms << " ms");
+        MESSAGE("Home with a 1,500-item inbox: " << ms << " ms");
         CHECK(ms < 1000);
-        CHECK(t.tabs.back() == "New 99+");
-        CHECK(t.at("new").size() == 100);
-        CHECK(t.at("new").front().first == "BIG01499");  // newest added first
+        CHECK(t.pair() == Sides{{"Paper", "BIG00249"}});  // opened last
+        CHECK(t.at("inbox").labels == Strings{"Inbox · 99+ new"});
+        CHECK(t.at("inbox").keys() == Strings{"BIG01499", "BIG01498"});  // newest added first
+    }
+    for (const char* tab : {"inbox", "reading", "pinned"}) {
+        const auto t0 = std::chrono::steady_clock::now();
+        Part a = d.openAll({{"tab", tab}});
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        MESSAGE("Your desk, " << std::string(tab) << ": " << ms << " ms");
+        CHECK(ms < 1000);
+        CHECK(a.items.size() == (std::string(tab) == "inbox" ? 100u : std::string(tab) == "reading" ? 60u : 40u));
+        if (std::string(tab) == "inbox") CHECK(a.link("tab-inbox") == "Inbox 99+");
+        d.host->closeScreen(d.all);
     }
     for (const auto& e : d.got) CHECK(e.kind != PluginHostEvent::Kind::ScreenError);
-}
-
-TEST_CASE("example: Reading Desk — the passage never costs a page: left out where the content would page because of it") {
-    Desk d(R"({"inbox":"COLLINBX"})");
-    addHighlight(d.lib, "ANNOLONG", "FOOK0001", "A passage long enough to be shown under the desk, every day of the week.",
-                 "", "12", "00001|000100|00100");
-    d.store("tab", "new");
-    {
-        ScopedMetrics short_(kKt4);  // nothing opened: the tabs, 3 rows and the passage fit
-        DeskTree t = d.withPassage();
-        CHECK(t.at("new").size() == 3);
-        CHECK_FALSE(t.quote.is_null());
-    }
-    d.lib.markOpened("BOOK0001", "FOOK0001", 1000);
-    {
-        ScopedMetrics short_(kKt4);  // with Now reading the rows page anyway; the passage would make it 3 pages
-        CHECK(d.render().quote.is_null());
-    }
-    ScopedMetrics tall(kScribe);  // room for all of it
-    DeskTree t = d.withPassage();
-    CHECK(t.at("new").size() == 3);
-    CHECK_FALSE(t.quote.is_null());
 }

@@ -39,6 +39,8 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
                     Align align = Align::Left);
 
 TextResult measureText(std::string_view utf8, const TextStyle& style, int width, int max_lines);
+// How many Pango layouts drawText/measureText have made so far (for tests: a bound on a painter's cost).
+long layoutsMade();
 
 // Long text page by page: the top of every line of `utf8` laid out `width` wide, and the bottom of
 // the last as the final entry ({0} for no text).
@@ -51,10 +53,10 @@ void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, R
                    Align align = Align::Left);
 // Text laid out once and kept, for long text drawn again and again (a plugin screen's text block):
 // its line tops as lineTops gives them, and its lines drawn without laying the text out again.
-// `max_lines` > 0 ellipsizes at that many lines, as drawText does.
+// `max_lines` > 0 ellipsizes at that many lines, as drawText does; `align` places each line in `width`.
 class KeptText {
 public:
-    KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines = 0);
+    KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines = 0, Align align = Align::Left);
     ~KeptText();
     KeptText(const KeptText&) = delete;
     KeptText& operator=(const KeptText&) = delete;

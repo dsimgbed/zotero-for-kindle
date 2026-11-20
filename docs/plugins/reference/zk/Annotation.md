@@ -20,4 +20,4 @@ An annotation in a book or paper.
 | <a id="pagelabel"></a> `pageLabel` | `string` \| `null` | The page label shown in the document, e.g. `"12"` or `"xii"`. |
 | <a id="tags"></a> `tags` | `string`[] | - |
 | <a id="text"></a> `text` | `string` \| `null` | The highlighted text (`null` for notes and images). |
-| <a id="type"></a> `type` | `"highlight"` \| `"underline"` \| `"note"` \| `"image"` \| `"ink"` | - |
+| <a id="type"></a> `type` | `"ink"` \| `"image"` \| `"highlight"` \| `"underline"` \| `"note"` | - |

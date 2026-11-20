@@ -20,18 +20,30 @@ bool same(const Laid& a, const Laid& b) {
     return a.rect == b.rect && a.first == b.first && a.count == b.count && sameItems(a, b) && sameBlock(*a.block, *b.block);
 }
 
+// A cover, an image, an item piece or a shelf or cards shown anywhere in the block: it redraws as covers do.
+bool showsPicture(const Laid& l) {
+    const K k = l.block->kind;
+    if (k == K::Cover || k == K::Image || k == K::Item) return true;
+    if (k == K::Items && l.block->itemStyle != Block::ItemStyle::Row) return true;
+    return std::any_of(l.children.begin(), l.children.end(), showsPicture);
+}
+
 Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
     if (pageTurned) return Waveform::Quality;
-    if (!a || !b || a->block->kind != b->block->kind) return Waveform::Ui;
+    if (!a || !b || a->block->kind != b->block->kind)  // added, removed or replaced: covers among them want Quality
+        return (a && showsPicture(*a)) || (b && showsPicture(*b)) ? Waveform::Quality : Waveform::Ui;
     if (a->first != b->first && sameBlock(*a->block, *b->block)) return Waveform::Quality;  // the block paged
     switch (a->block->kind) {
         case K::Deck: return a->block->children == b->block->children ? Waveform::Fast : Waveform::Quality;
         case K::Card: return Waveform::Quality;
         case K::Items: return a->block->itemStyle != Block::ItemStyle::Row ? Waveform::Quality : Waveform::Ui;  // covers: Quality
+        case K::Cover:  // 0.12's pieces: covers too, as a shelf's
+        case K::Grid:
+        case K::Item: return Waveform::Quality;
         case K::Text:
         case K::Notice:
         case K::Quote: return a->rect == b->rect ? Waveform::Fast : Waveform::Ui;
-        default: return Waveform::Ui;
+        default: return showsPicture(*a) || showsPicture(*b) ? Waveform::Quality : Waveform::Ui;  // a section of covers too
     }
 }
 

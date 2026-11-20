@@ -66,6 +66,8 @@ struct ItemRow {
     int files = 0;         // its readable files (EPUB, PDF, web snapshot): with more than one, opening asks which
     bool exactFile = false;  // attachmentKey is a file chosen (rowFor with a file): open it without asking
     int64_t lib = kMyLibrary;  // its library (0 My Library, else the group ID)
+    std::string publication;  // the journal, proceedings, book (a section's) or site; "" if none
+    int year = 0;             // its year; 0 if unknown
     bool operator==(const ItemRow&) const = default;
 };
 
