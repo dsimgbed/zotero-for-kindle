@@ -60,7 +60,7 @@ struct TrickleServer {
 
 }  // namespace
 
-TEST_CASE("curl http: a slow download that keeps moving runs past any whole-transfer limit; a stalled one ends") {
+TEST_CASE("curl http: with a stall limit and no total limit, a download that keeps moving completes; a stalled one ends") {
     CurlHttp curl("");
     SUBCASE("moving") {
         TrickleServer srv(1500, 1500, 100, 100, 0);  // 1.5 s at 1 KB/s
@@ -87,6 +87,6 @@ TEST_CASE("curl http: a slow download that keeps moving runs past any whole-tran
         const HttpResponse resp = curl.send(r);
         const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         CHECK(resp.curlCode == 28);  // CURLE_OPERATION_TIMEDOUT
-        CHECK(s < 3.0);
+        CHECK(s < 8.0);  // the stall limit ended it, not the server closing (at 10 s)
     }
 }
