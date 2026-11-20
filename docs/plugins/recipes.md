@@ -398,8 +398,8 @@ zk.screen("unread", {
 A screen with `home: true` is offered in **Settings → Home**. Once the user picks it, it is the body
 of the app's Home: the app keeps the title, icons, search field, banners and tab bar. See
 [Home](concepts.md#home-written-by-a-plugin). The example plugin
-[Reading Desk](../../sdk/examples/reading-desk/src/main.ts) is a fuller one: Continue, pinned items
-and an inbox.
+[Reading Desk](../../sdk/examples/reading-desk/src/main.ts) is a fuller one: Now reading, tabs
+(a shelf of books, papers, pins, an inbox), a passage of the day, and a settings screen.
 
 <!-- recipe: sdk/recipes/home.ts -->
 ```ts
