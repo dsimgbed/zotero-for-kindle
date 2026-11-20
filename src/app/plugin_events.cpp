@@ -224,12 +224,14 @@ void PluginEvents::openItem(App& app, const PluginHostEvent& ev) {
     if (ev.value.contains("library") && ev.value["library"].is_number_integer()) ref.library = ev.value["library"].get<int64_t>();
     std::optional<std::string> attachment;
     if (ev.value.contains("attachment") && ev.value["attachment"].is_string()) attachment = ev.value["attachment"].get<std::string>();
+    std::optional<std::string> annotation;
+    if (ev.value.contains("annotation") && ev.value["annotation"].is_string()) annotation = ev.value["annotation"].get<std::string>();
     if (!itemOpener_ || ref.key.empty() || (instance != 0 && !screens_.count(instance))) {
         answer("The reader can't open this right now");
         return;
     }
     log(LogLevel::Info, "plugin %s opens item %s", ev.pluginId.c_str(), ref.key.c_str());
-    itemOpener_(app, ref, std::move(attachment), std::move(answer));
+    itemOpener_(app, ref, std::move(attachment), std::move(annotation), std::move(answer));
 }
 
 void PluginEvents::poll(App& app) {

@@ -484,8 +484,9 @@ JSValue fullTextNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv)
     return promise;
 }
 
-// n.open(json): zk.library.open (0.10), the item opened in the reader in answer to the user. The screen
-// thread resolves the item and opens it (ItemOpen, see host.h) and answers with PluginHost::answerReader.
+// n.open(json): zk.library.open (0.10), the item opened in the reader in answer to the user (0.11: at an
+// annotation). The screen thread resolves the item and opens it (ItemOpen, see host.h) and answers with
+// PluginHost::answerReader.
 JSValue openNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     PluginCtx& p = ctxOf(c);
     std::string raw;
@@ -609,9 +610,12 @@ const library = {
       throw new TypeError("zk.library.open: the options must be an object");
     const at = options === undefined ? undefined : options.attachment;
     if (at !== undefined && typeof at !== "string") throw new TypeError("zk.library.open: attachment must be a key");
+    const note = options === undefined ? undefined : options.annotation;
+    if (note !== undefined && typeof note !== "string") throw new TypeError("zk.library.open: annotation must be a key");
     const v = { key: ref.key };
     if (ref.library !== undefined) v.library = ref.library;
     if (at !== undefined) v.attachment = at;
+    if (note !== undefined) v.annotation = note;
     return n.open(JSON.stringify(v));
   },
   async fullText(attachmentKey) { n.need("fullText"); return n.fullText(key(attachmentKey, "fullText")); },

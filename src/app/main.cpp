@@ -657,18 +657,14 @@ int main(int argc, char** argv) {
     // the next start shows it (plugins load after the first screen).
     HomeTreeStore homeTrees(paths.stateDir + "/home-tree.json");
     PluginHome pluginHome(pluginEvents, homeTrees, [&lib] { return loadSettings(lib).homeScreen; }, &pluginItems, itemTap);
-    // zk.library.open: the same rule as an items block (the key, in that library if one is given), the
-    // file asked for if any (a file the item hasn't: not found). The promise follows OpenFlow's outcome.
+    // zk.library.open: the item, the file asked for, or the file an annotation is in, opened at it
+    // (itemToOpen). The promise follows OpenFlow's outcome.
     pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
-                                             std::function<void(const std::string&)> answer) {
-        auto row = lib.rowFor(ref.key);
-        if (row && ref.library && row->lib != *ref.library) row.reset();
-        if (row && attachment) {
-            row = lib.rowFor(ref.key, *attachment);
-            if (row && !row->exactFile) row.reset();
-        }
-        if (!row) return answer("Item not found");
-        flow.open(*row, a, std::nullopt, std::move(answer));
+                                             std::optional<std::string> annotation, std::function<void(const std::string&)> answer) {
+        std::string why;
+        auto target = itemToOpen(lib, ref, attachment, annotation, &why);
+        if (!target) return answer(why);
+        flow.open(target->row, a, std::move(target->at), std::move(answer));
     });
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto pushUpdateScreen = [&](Nav& nav) {

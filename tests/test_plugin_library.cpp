@@ -10,6 +10,9 @@
 #include "plugins/fulltext.h"
 #include "plugins/host.h"
 #include "plugins/identifiers.h"
+#include "fixture_library.h"
+#include "screens/item_source.h"
+#include "store/db.h"
 #include "store/library.h"
 
 using namespace zk;
@@ -819,6 +822,8 @@ zk.screen("main", {
     if (e.kind === "tap" && e.id === "key") said = tryOpen("ABCD2345");
     if (e.kind === "tap" && e.id === "ref") said = tryOpen({ key: "ABCD2345", library: 7 }, { attachment: "FILE0001" });
     if (e.kind === "tap" && e.id === "bad") said = tryOpen({ library: 7 });
+    if (e.kind === "tap" && e.id === "at") said = tryOpen("ABCD2345", { annotation: "NOTE0001" });
+    if (e.kind === "tap" && e.id === "badAt") said = tryOpen("ABCD2345", { annotation: 7 });
     if (e.kind === "reader") said = "reader closed: " + e.closed;
   },
 });
@@ -888,6 +893,22 @@ TEST_CASE("library open: { key, library } and the attachment option reach the sc
     CHECK(open->value == nlohmann::json{{"key", "ABCD2345"}, {"library", 7}, {"attachment", "FILE0001"}});
 }
 
+TEST_CASE("library open: the annotation option reaches the screen thread; one that isn't a key throws") {
+    OpenHost h;
+    const uint64_t s = h.host->openScreen("p", "main");
+    h.nextText();
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "at"}});
+    auto open = h.next(PluginHostEvent::Kind::ItemOpen);
+    REQUIRE(open);
+    CHECK(open->value == nlohmann::json{{"key", "ABCD2345"}, {"annotation", "NOTE0001"}});
+    h.nextText();
+    h.host->answerReader(open->requestId, "Annotation not found");
+    CHECK(h.nextText() == "rejected: Annotation not found");
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "badAt"}});
+    CHECK(h.nextText() == "TypeError: zk.library.open: annotation must be a key");
+    CHECK_FALSE(h.next(PluginHostEvent::Kind::ItemOpen, 100));
+}
+
 TEST_CASE("library open: an unknown item or a cancelled open rejects with the reason") {
     OpenHost h;
     const uint64_t s = h.host->openScreen("p", "main");
@@ -936,4 +957,62 @@ TEST_CASE("library open [review focus]: from a handler or a timer it throws: onl
     CHECK(said.find("handler: Error: zk.library.open: only in answer to the user") == 0);
     CHECK(said.find(" | timer: Error: zk.library.open: only in answer to the user") != std::string::npos);
     CHECK_FALSE(h.next(PluginHostEvent::Kind::ItemOpen, 100));
+}
+
+// What zk.library.open opens (itemToOpen, screens/item_source.h): the item, the file asked for, or
+// the file an annotation is in with the reader going to it.
+TEST_CASE("library open: an annotation opens its own file at it; unknown, another item's or a deleted one is \"Annotation not found\"") {
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    zk::test::fillFixtureLibrary(lib, 12);
+    const std::string item = zk::test::fixtureKey("IT", 0), file = zk::test::fixtureKey("EP", 0);
+    const std::string note = zk::test::fixtureKey("N1", 0), otherNote = zk::test::fixtureKey("N1", 3);
+    std::string why;
+    auto t = itemToOpen(lib, {item, std::nullopt, ""}, std::nullopt, note, &why);
+    INFO(why);
+    REQUIRE(t);
+    CHECK(t->row.key == item);
+    CHECK(t->row.attachmentKey == file);
+    CHECK(t->row.exactFile);  // no "Open which file?": the annotation says which
+    REQUIRE(t->at);
+    CHECK(t->at->key == note);
+    t = itemToOpen(lib, {item, 0, ""}, file, note, &why);  // the file and library given agree
+    REQUIRE(t);
+    CHECK(t->at->key == note);
+    for (const auto& [key, at, attachment] : std::vector<std::tuple<std::string, std::string, std::optional<std::string>>>{
+             {item, "NOSUCHAN", std::nullopt},  // unknown
+             {item, otherNote, std::nullopt},   // another item's
+             {item, note, "OTHERFIL"},          // not in the file asked for
+         }) {
+        why.clear();
+        CHECK_FALSE(itemToOpen(lib, {key, std::nullopt, ""}, attachment, at, &why));
+        CHECK(why == "Annotation not found");
+    }
+    auto a = *lib.annotation(note);
+    a.deletedHere = true;  // deleted on the Kindle, not sent yet
+    lib.upsertAnnotation(a);
+    CHECK_FALSE(itemToOpen(lib, {item, std::nullopt, ""}, std::nullopt, note, &why));
+    CHECK(why == "Annotation not found");
+    // the item itself is checked first
+    CHECK_FALSE(itemToOpen(lib, {"GONEGONE", std::nullopt, ""}, std::nullopt, note, &why));
+    CHECK(why == "Item not found");
+    CHECK_FALSE(itemToOpen(lib, {item, 7, ""}, std::nullopt, otherNote, &why));
+    CHECK(why == "Item not found");
+}
+
+TEST_CASE("library open: without an annotation, the item or the file asked for, as before") {
+    Db db = Db::open(":memory:");
+    Library lib{db};
+    zk::test::fillFixtureLibrary(lib, 12);
+    const std::string item = zk::test::fixtureKey("IT", 0), file = zk::test::fixtureKey("EP", 0);
+    std::string why;
+    auto t = itemToOpen(lib, {item, std::nullopt, ""}, std::nullopt, std::nullopt, &why);
+    REQUIRE(t);
+    CHECK(t->row.key == item);
+    CHECK_FALSE(t->at);
+    t = itemToOpen(lib, {item, std::nullopt, ""}, file, std::nullopt, &why);
+    REQUIRE(t);
+    CHECK(t->row.exactFile);
+    CHECK_FALSE(itemToOpen(lib, {item, std::nullopt, ""}, std::string("NOSUCHFI"), std::nullopt, &why));
+    CHECK(why == "Item not found");
 }
