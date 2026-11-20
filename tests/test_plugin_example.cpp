@@ -928,6 +928,23 @@ TEST_CASE("example: Reading Desk — nothing opened of a kind: its first pin nev
     CHECK(d.tapOpens("all-pinned") == std::pair<std::string, json>{"all", {{"tab", "pinned"}}});
 }
 
+TEST_CASE("example: Reading Desk — the pinned row holds as many covers as fit whole: 5 on a Paperwhite, 4 on a basic Kindle, 7 on a Scribe") {
+    Desk d("");
+    d.lib.markOpened("BOOK0001", "FOOK0001", nowMs());
+    d.lib.markOpened("PAPR0001", "FAPR0001", nowMs() - 1000);
+    for (int i = 0; i < 10; ++i) {
+        const std::string key = "PINX000" + std::to_string(i);
+        deskItem(d.lib, key, "book", "Pinned book " + std::to_string(i), "2024-01-05T00:00:00Z", "", "application/pdf");
+        d.pin(key);
+    }
+    for (const auto& [dev, n] : {std::pair{&kPw5, 5}, std::pair{&kKt4, 4}, std::pair{&kScribe, 7}}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const HomeTree t = d.render();
+        CHECK(t.at("pinned").keys().size() == static_cast<size_t>(n));
+    }
+}
+
 TEST_CASE("example: Reading Desk — first use: the hint and the passage; nothing else") {
     ScopedMetrics pw5(kPw5);
     Desk d("");
@@ -943,7 +960,7 @@ TEST_CASE("example: Reading Desk — first use: the hint and the passage; nothin
     CHECK(d.tapOpens("your-desk") == std::pair<std::string, json>{"all", {{"tab", "reading"}}});
 }
 
-TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus the pair, bylines and when added; 3 and the passage on a Scribe, else 2") {
+TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus the pair, bylines and when added; up to 5 and the passage on a Scribe, else 2") {
     Desk d(R"({"inbox":"COLLINBX"})");
     deskItem(d.lib, "INBX0005", "journalArticle", "Deep Residual Learning for Image Recognition", isoAgo(0), "COLLINBX",
              "application/pdf", {{"Kaiming", "He"}, {"Xiangyu", "Zhang"}, {"Shaoqing", "Ren"}, {"Jian", "Sun"}}, "2016");
@@ -959,7 +976,7 @@ TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus th
         const Part inbox = t.at("inbox");
         CHECK(inbox.labels == Strings{"Inbox · 6 new"});
         CHECK(inbox.link("all-inbox") == "All ›");
-        REQUIRE(inbox.keys() == Strings{"INBX0005", "INBX0006", "INBX0007"});
+        REQUIRE(inbox.keys() == Strings{"INBX0005", "INBX0006", "INBX0007", "INBX0002", "INBX0003"});
         CHECK(inbox.items[0].texts == Strings{"Deep Residual Learning for Image Recognition", "He, Zhang, Ren, Sun · 2016", "today"});
         CHECK(inbox.items[1].texts == Strings{"Mastering the game of Go", "Silver et al. · 2017", "yesterday"});
         static const char* kDays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};

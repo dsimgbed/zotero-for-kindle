@@ -209,8 +209,7 @@ function segmented(segments, selected) {
         (s) => zk.ui.box(zk.ui.text(s.text, { align: "center", font: "sans", size: "body", weight: "medium" }), {
           id: s.id,
           pad: "small",
-          fill: s.id === selected ? "ink" : "none",
-          radius: "small"
+          fill: s.id === selected ? "ink" : "none"
         })
       ),
       { gap: "none" }
@@ -287,7 +286,7 @@ var COVER = 190;
 var COVER_TURNED = 160;
 var tall = () => zk.display.height >= 2e3;
 var bandGap = () => zk.display.height < 1400 ? "medium" : "large";
-var pinsPerRow = () => perRow(COVER, pageWidth(), MEDIUM);
+var pinsPerRow = () => Math.max(1, Math.floor((pageWidth() + MEDIUM) / (COVER + MEDIUM)));
 var FIRST_USE = "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press \u2192 More\u2026 \u2192 Pin to Home.";
 function sideMeta(s) {
   if (!s.started) return "Not started";
@@ -332,7 +331,7 @@ function registerHome() {
       const inboxBand = fresh.length > 0 && zk.ui.column(
         [
           heading(`Inbox \xB7 ${countOf(unread.length, unread.length)} new`, { id: "all-inbox", text: "All \u203A" }),
-          ...lines(fresh.slice(0, tall() ? 3 : 2).map((item) => ({ item, byline: bylineOf(item), right: whenOf(item.addedAt) })))
+          ...lines(fresh.slice(0, tall() ? 5 : 2).map((item) => ({ item, byline: bylineOf(item), right: whenOf(item.addedAt) })))
         ],
         { gap: "small" }
       );
