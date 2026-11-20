@@ -231,3 +231,53 @@ TEST_CASE("item details: the sheet and the page match the reviewed goldens") {
         checkGolden(c2, m.device == kPw5.device ? "tests/golden/item-details.png" : "tests/golden/item-details-scribe.png");
     }
 }
+
+TEST_CASE("item details fix: on KT4 a crowded item pages; nothing reaches the Open button") {
+    if (!fonts()) return;
+    ScopedMetrics sm(kKt4);
+    Rig rig;
+    {  // five more files on the Kindle (EPUBs and PDFs: each with Open and Remove), more collections and tags
+        auto tx = rig.lib.begin();
+        ItemRecord r = *rig.lib.item("PRIDE001");
+        for (int i = 0; i < 4; ++i) {
+            const std::string key = "COLX000" + std::to_string(i);
+            rig.lib.upsertCollection({key, "A collection with a rather long name " + std::to_string(i), "", 1});
+            r.collections.push_back(key);
+        }
+        for (int i = 0; i < 12; ++i) r.tags.push_back("tag number " + std::to_string(i));
+        r.version = 2;
+        rig.lib.upsertItem(r);
+        tx.commit();
+    }
+    for (int i = 0; i < 5; ++i) {
+        AttachmentRecord a;
+        a.key = "PRIDEX0" + std::to_string(i);
+        a.parentKey = "PRIDE001";
+        a.contentType = i % 2 ? "application/pdf" : "application/epub+zip";
+        a.filename = "pride-" + std::to_string(i) + (i % 2 ? ".pdf" : ".epub");
+        a.linkMode = "imported_file";
+        rig.lib.upsertAttachment(a);
+        const fs::path f = rig.files / a.key / a.filename;
+        fs::create_directories(f.parent_path());
+        std::ofstream(f) << "x";
+        rig.lib.setFileState(a.key, AttachmentRecord::State::Local, f.string());
+    }
+    ItemDetailsScreen page(rig.row("PRIDE001"), [](const ItemRow&) {});
+    page.onShow(rig.nav);
+    REQUIRE(page.details().files.size() == 6);
+    Canvas c(kKt4.width, kKt4.height);
+    size_t removeCount = 0;
+    for (int guard = 0; guard < 10; ++guard) {
+        page.draw(c);
+        const int bottom = ItemDetailsScreen::openRect().y;
+        for (const auto& r : page.removeRects()) CHECK(r.y + r.h <= bottom);
+        for (const auto& r : page.fileOpenRects()) CHECK(r.y + r.h <= bottom);
+        removeCount += page.removeRects().size();
+        if (page.page() + 1 >= page.pages()) break;
+        page.onGesture(swipe(Direction::Up), rig.nav);
+    }
+    CHECK(page.pages() > 1);
+    CHECK(removeCount == 6);  // every file's Remove from Kindle, each on one page
+    page.onGesture(swipe(Direction::Down), rig.nav);
+    CHECK(page.page() == page.pages() - 2);
+}
