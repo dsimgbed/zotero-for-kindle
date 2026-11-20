@@ -204,9 +204,6 @@ struct PluginRun {
         bool busy = false, counting = false;
         bool closed = false;      // left or closed by the plugin: no more renders; gone once its queue is empty
         bool failed = false;      // ScreenError sent: nothing more runs for it
-        // Its last onEvent failed: the renders after it don't clear the failure count (only an event
-        // and its render both going well do), or an onEvent that always throws would never add up.
-        bool eventFailed = false;
         bool refreshDue = false;  // zk.ui.refresh while busy
         bool refreshByUser = false;     // ... asked for by a user-caused call
         int64_t lastQuietRefreshMs = 0;  // when a render for a quiet zk.ui.refresh last started
@@ -215,6 +212,11 @@ struct PluginRun {
         TreeUse use = TreeUse::Screen;  // HomeBody: Home's body (no search or field; its trees' JSON kept)
     };
     std::map<uint64_t, OpenScreen> screens;
+    // Screens whose last onEvent failed (kept after they close). While any is here, a screen's
+    // render going well doesn't clear the failure count: only that screen's next event going well,
+    // or a success outside screens, does. Else an onEvent that always throws would never add up,
+    // and Home's body re-rendering at every show would hide another screen's failures.
+    std::set<uint64_t> failedEvents;
 };
 
 }  // namespace plugins
@@ -856,6 +858,7 @@ struct PluginHost::Impl {
         }
         backgroundEnded(p, c.kind);
         p.run->calls.erase(c.id);
+        if (counts) p.run->failedEvents.clear();
         if (counts && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
     }
 
@@ -1246,8 +1249,12 @@ struct PluginHost::Impl {
         sc->counting = false;
         sc->busy = false;
         if (sc->failed) return;
-        if (ok) sc->eventFailed = false;
-        else if (!text.empty()) sc->eventFailed = true;  // "": stopped on purpose, not counted
+        if (ok) p.run->failedEvents.erase(instance);
+        else if (!text.empty()) p.run->failedEvents.insert(instance);  // "": stopped on purpose, not counted
+        // No render follows an event that closed its screen (or a `back`): the event decides.
+        auto clearIfClean = [&] {
+            if (ok && p.run->failedEvents.empty() && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
+        };
         if (!ok && !text.empty())
             postScreen(p, PluginHostEvent::Kind::ScreenActionError, instance, p.manifest.name + " couldn't do that: " + text);
         if (ok && !sc->closed) {
@@ -1260,13 +1267,16 @@ struct PluginHost::Impl {
                 postEvent(std::move(ev));
                 sc->queue.clear();
                 sc->closed = true;
+                clearIfClean();
                 finishScreen(p, instance, std::move(result));
                 applyTurnOffs();
                 return;
             }
         }
-        if (sc->closed) pumpScreen(p, instance);
-        else {
+        if (sc->closed) {
+            clearIfClean();
+            pumpScreen(p, instance);
+        } else {
             sc->busy = true;
             sc->refreshDue = sc->refreshByUser = false;
             sc->refreshAtMs = 0;  // this render shows what a waiting refresh would have
@@ -1316,7 +1326,7 @@ struct PluginHost::Impl {
             applyTurnOffs();
             return;
         }
-        if (!sc->eventFailed && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
+        if (p.run->failedEvents.empty() && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
         PluginHostEvent ev{PluginHostEvent::Kind::ScreenTree, p.manifest.id, p.manifest.name, "", {}, sc->handled, ""};
         ev.instance = instance;
         ev.screenId = sc->screenId;

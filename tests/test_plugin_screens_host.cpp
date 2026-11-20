@@ -223,6 +223,46 @@ zk.screen("s", { title: "S", render: () => zk.ui.text("s"), onEvent(e) { if (e.k
     CHECK(h.failures() == 0);
 }
 
+TEST_CASE("screens host: a failed event, then an event that closes its screen going well: the failures are cleared") {
+    Host h(R"JS(
+zk.screen("s", { title: "S", render: () => zk.ui.text("s"),
+  onEvent(e) { if (e.kind === "tap" && e.id === "bad") throw new Error("boom"); if (e.kind === "tap" && e.id === "done") zk.ui.close(); } });
+)JS");
+    const uint64_t s = h.host->openScreen("p", "s");
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "bad"}});
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 1);
+    h.host->screenEvent(s, {{"kind", "tap"}, {"id", "done"}});
+    REQUIRE(h.next(Kind::ScreenClose, s));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 0);
+}
+
+TEST_CASE("screens host: another screen's renders going well don't clear a screen's onEvent failures; its own event does") {
+    Host h(R"JS(
+zk.screen("a", { title: "A", render: () => zk.ui.text("a"), onEvent(e) { if (e.kind === "tap" && e.id === "bad") throw new Error("boom"); } });
+zk.screen("desk", { title: "Desk", home: true, render: () => zk.ui.text("desk") });
+)JS");
+    const uint64_t a = h.host->openScreen("p", "a");
+    REQUIRE(h.next(Kind::ScreenTree, a));
+    const uint64_t desk = h.host->openScreen("p", "desk", nullptr, TreeUse::HomeBody);
+    REQUIRE(h.next(Kind::ScreenTree, desk));
+    h.host->screenEvent(a, {{"kind", "tap"}, {"id", "bad"}});
+    REQUIRE(h.next(Kind::ScreenTree, a));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 1);
+    h.host->rerender(desk);  // Home shown again
+    REQUIRE(h.next(Kind::ScreenTree, desk));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 1);
+    h.host->screenEvent(a, {{"kind", "tap"}, {"id", "good"}});
+    REQUIRE(h.next(Kind::ScreenTree, a));
+    REQUIRE(h.host->waitIdle(2000));
+    CHECK(h.failures() == 0);
+}
+
 TEST_CASE("screens host: Home's body whose render fails on each show: the `open` event going well doesn't clear the count") {
     Host h(R"JS(
 zk.screen("desk", { title: "Desk", home: true, render() { throw new Error("broken"); }, onEvent(e) {} });
