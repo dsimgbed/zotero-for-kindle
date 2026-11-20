@@ -365,3 +365,23 @@ zk.screen("desk", {
     CHECK(r.home().pluginBody()->laid()->page == 0);
     CHECK(r.home().pluginBody()->laid()->children.size() == laid.children.size());
 }
+
+TEST_CASE("home tree: zk.ui.open from a Home body's tap pushes that screen over Home with the params; back returns to the body") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([zk.ui.text("home body"), zk.ui.text("Pinned ›", { id: "go" })]),
+  onEvent(e) { if (e.kind === "tap" && e.id === "go") zk.ui.open("shelf", { tab: "pinned" }); },
+});
+zk.screen("shelf", { title: "Shelf", render: (p) => zk.ui.text("shelf " + p.tab) });
+)JS");
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "home body"; }));
+    r.tap("go");
+    REQUIRE(r.until([&] { return dynamic_cast<const PluginScreen*>(r.app.top()) != nullptr; }));
+    auto* p = dynamic_cast<const PluginScreen*>(r.app.top());
+    CHECK(r.until([&] { return p->laid() && plainText(*p->laid()->block) == "shelf pinned"; }));
+    r.app.pop();
+    REQUIRE(r.until([&] { return dynamic_cast<const HomeScreen*>(r.app.top()) != nullptr; }));
+    CHECK(r.until([&] { return r.shownText() == "home body"; }));
+}
