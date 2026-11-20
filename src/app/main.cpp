@@ -463,7 +463,8 @@ int main(int argc, char** argv) {
     // Updates (Plan 7): only when the user asks, from Settings. <appDir>/update-feed (one URL)
     // points at a test feed instead of GitHub.
     const InstallPaths installPaths{paths.appDir, paths.launcherPath, paths.configFile(), paths.dbPath};
-    // An update counts as good after 60 s in front or a clean end; until then the launcher can go back.
+    // An update counts as good after 60 s in front (confirmed at the next background) or a clean
+    // end; until then the launcher can go back, also after a Kindle shutdown or restart (install.h).
     UpdateConfirm updateConfirm(installPaths, appVersion());
     UpdaterConfig updaterConfig;
     updaterConfig.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };

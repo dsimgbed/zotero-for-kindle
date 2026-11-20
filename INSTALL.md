@@ -65,6 +65,8 @@ deletes the file from the USB drive.
 
 From 0.2.0 on, open *Settings → Check for updates* on the Kindle. The app shows what's new, downloads the update,
 checks its signature and restarts into it. If the new version doesn't start, it goes back to the one you had.
+The new version counts as started after a minute on screen (or when you quit it); if the Kindle is switched off or
+restarted before that, it goes back too, and you can install the update again.
 
 From 0.1.0, or to update by hand: copy the new `zotero` and `documents` folders the same way, merging and replacing
 files. Your library, downloads and account stay.

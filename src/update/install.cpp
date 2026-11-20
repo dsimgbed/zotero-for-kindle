@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 
 namespace zk {
@@ -19,6 +20,10 @@ namespace {
 
 const char* const kSwapped[] = {"bin", "lib", "share"};
 const char* const kDownloadFiles[] = {"zotero-for-kindle.zip", "zotero-for-kindle.zip.part"};
+
+// installRelease and a deferred confirmation (UpdateConfirm, on the UI thread) both change update/:
+// never at once. The UI thread only tries it: an install under way confirms the running version itself.
+std::mutex gInstallMutex;
 const char* const kRequiredFiles[] = {"bin/zotero", "bin/zk-sync", "lib/libzk-epub.so", "lib/libzk-pdf.so",
                                       "share/cacert.pem", "Zotero.sh"};
 
@@ -152,8 +157,28 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
     return true;
 }
 
+// An update to `running` that the launcher marked installed/tried counts as good: its state and
+// backups go (the state first, on disk before the backup starts going: see startupState). Not the
+// downloads: a newer update may be on its way in update/new and the zip. False: no such state.
+bool confirmRunning(const InstallPaths& p, Version running) {
+    const fs::path update(p.updateDir());
+    std::string word;
+    Version from, to;
+    if (!parseState(readLine(update / "state"), &word, &from, &to) || (word != "installed" && word != "tried") ||
+        to != running)
+        return false;
+    std::error_code ec;
+    fs::remove(update / "state", ec);
+    ::sync();
+    for (const char* leftover : {"state.tmp", "old", "trash"}) fs::remove_all(update / leftover, ec);
+    if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
+    log(LogLevel::Info, "update: %s confirmed", to.str().c_str());
+    return true;
+}
+
 bool installRelease(const InstallPaths& p, const std::string& newDir, Version from, Version to,
                     std::function<void(const char*)> beat, UserError* err, InstallHooks hooks) {
+    std::lock_guard<std::mutex> installing(gInstallMutex);
     const fs::path app(p.appDir), update(p.updateDir()), old = update / "old", trash = update / "trash";
     const fs::path fresh(newDir);
     auto step = [&](const char* what) {
@@ -168,6 +193,10 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
         fs::remove_all(fresh, ignored);
         for (const char* zip : kDownloadFiles) fs::remove(update / zip, ignored);
     };
+    // The running version, an update not yet confirmed (its first minute): it runs well enough to
+    // install the next one, so it is confirmed now and the new backup is of it.
+    if (fs::exists(update / "state") && confirmRunning(p, from))
+        log(LogLevel::Info, "update: confirmed before installing %s", to.str().c_str());
     if (fs::exists(update / "state")) {  // an earlier update the launcher hasn't settled: its backup stays
         log(LogLevel::Warn, "update: %s not installed: an earlier update is pending", to.str().c_str());
         if (err) *err = {ErrorKind::Other, "Restart Zotero before updating.", "update/state exists"};
@@ -333,7 +362,21 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) { return startu
 Confirmed confirmStartup(const InstallPaths& p) { return confirmStartup(p, appVersion()); }
 
 UpdateConfirm::UpdateConfirm(InstallPaths p, Version running) : paths_(std::move(p)), running_(running) {}
-Confirmed UpdateConfirm::atFirstScreen() { return startupState(paths_, running_, false); }
+Confirmed UpdateConfirm::atFirstScreen() {
+    const Confirmed c = startupState(paths_, running_, false);
+    if (c.note == StartupNote::Updated) {
+        // What the install left of its download; nothing downloads yet this early.
+        std::error_code ec;
+        for (const char* leftover : {"new", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
+            fs::remove_all(fs::path(paths_.updateDir()) / leftover, ec);
+        return c;  // pending: confirmed later
+    }
+    // Nothing of ours to confirm: tidy up now, as before the deferral. Waiting would delete what
+    // an update started in the next minute downloads and backs up.
+    if (c.note == StartupNote::None) startupState(paths_, running_, true);
+    pending_ = false;
+    return c;
+}
 
 void UpdateConfirm::tick(int64_t nowMs, bool foreground) {
     if (!pending_) return;
@@ -342,11 +385,14 @@ void UpdateConfirm::tick(int64_t nowMs, bool foreground) {
         frontMs_ += nowMs - frontSince_;
         frontSince_ = -1;
     }
-    if (frontMs_ + (frontSince_ >= 0 ? nowMs - frontSince_ : 0) >= kConfirmMs) confirm();
+    if (frontMs_ + (frontSince_ >= 0 ? nowMs - frontSince_ : 0) >= kConfirmMs) due_ = true;
+    // The deletion and the disk sync wait for the background (the screensaver, a system dialog):
+    // never in the middle of a page turn.
+    if (due_ && !foreground) confirm();
 }
 
 std::optional<int64_t> UpdateConfirm::wakeAt(int64_t) const {
-    if (!pending_ || frontSince_ < 0) return std::nullopt;
+    if (!pending_ || due_ || frontSince_ < 0) return std::nullopt;
     return frontSince_ + kConfirmMs - frontMs_;
 }
 
@@ -355,8 +401,10 @@ void UpdateConfirm::cleanEnd() {
 }
 
 void UpdateConfirm::confirm() {
+    std::unique_lock<std::mutex> lock(gInstallMutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;  // an install is under way: it confirms this version itself
     pending_ = false;
-    confirmStartup(paths_, running_);
+    confirmRunning(paths_, running_);
 }
 
 }  // namespace zk

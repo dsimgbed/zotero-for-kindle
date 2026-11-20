@@ -207,7 +207,7 @@ TEST_CASE("update confirm: the first screen says Updated but keeps the way back"
     CHECK(fs::exists(k.root / "var/config.json.old"));
 }
 
-TEST_CASE("update confirm: only 60 s in front confirm; time in the background doesn't count") {
+TEST_CASE("update confirm: 60 s in front make it due; time in the background doesn't count") {
     Kindle k;
     const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
     REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
@@ -220,14 +220,64 @@ TEST_CASE("update confirm: only 60 s in front confirm; time in the background do
     CHECK_FALSE(confirm.wakeAt(31'000));  // nothing to wait for while asleep
     confirm.tick(3'600'000, true);  // an hour later, awake again
     confirm.tick(3'629'000, true);
-    CHECK(fs::exists(k.app("update/state")));
     CHECK(confirm.pending());
     CHECK(confirm.wakeAt(3'629'000) == 3'630'000);
+    // Due now, but the deletion (the backup, a sync of the disk) waits for the next background:
+    // never in the middle of reading.
     confirm.tick(3'630'000, true);
+    CHECK(fs::exists(k.app("update/state")));
+    CHECK(fs::exists(k.app("update/old")));
+    CHECK_FALSE(confirm.wakeAt(3'630'000));
+    writeFile(k.app("update/new/bin/zotero"), "zotero 0.4.0");  // a newer update downloading meanwhile
+    writeFile(k.app("update/zotero-for-kindle.zip.part"), "part");
+    confirm.tick(3'700'000, false);
     CHECK_FALSE(confirm.pending());
     CHECK_FALSE(fs::exists(k.app("update/state")));
     CHECK_FALSE(fs::exists(k.app("update/old")));
-    CHECK_FALSE(confirm.wakeAt(3'630'000));
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+    CHECK(fs::exists(k.app("update/new/bin/zotero")));  // not the confirm's to take
+    CHECK(fs::exists(k.app("update/zotero-for-kindle.zip.part")));
+}
+
+TEST_CASE("update confirm: with no update to confirm, a download started in the first minute is left alone") {
+    for (bool rolledBack : {false, true}) {
+        Kindle k;
+        if (rolledBack) writeFile(k.app("update/rolled-back"), "0.2.0 0.3.0\n");
+        writeFile(k.app("update/zotero-for-kindle.zip.part"), "left from before");  // the first screen still tidies
+        UpdateConfirm confirm(k.paths, {0, 2, 0});
+        confirm.atFirstScreen();
+        CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip.part")));
+        CHECK_FALSE(confirm.pending());
+        // The reader starts an update from the banner: its download, then its backup.
+        writeFile(k.app("update/zotero-for-kindle.zip.part"), "downloading");
+        writeFile(k.app("update/old/bin/zotero"), "zotero 0.2.0");
+        confirm.tick(1'000, true);
+        confirm.tick(70'000, true);
+        confirm.tick(80'000, false);
+        confirm.cleanEnd();
+        CHECK(fs::exists(k.app("update/zotero-for-kindle.zip.part")));
+        CHECK(fs::exists(k.app("update/old/bin/zotero")));
+    }
+}
+
+TEST_CASE("update confirm: another update installed while the last is unconfirmed confirms it and goes ahead") {
+    Kindle k;
+    REQUIRE(installRelease(k.paths, k.unpackNew(releaseFiles("0.3.0")), {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    UpdateConfirm confirm(k.paths, {0, 3, 0});
+    CHECK(confirm.atFirstScreen().note == StartupNote::Updated);
+    UserError err;
+    CHECK(installRelease(k.paths, k.unpackNew(releaseFiles("0.4.0")), {0, 3, 0}, {0, 4, 0}, nullptr, &err));
+    CHECK(err.message.empty());
+    CHECK(k.state() == "installed 0.3.0 0.4.0\n");
+    CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.3.0");  // the way back is to 0.3.0 now
+    // 0.3.0's own confirmation, when it comes, leaves 0.4.0's install alone.
+    confirm.tick(1'000, true);
+    confirm.tick(70'000, true);
+    confirm.tick(80'000, false);
+    confirm.cleanEnd();
+    CHECK(k.state() == "installed 0.3.0 0.4.0\n");
+    CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.3.0");
 }
 
 TEST_CASE("update confirm: a clean end before 60 s confirms too") {
@@ -378,13 +428,15 @@ TEST_CASE("update leftovers: a refusal while an update is pending drops the down
     Kindle k;
     const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
     writeFile(k.app("update/zotero-for-kindle.zip"), "zip");
-    writeFile(k.app("update/state"), "tried 0.1.0 0.2.0\n");
+    // A swap the launcher hasn't undone yet. (A "tried" state of the running version is its own
+    // unconfirmed update instead: installing confirms it; see "update confirm: another update…".)
+    writeFile(k.app("update/state"), "installing 0.1.0 0.2.0\n");
     writeFile(k.app("update/old/bin/zotero"), "zotero 0.1.0");
     writeFile(k.root / "var/config.json.old", "account 0.1.0");
     CHECK_FALSE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
     CHECK_FALSE(fs::exists(k.app("update/new")));
     CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
-    CHECK(readFile(k.app("update/state")) == "tried 0.1.0 0.2.0\n");
+    CHECK(readFile(k.app("update/state")) == "installing 0.1.0 0.2.0\n");
     CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.1.0");
     CHECK(readFile(k.root / "var/config.json.old") == "account 0.1.0");
 }
