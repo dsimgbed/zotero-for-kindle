@@ -337,6 +337,17 @@ TEST_CASE("open flow fix: a file kept later after a failed tap doesn't open by i
     SyncEvent failed = rig.download(SyncEvent::Kind::DownloadFinished, r);
     failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", ""};
     rig.event(failed);
+    {  // A kept collection's download of it runs and fails too: the row ends on the error, not a percentage.
+        SyncEvent p = rig.download(SyncEvent::Kind::DownloadProgress, r);
+        p.done = 42;
+        p.total = 100;
+        rig.event(p);
+        SyncEvent again = rig.download(SyncEvent::Kind::DownloadFinished, r);
+        again.error = UserError{ErrorKind::NotOnServer, "Not on the server.", "HTTP 404"};
+        rig.event(again);
+        CHECK(rig.flow.statusFor(r.attachmentKey) == "Not on the server. (HTTP 404)");
+        CHECK(rig.nav.pushed.empty());
+    }
     // Later the same file comes down as a kept collection's (no tap): it isn't opened, and the
     // row no longer shows the old error.
     rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");

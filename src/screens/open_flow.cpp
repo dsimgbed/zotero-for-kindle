@@ -97,13 +97,16 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
         if (e.error) p.status = e.error->message;  // waiting, and why (Zotero asked to)
         else p.status = e.total > 0 ? "Downloading " + std::to_string(100 * e.done / e.total) + "%" : "Downloading…";
     } else if (e.kind == SyncEvent::Kind::DownloadFinished) {
-        if (!p.running) {  // the failed one came down since without a tap (a kept collection's): no surprise book
-            if (!e.error) pending_.erase(it);
+        // The failed one came down since without a tap (a kept collection's): no surprise book.
+        // If that failed too, its error replaces the progress the row showed meanwhile.
+        if (!p.running && !e.error) {
+            pending_.erase(it);
             return;
         }
+        if (e.error) p.status = e.error->message + (e.error->details.empty() ? "" : " (" + e.error->details + ")");
+        if (!p.running) return;
         p.running = false;
         if (e.error) {
-            p.status = e.error->message + (e.error->details.empty() ? "" : " (" + e.error->details + ")");
             tell(p.done, e.error->message);
             return;
         }
