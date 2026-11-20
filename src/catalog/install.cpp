@@ -385,13 +385,15 @@ bool rollBack(const std::string& pluginsDir, const std::string& id, const Versio
     if (std::string why; !dataSettled(pluginsDir, id, &why)) return fail(err, "Couldn't roll back.", why);
     if (!fs::is_regular_file(prev / "plugin.json", ec) || !fs::is_directory(cur, ec))
         return fail(err, "There is no earlier version to go back to.", "nothing kept");
-    // Checked as stage() checks a download: rolled back, it would only be listed as Incompatible.
+    // Checked as stage() checks a download: rolled back, it would only be listed as Incompatible or
+    // broken in place of a version that works.
     const auto kept = scanPlugins(previousDir(pluginsDir).string(), app);
-    if (const auto f = std::find_if(kept.begin(), kept.end(), [&](const PluginFolder& p) { return p.dir == id; });
-        f != kept.end() && f->manifest) {
-        if (f->otherApi != 0) return fail(err, f->problem, "api " + std::to_string(f->otherApi));
-        if (app < f->manifest->minApp) return fail(err, "It needs app " + f->manifest->minApp.str() + ".", "minApp");
-    }
+    const auto f = std::find_if(kept.begin(), kept.end(), [&](const PluginFolder& p) { return p.dir == id; });
+    if (f == kept.end() || !f->manifest)
+        return fail(err, "The earlier version is damaged.", f == kept.end() ? "not listed" : f->problem);
+    if (f->otherApi != 0) return fail(err, f->problem, "api " + std::to_string(f->otherApi));
+    if (app < f->manifest->minApp) return fail(err, "It needs app " + f->manifest->minApp.str() + ".", "minApp");
+    if (!f->problem.empty()) return fail(err, "The earlier version is damaged.", f->problem);
     // Step 1: the kept version out of the way (a kill here loses only it), then the same swap.
     const fs::path aside = trashPath(pluginsDir, "rollback");
     fs::create_directories(aside.parent_path(), ec);

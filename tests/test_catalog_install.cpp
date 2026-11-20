@@ -429,6 +429,21 @@ TEST_CASE("catalog install: rollBack refuses a kept version this app can't run, 
         CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
         CHECK(err.message == "Written for plugin API 1; this app runs API 0.");
     }
+    SUBCASE("a manifest that can't be read") {
+        writeFile(t.path / ".previous/feed-riffle/plugin.json", "{not json");
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
+        CHECK(err.message == "The earlier version is damaged.");
+    }
+    SUBCASE("its main file missing") {
+        fs::remove(t.path / ".previous/feed-riffle/main.js");
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
+        CHECK(err.message == "The earlier version is damaged.");
+    }
+    SUBCASE("another plugin's id") {
+        writeFile(t.path / ".previous/feed-riffle/plugin.json", manifest("1.0.0", json::array({"library:read"}), "other"));
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
+        CHECK(err.message == "The earlier version is damaged.");
+    }
     CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.2.0");  // nothing swapped
     CHECK(fs::exists(t.path / ".previous/feed-riffle/plugin.json"));
 }
