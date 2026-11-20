@@ -166,3 +166,25 @@ TEST_CASE("reader fix: two quick turns move two pages") {
     rig.tapLeft(*r);
     CHECK(rig.waitPage(*r, 0));
 }
+
+TEST_CASE("reader fix: back from a panel that changed nothing, the page isn't painted again") {
+    // Audit B7: onShow sent the annotations again unconditionally, so the worker re-posted the
+    // page and it was painted a second time after the app's own redraw.
+    Rig rig;
+    auto r = rig.reader();
+    rig.nav.visible = r.get();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    for (int i = 0; i < 40; ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    r->onHide(rig.nav);  // a panel pushed ...
+    r->onShow(rig.nav);  // ... and popped
+    rig.nav.damages.clear();
+    for (int i = 0; i < 40; ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    for (const auto& d : rig.nav.damages) CHECK_FALSE(d.rect == ReaderScreen::pageArea());
+}

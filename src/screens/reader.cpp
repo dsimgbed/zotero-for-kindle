@@ -335,7 +335,7 @@ void ReaderScreen::onShow(Nav& nav) {
     notePicking_ = false;
     readLibrary(nav);
     if (worker_) {  // back from a pushed panel: the book stays open (its notes may have changed)
-        refreshHighlights(nav);
+        sendAnnotations(nav, true);  // unchanged: the app's redraw is the only repaint
         return;
     }
     twoColumnsSetting_ = loadSettings(nav.library()).twoColumns;
