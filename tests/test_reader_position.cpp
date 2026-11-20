@@ -297,3 +297,45 @@ TEST_CASE("reader position fix: a font change on the computer's page keeps the c
     CHECK(p->local == "5410");
     CHECK_FALSE(p->dirty);
 }
+
+TEST_CASE("reader position fix: Go sends the handwriting on the page it leaves") {
+    // Audit B4: Go jumped without committing, so the old page's strokes were drawn on the new page.
+    Rig rig;
+    rig.readHereTo(12);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.reader(DocType::Pdf);
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    PenEvent e;
+    e.type = PenEvent::Type::Down;
+    e.pos = {500, 900};
+    REQUIRE(r->onPen(e, rig.nav));
+    e.type = PenEvent::Type::Move;
+    e.pos = {600, 950};
+    r->onPen(e, rig.nav);
+    e.type = PenEvent::Type::Up;
+    r->onPen(e, rig.nav);
+    REQUIRE(r->pendingInkStrokes() == 1);
+    r->onGesture(tapAt(ReaderScreen::positionGoRect().center()), rig.nav);
+    CHECK(r->pendingInkStrokes() == 0);
+    REQUIRE(rig.waitPage(*r, 70));
+    CHECK(rig.until(*r, [&] {
+        for (const auto& a : rig.lib.annotationsFor("EP000003"))
+            if (a.type == "ink") return a.pageLabel == "12";
+        return false;
+    }));
+}
+
+TEST_CASE("reader position fix: Stay repaints the page under the banner without ghosts") {
+    // Audit B5: the banner went with the UI waveform; pop-ups over the page go with Quality.
+    Rig rig;
+    rig.readHereTo(12);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    rig.nav.damages.clear();
+    r->onGesture(tapAt(ReaderScreen::positionStayRect().center()), rig.nav);
+    REQUIRE_FALSE(rig.nav.damages.empty());
+    for (const auto& d : rig.nav.damages) CHECK(d.waveform == Waveform::Quality);
+}

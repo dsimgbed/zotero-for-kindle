@@ -1159,7 +1159,7 @@ void ReaderScreen::draw(Canvas& canvas) {
             if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
         for (const auto& [id, s] : inkSent_)
             if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
-        strokePaths(cr, inkPending_, inkWidthPx());
+        if (inkPage_ == page_) strokePaths(cr, inkPending_, inkWidthPx());
         if (inkDown_) strokePaths(cr, {inkStroke_}, inkWidthPx());
         cairo_restore(cr);
     }
@@ -1467,11 +1467,12 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (go && worker_) {
         dropArea();
         markJumpOrigin();
+        commitInk();  // its strokes belong to the page it leaves
         turning_ = true;
         worker_->showZotero(remoteValue_);  // placed in the pages as they are now (a PDF page: its first view)
     }
     question_.reset();
-    nav.damage(positionBannerRect(), Waveform::Ui);
+    nav.damage(positionBannerRect(), Waveform::Quality);  // the page under it, without ghosts
 }
 
 // --- Areas ---------------------------------------------------------------------------------
