@@ -142,6 +142,7 @@ async function openPassage() {
 var label = (text) => zk.ui.text(text, { style: "label", caps: true });
 var title = (text, size, lines2) => zk.ui.text(text || "Untitled", { font: "serif", weight: "bold", size, lines: lines2 });
 var meta = (text, size = "small", lines2 = 1) => zk.ui.text(text, { font: "sans", size, tone: "secondary", lines: lines2 });
+var endLink = (text, id) => zk.ui.text(text, { id, align: "end", font: "sans", size: "body", weight: "medium", tone: "ink" });
 function heading(text, link) {
   return zk.ui.row([
     label(text),
@@ -211,6 +212,10 @@ function segmented(segments, selected) {
     { border: "thin", radius: "small" }
   );
 }
+var barSlot = (item) => zk.ui.row(
+  [item.progress !== null && zk.ui.progress(item.progress), zk.ui.box(zk.ui.spacer(), { pad: "xsmall", width: "1%" })],
+  { gap: "none", align: "top" }
+);
 function coverGrid(cells) {
   return zk.ui.grid(
     cells.map(
@@ -218,7 +223,7 @@ function coverGrid(cells) {
         ref(item),
         zk.ui.column([
           zk.ui.cover(ref(item)),
-          item.progress !== null && zk.ui.progress(item.progress),
+          barSlot(item),
           zk.ui.column([title(item.title, "small", 1), caption2 && meta(caption2, "xsmall")], { gap: "xsmall" })
         ])
       )
@@ -309,19 +314,21 @@ function registerHome() {
       const fresh = (unread ?? []).filter((i) => !inPair(i));
       const inboxBand = fresh.length > 0 && zk.ui.column(
         [
-          heading(`Inbox \xB7 ${countOf(fresh.length, unread.length)} new`, { id: "all-inbox", text: "All \u203A" }),
+          heading(`Inbox \xB7 ${countOf(unread.length, unread.length)} new`, { id: "all-inbox", text: "All \u203A" }),
           ...lines(fresh.slice(0, tall() ? 3 : 2).map((item) => ({ item, byline: bylineOf(item), right: whenOf(item.addedAt) })))
         ],
         { gap: "small" }
       );
       const pick = prefs.passage === false || inboxBand && !tall() ? void 0 : await keptPassage();
       const firstUse = !pairBand && !pinnedBand && !inboxBand;
+      const deskLink = !pinnedBand && !inboxBand && endLink("Your desk \u203A", "your-desk");
       return zk.ui.column(
         [
           pairBand,
           pinnedBand,
           inboxBand,
           firstUse && zk.ui.text(FIRST_USE, { tone: "secondary" }),
+          deskLink,
           pick && zk.ui.quote({ id: "passage", text: pick.text, source: pick.source })
         ],
         { gap: bandGap(), fit: "trim" }
@@ -331,6 +338,7 @@ function registerHome() {
       if (e.kind !== "tap") return;
       if (e.id === "all-pinned") zk.ui.open("all", { tab: "pinned" });
       else if (e.id === "all-inbox") zk.ui.open("all", { tab: "inbox" });
+      else if (e.id === "your-desk") zk.ui.open("all", { tab: "reading" });
       else if (e.id === "passage") await openPassage();
     }
   });
@@ -376,7 +384,7 @@ function registerSettings() {
     render: async () => {
       const prefs = await loadPrefs();
       const inbox = inboxOf(prefs);
-      let inboxName = "None: Home shows a passage instead";
+      let inboxName = "None: no inbox on Home";
       if (inbox) {
         const c = (await zk.library.collections()).find((c2) => same({ key: c2.key, library: c2.libraryId }, inbox));
         inboxName = c ? collectionName(c) : "A collection no longer on the Kindle";

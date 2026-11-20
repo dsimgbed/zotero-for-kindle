@@ -27,7 +27,7 @@ import {
   same,
   whenOf,
 } from "./data";
-import { heading, lines, pair, shelfRow } from "./pieces";
+import { endLink, heading, lines, pair, shelfRow } from "./pieces";
 
 /** Covers a row passes the app (it draws what fits: 5 on a Paperwhite, 7 on a Scribe). */
 const PINS_SHOWN = 8;
@@ -93,7 +93,7 @@ export function registerHome() {
         fresh.length > 0 &&
         zk.ui.column(
           [
-            heading(`Inbox · ${countOf(fresh.length, unread!.length)} new`, { id: "all-inbox", text: "All ›" }),
+            heading(`Inbox · ${countOf(unread!.length, unread!.length)} new`, { id: "all-inbox", text: "All ›" }),
             ...lines(fresh.slice(0, tall() ? 3 : 2).map((item) => ({ item, byline: bylineOf(item), right: whenOf(item.addedAt) }))),
           ],
           { gap: "small" },
@@ -102,12 +102,15 @@ export function registerHome() {
       // The passage takes the inbox's band when there is none, and goes under it on a Scribe.
       const pick = prefs.passage === false || (inboxBand && !tall()) ? undefined : await keptPassage();
       const firstUse = !pairBand && !pinnedBand && !inboxBand;
+      // No All › on Home (no pins in the row, no inbox band): a quiet link still leads to Your desk.
+      const deskLink = !pinnedBand && !inboxBand && endLink("Your desk ›", "your-desk");
       return zk.ui.column(
         [
           pairBand,
           pinnedBand,
           inboxBand,
           firstUse && zk.ui.text(FIRST_USE, { tone: "secondary" }),
+          deskLink,
           pick && zk.ui.quote({ id: "passage", text: pick.text, source: pick.source }),
         ],
         { gap: bandGap(), fit: "trim" },
@@ -117,6 +120,7 @@ export function registerHome() {
       if (e.kind !== "tap") return;
       if (e.id === "all-pinned") zk.ui.open("all", { tab: "pinned" });
       else if (e.id === "all-inbox") zk.ui.open("all", { tab: "inbox" });
+      else if (e.id === "your-desk") zk.ui.open("all", { tab: "reading" });
       else if (e.id === "passage") await openPassage();
     },
   });

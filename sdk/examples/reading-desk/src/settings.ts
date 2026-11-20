@@ -52,7 +52,7 @@ export function registerSettings() {
     render: async () => {
       const prefs = await loadPrefs();
       const inbox = inboxOf(prefs);
-      let inboxName = "None: Home shows a passage instead";
+      let inboxName = "None: no inbox on Home";
       if (inbox) {
         const c = (await zk.library.collections()).find((c) => same({ key: c.key, library: c.libraryId }, inbox));
         inboxName = c ? collectionName(c) : "A collection no longer on the Kindle";

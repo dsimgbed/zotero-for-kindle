@@ -45,6 +45,15 @@ CoverLook coverLook(const ItemRow&);
 // a short rule and its authors bottom-left. A paper's: the venue and year in small tracked caps,
 // the title, the authors and five grey text lines. Home's card, a shelf and the Book page draw it.
 void drawCover(cairo_t*, Rect, const ItemRow&);
+// A cover's title as drawCover sets it on a cover `w` wide: its point size, its margin, and its text.
+// No word is ever broken: the title shrinks (to 6 pt) until its longest word fits, and a word that
+// still doesn't is cut with "…" ("Frankenst…").
+struct CoverTitle {
+    std::string text;
+    double pt = 9;
+    int pad = 26;
+};
+CoverTitle coverTitle(const ItemRow&, int w);
 // A shelf's tile (0.11): the cover (2:3, the tile's width), a thin progress bar under it once the
 // item was opened, and one line: shelfMeta, or `status` (a download's progress or an error) in its place.
 void drawItemTile(cairo_t*, Rect, const ItemRow&, const std::string& status);

@@ -559,7 +559,7 @@ struct Piece {
 
 // A part of a tree (a band of Home's body, or a whole screen), read the way a test needs it.
 struct Part {
-    std::string kind;  // on Home: "pair", "pinned", "inbox", "quote", "text"
+    std::string kind;  // on Home: "pair", "pinned", "inbox", "link" (Your desk ›), "quote", "text"
     Strings labels;    // caps texts: section labels and kickers, in order
     std::vector<std::pair<std::string, std::string>> links;  // a tappable text's or box's id, its text
     std::string selected;  // the tappable box filled with ink (a switch's selected segment)
@@ -567,6 +567,7 @@ struct Part {
     Strings texts;  // other texts, outside items and links
     const Block* grid = nullptr;
     const Block* block = nullptr;
+    std::shared_ptr<const Block> tree;  // a whole screen's: what the pointers above point into
 
     std::string link(const std::string& id) const {
         for (const auto& [i, t] : links)
@@ -637,6 +638,7 @@ struct HomeTree {
             if (c.kind == Block::Kind::Quote) p.kind = "quote";
             else if (!p.link("all-pinned").empty()) p.kind = "pinned";
             else if (!p.link("all-inbox").empty()) p.kind = "inbox";
+            else if (!p.link("your-desk").empty()) p.kind = "link";
             else if (!p.items.empty()) p.kind = "pair";
             else p.kind = "text";
             parts.push_back(std::move(p));
@@ -787,6 +789,7 @@ struct Desk {
     uint64_t all = 0;
     Part allPart(std::shared_ptr<const Block> b) {
         Part p;
+        p.tree = b;
         gather(*b, p);
         p.texts.push_back(allText(*b));
         return p;
@@ -849,7 +852,8 @@ TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and
     d.lib.saveReading("PAPR0002", "", 0.67);
     HomeTree t = d.render();
     CHECK(t.root->fit == Block::Fit::Trim);  // never pages
-    CHECK(t.order() == Strings{"pair"});
+    CHECK(t.order() == Strings{"pair", "link"});  // no All › on Home: Your desk › instead
+    CHECK(t.at("link").link("your-desk") == "Your desk ›");
     CHECK(t.pair() == Sides{{"Book", "BOOK0001"}, {"Paper", "PAPR0002"}});
     const Part pair = t.at("pair");
     REQUIRE(pair.items.size() == 2);
@@ -929,13 +933,14 @@ TEST_CASE("example: Reading Desk — first use: the hint and the passage; nothin
     Desk d("");
     addHighlight(d.lib, "ANNOLONG", "FOOK0001", kLongPassage, "", "12", "00001|000100|00100");
     HomeTree t = d.withPassage();
-    CHECK(t.order() == Strings{"text", "quote"});
+    CHECK(t.order() == Strings{"text", "link", "quote"});
     REQUIRE_FALSE(t.at("text").texts.empty());
     CHECK(t.at("text").texts.front() ==
           "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press → More… → Pin to Home.");
     d.lib.markOpened("PAPR0001", "FAPR0001", nowMs());
     t = d.render();
-    CHECK(t.order() == Strings{"pair", "quote"});  // no inbox: the passage takes its band
+    CHECK(t.order() == Strings{"pair", "link", "quote"});  // no inbox: the passage takes its band
+    CHECK(d.tapOpens("your-desk") == std::pair<std::string, json>{"all", {{"tab", "reading"}}});
 }
 
 TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus the pair, bylines and when added; 3 and the passage on a Scribe, else 2") {
@@ -974,15 +979,31 @@ TEST_CASE("example: Reading Desk — Inbox: the newest unread as lines, minus th
     for (const char* k : {"INBX0007", "INBX0003", "INBX0001"}) d.lib.markRead(k, true);
     t = d.render();
     CHECK(t.pair() == Sides{{"Paper", "INBX0005"}});
-    CHECK(t.at("inbox").labels == Strings{"Inbox · 2 new"});
+    CHECK(t.at("inbox").labels == Strings{"Inbox · 3 new"});  // every unread item, the pair's too
     REQUIRE(t.at("inbox").keys() == Strings{"INBX0006", "INBX0002"});
     CHECK(t.at("inbox").items[1].texts.back().find("2024") != std::string::npos);  // "Mar 1, 2024"
     CHECK(d.tapOpens("all-inbox") == std::pair<std::string, json>{"all", {{"tab", "inbox"}}});
 
+    // Within the year, older than a week: "Nov 12" (the year only for another year's).
+    deskItem(d.lib, "INBX0008", "journalArticle", "Ten days ago", isoAgo(10 * kDayMs), "COLLINBX", "application/pdf");
+    t = d.render();
+    REQUIRE(t.at("inbox").keys() == Strings{"INBX0006", "INBX0008"});
+    {
+        static const char* kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        const std::time_t now = std::time(nullptr), then = static_cast<std::time_t>((nowMs() - 10 * kDayMs) / 1000);
+        std::tm n{}, a{};
+        localtime_r(&now, &n);
+        localtime_r(&then, &a);
+        std::string want = std::string(kMonths[a.tm_mon]) + " " + std::to_string(a.tm_mday);
+        if (a.tm_year != n.tm_year) want += ", " + std::to_string(1900 + a.tm_year);
+        CHECK(t.at("inbox").items[1].texts.back() == want);
+    }
+    d.lib.markRead("INBX0008", true);
+
     // Nothing unread in it: the passage takes the band.
     for (const char* k : {"INBX0006", "INBX0002"}) d.lib.markRead(k, true);
     t = d.render();
-    CHECK(t.order() == Strings{"pair", "quote"});
+    CHECK(t.order() == Strings{"pair", "link", "quote"});
 }
 
 TEST_CASE("example: Reading Desk — Your desk: a switch Reading · Pinned · Inbox n on the tab asked for, a grid of covers with title and author · 42%") {
@@ -1009,7 +1030,10 @@ TEST_CASE("example: Reading Desk — Your desk: a switch Reading · Pinned · In
     CHECK(a.items[1].texts == Strings{"A Book", "Austen · 42%"});
     CHECK(a.items[1].progress == 0.42);
     CHECK(a.items[2].texts == Strings{"Done", "Read"});
-    for (const auto& p : a.items) CHECK(p.cover);
+    for (const auto& p : a.items) {
+        CHECK(p.cover);
+        CHECK(firstOf(*p.block, Block::Kind::Box));  // the bar's slot, reserved with or without a bar
+    }
 
     // Reading: opened and not read, books and papers together, most recent first.
     a = d.allEvent({{"kind", "tap"}, {"id", "tab-reading"}});
@@ -1044,7 +1068,7 @@ TEST_CASE("example: Reading Desk — the settings screen picks the inbox (over s
     const uint64_t settings = d.host->openScreen("reading-desk", "settings");
     std::string shown = d.text(settings);
     CHECK(shown.find("Inbox collection") != std::string::npos);
-    CHECK(shown.find("None: Home shows a passage instead") != std::string::npos);
+    CHECK(shown.find("None: no inbox on Home") != std::string::npos);
     d.host->screenEvent(settings, {{"kind", "select"}, {"id", "prefs"}, {"row", "inbox"}});
     auto opened = d.next(PluginHostEvent::Kind::ScreenOpen, settings);
     REQUIRE(opened);

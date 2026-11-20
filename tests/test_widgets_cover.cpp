@@ -3,9 +3,12 @@
 #include "fixture_library.h"
 #include "store/db.h"
 #include "store/library.h"
+#include "ui/text.h"
+#include "ui/theme.h"
 #include "ui/widgets.h"
 
 #include <set>
+#include <vector>
 #include <string>
 
 using namespace zk;
@@ -68,4 +71,44 @@ TEST_CASE("library rows carry publication and year") {
     REQUIRE(fixture);
     CHECK(fixture->itemType == "journalArticle");
     CHECK(fixture->year == 1962);
+}
+
+TEST_CASE("a cover never breaks a word: it shrinks, then cuts a word that still doesn't fit with …") {
+    // Each word of what is set: a word of the title whole, or the start of one cut with "…"; and it fits.
+    const auto check = [](const ItemRow& r, int w) {
+        const CoverTitle t = coverTitle(r, w);
+        std::vector<std::string> words, given;
+        const auto split = [](const std::string& s, std::vector<std::string>& out) {
+            for (size_t at = 0; at < s.size();) {
+                const size_t end = std::min(s.find(' ', at), s.size());
+                if (end > at) out.push_back(s.substr(at, end - at));
+                at = end + 1;
+            }
+        };
+        split(t.text, words);
+        split(r.title, given);
+        REQUIRE(words.size() == given.size());
+        int cut = 0;
+        for (size_t i = 0; i < words.size(); ++i) {
+            CAPTURE(words[i]);
+            CHECK(measureText(words[i], {theme::kSerif, t.pt, 700}, 10000, 1).width <= w - 2 * t.pad);
+            if (words[i] == given[i]) continue;
+            ++cut;
+            const std::string ell = "…";
+            REQUIRE(words[i].size() > ell.size());
+            CHECK(words[i].compare(words[i].size() - ell.size(), ell.size(), ell) == 0);
+            const std::string head = words[i].substr(0, words[i].size() - ell.size());
+            CHECK(given[i].rfind(head, 0) == 0);
+            CHECK(t.pt == 6);  // cut only once the title is as small as it gets
+        }
+        return cut;
+    };
+    ItemRow r = rowOf("FRANK001", "book", "EPUB");
+    r.title = "Frankenstein; or, The Modern Prometheus";
+    CHECK(check(r, 290) == 0);  // Home's card: every word whole
+    check(r, 194);              // a pinned tile on a Paperwhite
+    CHECK(check(r, 100) >= 1);  // too narrow for "Frankenstein;" even at 6 pt: cut, not broken
+    ItemRow p = rowOf("TURING01", "journalArticle", "PDF");
+    p.title = "On Computable Numbers, with an Application to the Entscheidungsproblem";
+    CHECK(check(p, 120) >= 1);
 }

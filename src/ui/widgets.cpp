@@ -103,31 +103,51 @@ CoverLook coverLook(const ItemRow& r) {
     return kLooks[h % 3];
 }
 
-void drawCover(cairo_t* cr, Rect r, const ItemRow& item) {
+CoverTitle coverTitle(const ItemRow& item, int w) {
     // Home's card is 290 wide; a narrower cover (a shelf's tile) has narrower margins and sets its
     // title smaller in proportion (7 pt at least), and smaller still (to 6 pt) until its longest word
-    // fits unbroken. A paper sets its title at 0.8 of a book's (6 pt at least); a framed book keeps
-    // its text inside the inner frame.
+    // fits unbroken; a word that still doesn't is cut with "…". A paper sets its title at 0.8 of a
+    // book's (6 pt at least); a framed book keeps its text inside the inner frame.
     const std::string title = item.title.empty() ? "Untitled" : item.title;
     const CoverLook look = coverLook(item);
-    double titlePt = 9;
-    int pad = r.w < 230 ? 16 : r.w < 290 ? 20 : 26;
-    if (r.w < 290) titlePt = std::max(7.0, std::round(9.0 * r.w / 290 * 2) / 2);
-    if (look == CoverLook::Paper) titlePt = std::max(6.0, std::round(titlePt * 0.8 * 2) / 2);
-    if (look == CoverLook::Framed) pad = static_cast<int>(std::lround(r.w * 0.05 + pad * 0.6));
+    CoverTitle t;
+    t.pad = w < 230 ? 16 : w < 290 ? 20 : 26;
+    if (w < 290) t.pt = std::max(7.0, std::round(9.0 * w / 290 * 2) / 2);
+    if (look == CoverLook::Paper) t.pt = std::max(6.0, std::round(t.pt * 0.8 * 2) / 2);
+    if (look == CoverLook::Framed) t.pad = static_cast<int>(std::lround(w * 0.05 + t.pad * 0.6));
     std::vector<std::string> words;
     for (size_t at = 0; at < title.size();) {
         const size_t end = std::min(title.find(' ', at), title.size());
         if (end > at) words.push_back(title.substr(at, end - at));
         at = end + 1;
     }
-    const int room = r.w - 2 * pad;
-    const auto fits = [&](double pt) {
-        for (const auto& w : words)
-            if (measureText(w, {kSerif, pt, 700}, 10000, 1).width > room) return false;
+    const int room = w - 2 * t.pad;
+    const auto wide = [&](const std::string& word) { return measureText(word, {kSerif, t.pt, 700}, 10000, 1).width; };
+    const auto fits = [&] {
+        for (const auto& word : words)
+            if (wide(word) > room) return false;
         return true;
     };
-    while (titlePt > 6 && !fits(titlePt)) titlePt -= 0.5;
+    while (t.pt > 6 && !fits()) t.pt -= 0.5;
+    for (auto& word : words) {
+        if (wide(word) <= room) continue;
+        std::string cut = word;
+        while (!cut.empty() && wide(cut + "…") > room) {
+            const char* prev = g_utf8_find_prev_char(cut.c_str(), cut.c_str() + cut.size());
+            cut.resize(prev ? static_cast<size_t>(prev - cut.c_str()) : 0);
+        }
+        word = cut + "…";
+    }
+    for (size_t i = 0; i < words.size(); ++i) t.text += (i ? " " : "") + words[i];
+    return t;
+}
+
+void drawCover(cairo_t* cr, Rect r, const ItemRow& item) {
+    const CoverLook look = coverLook(item);
+    const CoverTitle ct = coverTitle(item, r.w);
+    const std::string& title = ct.text;
+    const double titlePt = ct.pt;
+    const int pad = ct.pad;
     const std::string authors = authorsOf(item.byline);
     switch (look) {
         case CoverLook::Ink: bookCover(cr, r, title, authors, 28, 255, 187, 164, false, titlePt, pad); break;

@@ -18,6 +18,10 @@ const title = (text: string, size: "xsmall" | "small" | "body", lines: number) =
 const meta = (text: string, size: "xsmall" | "small" = "small", lines = 1) =>
   zk.ui.text(text, { font: "sans", size, tone: "secondary", lines });
 
+/** A link as a heading's ("All 9 ›"), on a line of its own at its end. */
+export const endLink = (text: string, id: string) =>
+  zk.ui.text(text, { id, align: "end", font: "sans", size: "body", weight: "medium", tone: "ink" });
+
 /** A heading: its label on the left, a link on the right ("All 9 ›"), tapped by `link.id`. */
 export function heading(text: string, link?: { id: string; text: string }): Block {
   return zk.ui.row([
@@ -104,6 +108,16 @@ export function segmented(segments: { id: string; text: string }[], selected: st
   );
 }
 
+/**
+ * The bar once opened, in a slot as tall whether or not there is one, so titles line up across a
+ * grid's row: an empty box with xsmall padding (twice the bar's height, drawing nothing) sets it.
+ */
+const barSlot = (item: zk.Item) =>
+  zk.ui.row(
+    [item.progress !== null && zk.ui.progress(item.progress), zk.ui.box(zk.ui.spacer(), { pad: "xsmall", width: "1%" })],
+    { gap: "none", align: "top" },
+  );
+
 /** Covers in a grid that pages, each with its bar once opened, its title and a caption under it. */
 export function coverGrid(cells: { item: zk.Item; caption: string }[]): Block {
   return zk.ui.grid(
@@ -112,7 +126,7 @@ export function coverGrid(cells: { item: zk.Item; caption: string }[]): Block {
         ref(item),
         zk.ui.column([
           zk.ui.cover(ref(item)),
-          item.progress !== null && zk.ui.progress(item.progress),
+          barSlot(item),
           zk.ui.column([title(item.title, "small", 1), caption && meta(caption, "xsmall")], { gap: "xsmall" }),
         ]),
       ),
