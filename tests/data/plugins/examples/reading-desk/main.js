@@ -1,7 +1,7 @@
-// examples/reading-desk/src/main.ts
-var TABS = ["books", "papers", "pinned", "new"];
+// examples/reading-desk/src/data.ts
 var MAX_PINS = 50;
-var MAX_OPENED = 30;
+var PAIR_WALK = 200;
+var READING_WALK = 60;
 var INBOX_CAP = 100;
 var loadPins = async () => (await zk.storage.get("pins") ?? []).slice(0, MAX_PINS);
 var loadPrefs = async () => await zk.storage.get("prefs") ?? {};
@@ -13,18 +13,24 @@ function inboxOf(prefs) {
 var isBook = (item) => item.type === "book" || item.type === "bookSection" || item.format === "EPUB";
 var ref = (i) => ({ key: i.key, library: i.libraryId });
 var same = (a, b) => a.key === b.key && (a.library === void 0 || b.library === void 0 || a.library === b.library);
-async function inProgress() {
+async function inProgress(limit) {
   const out = [];
-  for await (const item of zk.library.items({ opened: true, read: false, limit: MAX_OPENED })) out.push(item);
+  for await (const item of zk.library.items({ opened: true, read: false, limit })) out.push(item);
   return out;
 }
-async function pinnedItems(pins) {
-  const out = [];
-  for (const p of pins) {
-    const item = await zk.library.item(p.key);
-    if (item) out.push(item);
+async function openedPair() {
+  let book;
+  let paper;
+  for await (const item of zk.library.items({ opened: true, read: false, limit: PAIR_WALK })) {
+    if (isBook(item)) book ??= item;
+    else paper ??= item;
+    if (book && paper) break;
   }
-  return out;
+  return { book, paper };
+}
+async function pinnedItems(pins) {
+  const items = await Promise.all(pins.map((p) => zk.library.item(p.key)));
+  return items.filter((i) => i !== null);
 }
 async function inboxItems(inbox) {
   const unread = [];
@@ -32,6 +38,33 @@ async function inboxItems(inbox) {
   if (inbox.library !== void 0) query.library = inbox.library;
   for await (const item of zk.library.items(query)) unread.push(item);
   return unread.sort((a, b) => a.addedAt < b.addedAt ? 1 : a.addedAt > b.addedAt ? -1 : 0);
+}
+var countOf = (n, walked) => walked >= INBOX_CAP ? `${INBOX_CAP - 1}+` : String(n);
+function authorsOf(i, opts) {
+  const authors = i.creators.filter((c) => c.type === "author");
+  const people = authors.length > 0 ? authors : i.creators;
+  if (opts.full && people.length === 1) {
+    const c = people[0];
+    return c.name ?? [c.first, c.last].filter(Boolean).join(" ");
+  }
+  const names = people.map((c) => c.last ?? c.name ?? "").filter(Boolean);
+  return names.length > opts.most ? `${names[0]} et al.` : names.join(", ");
+}
+var bylineOf = (i) => [authorsOf(i, { most: 4 }), i.year ?? ""].filter(Boolean).join(" \xB7 ");
+var percentOf = (i) => i.progress === null ? "" : `${Math.round(i.progress * 100)}%`;
+var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function whenOf(iso, now = /* @__PURE__ */ new Date()) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(d)) / 864e5);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return DAYS[d.getDay()];
+  const date = `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return d.getFullYear() === now.getFullYear() ? date : `${date}, ${d.getFullYear()}`;
 }
 function today() {
   const d = /* @__PURE__ */ new Date();
@@ -80,324 +113,374 @@ async function pickPassage() {
   }
   await zk.storage.set("passage", { day, pick });
 }
-zk.itemAction({
-  id: "pin",
-  title: "Pin to Home / Unpin",
-  run: async (item) => {
-    let reply = "";
-    await zk.storage.update("pins", (pins = []) => {
-      const rest = pins.filter((p) => !same(p, ref(item)));
-      if (rest.length < pins.length) {
-        reply = "Unpinned";
-        return rest;
-      }
-      if (pins.length >= MAX_PINS) {
-        reply = `Home holds ${MAX_PINS} pins: unpin one first (Plugins \u2192 Reading Desk)`;
-        return pins;
-      }
-      reply = "Pinned to Home";
-      return [...pins, ref(item)];
-    });
-    zk.ui.refresh();
-    return reply;
+async function openPassage() {
+  const pick = (await zk.storage.get("passage"))?.pick;
+  if (!pick) return;
+  const why = (err) => err instanceof Error ? err.message : String(err);
+  try {
+    await zk.library.open({ key: pick.itemKey, library: pick.library }, { annotation: pick.key });
+  } catch (err) {
+    const reason = why(err);
+    if (reason.includes("Cancelled")) return;
+    if (reason.includes("Item not found") || reason.includes("Annotation not found")) {
+      await zk.storage.delete("passage");
+      zk.ui.refresh();
+    }
+    if (!reason.includes("Annotation not found")) {
+      if (!reason.includes("Item not found")) console.warn("the passage didn't open:", reason);
+      return;
+    }
+    try {
+      await zk.library.open({ key: pick.itemKey, library: pick.library });
+    } catch (again) {
+      if (!why(again).includes("Cancelled")) console.warn("the passage's item didn't open:", why(again));
+    }
   }
-});
-var CARD_MIN_HEIGHT = 1800;
-var display = () => ({ width: zk.display?.width ?? 1236, height: zk.display?.height ?? 1547 });
-var shortScreen = () => display().height < CARD_MIN_HEIGHT;
-var FRAME_H = 434;
-var PAGE_NUMBER_H = 60;
-var gapPx = () => shortScreen() ? 18 : 36;
-var ROW_H = 186;
-var CHIPS_H = 76;
-var LABEL_H = 48;
-var HERO_ROW_H = LABEL_H + ROW_H;
-var HERO_CARD_H = 400;
-var MARGINS = 120;
-function shelfRowH() {
-  const w = display().width - MARGINS;
-  const n = Math.max(1, Math.round((w + 36) / 276));
-  return Math.floor((w - (n - 1) * 36) / n * 1.5) + 70;
 }
-function passageH(text) {
-  const perLine = Math.floor((display().width - MARGINS - 36) / 17.5);
-  const lines = Math.min(5, Math.ceil(text.length / perLine) + (text.match(/\n/g)?.length ?? 0));
-  return 8 + lines * 50 + 14 + 34;
+
+// examples/reading-desk/src/pieces.ts
+var label = (text) => zk.ui.text(text, { style: "label", caps: true });
+var title = (text, size, lines2) => zk.ui.text(text || "Untitled", { font: "serif", weight: "bold", size, lines: lines2 });
+var meta = (text, size = "small", lines2 = 1) => zk.ui.text(text, { font: "sans", size, tone: "secondary", lines: lines2 });
+function heading(text, link) {
+  return zk.ui.row([
+    label(text),
+    link && zk.ui.text(link.text, { id: link.id, width: "auto", font: "sans", size: "body", weight: "medium", tone: "ink" })
+  ]);
 }
-function pagesOf(units, budget) {
-  let pages = 1;
-  let used = 0;
-  units.forEach((h, i) => {
-    if (i > 0 && used + h > budget) {
-      pages++;
-      used = 0;
-    }
-    used += h;
-  });
-  return pages;
+function pair(side) {
+  const { item } = side;
+  return zk.ui.column([
+    label(side.kicker),
+    zk.ui.item(
+      ref(item),
+      zk.ui.row(
+        [
+          zk.ui.cover(ref(item), { width: side.wide ? "18%" : "37%" }),
+          zk.ui.column(
+            [
+              title(item.title, "body", 3),
+              side.authors && meta(side.authors, "small", 2),
+              zk.ui.spacer(),
+              item.progress !== null && zk.ui.progress(item.progress),
+              meta(side.meta)
+            ],
+            { gap: "xsmall" }
+          )
+        ],
+        { align: "stretch", gap: "medium" }
+      )
+    )
+  ]);
 }
-function pagesFor(fixed, units, tail = 0) {
-  const body = display().height - FRAME_H;
-  const total = units.reduce((a, b) => a + b, 0);
-  if (fixed + total + tail <= body) return 1;
-  const room = body - PAGE_NUMBER_H - fixed - tail;
-  if (units.length > 0 && units[0] <= room) return pagesOf(units, room);
-  return pagesOf([fixed, ...units, ...tail ? [tail] : []], body - PAGE_NUMBER_H);
+function shelfRow(items, minWidth) {
+  return zk.ui.grid(
+    items.map(
+      (i) => zk.ui.item(ref(i), zk.ui.column([zk.ui.cover(ref(i)), i.progress !== null && zk.ui.progress(i.progress)]))
+    ),
+    { columns: "auto", minWidth, rows: 1, gap: "medium" }
+  );
 }
-var label = (text) => zk.ui.text(text, { style: "label" });
-async function currentTab(hasInbox) {
-  const t = await zk.storage.get("tab");
-  return t && TABS.includes(t) && (t !== "new" || hasInbox) ? t : "books";
+function lines(rows) {
+  return rows.map(
+    ({ item, byline, right }) => zk.ui.item(
+      ref(item),
+      zk.ui.row(
+        [
+          zk.ui.column([title(item.title, "body", 1), byline && meta(byline)], { gap: "xsmall" }),
+          right && zk.ui.text(right, { width: "auto", font: "sans", size: "small", tone: "secondary" })
+        ],
+        { align: "top", gap: "medium" }
+      )
+    )
+  );
 }
-function nowReading(hero, kicker) {
-  if (!hero) return null;
-  if (!shortScreen()) return zk.ui.items({ id: "now", style: "card", items: [{ ...ref(hero), label: kicker }] });
-  return zk.ui.column([label(kicker), zk.ui.items({ id: "now", style: "row", items: [ref(hero)] })], { gap: "none" });
-}
-zk.screen("desk", {
-  title: "Reading Desk",
-  home: true,
-  render: async () => {
-    const prefs = await loadPrefs();
-    const inbox = inboxOf(prefs);
-    const [opened, pins, unread] = await Promise.all([inProgress(), loadPins(), inbox ? inboxItems(inbox) : null]);
-    let hero = opened[0];
-    let kicker = hero ? isBook(hero) ? "CONTINUE \xB7 BOOK" : "CONTINUE \xB7 PAPER" : "";
-    let pinned = null;
-    const pinnedNow = async () => pinned ??= await pinnedItems(pins);
-    if (!hero && pins.length > 0) {
-      hero = [...await pinnedNow()].reverse().find((i) => !i.read);
-      kicker = "START HERE";
-    }
-    const notHero = (i) => !hero || !same(ref(i), ref(hero));
-    const tab = await currentTab(unread !== null);
-    const newCount = unread?.filter(notHero).length ?? 0;
-    const chips = [
-      { id: "books", title: "Books" },
-      { id: "papers", title: "Papers" },
-      { id: "pinned", title: "Pinned" },
-      unread && {
-        id: "new",
-        title: unread.length >= INBOX_CAP ? `New ${INBOX_CAP - 1}+` : newCount > 0 ? `New ${newCount}` : "New"
-      }
-    ].filter((c) => !!c);
-    const reading = opened.filter(notHero);
-    const inProgressKeys = new Set(opened.map((i) => i.key));
-    let content = [];
-    let units = [];
-    let extra = 0;
-    const rows = (n) => Array(n).fill(ROW_H);
-    const shelfRows = (n) => {
-      const per = Math.max(1, Math.round((display().width - MARGINS + 36) / 276));
-      const r = Math.ceil(n / per);
-      return Array(r).fill(shelfRowH() + 40).map((h, i) => i === r - 1 ? h - 40 : h);
-    };
-    if (tab === "books") {
-      const books = reading.filter(isBook);
-      const more = (await pinnedNow()).filter((i) => isBook(i) && !inProgressKeys.has(i.key) && notHero(i));
-      const all = [...books, ...more];
-      content = [zk.ui.items({ id: "books", style: "shelf", items: all.map(ref), empty: "Books you open show up here." })];
-      units = shelfRows(all.length);
-    } else if (tab === "papers") {
-      const papers = reading.filter((i) => !isBook(i));
-      const next = (await pinnedNow()).filter((i) => !isBook(i) && i.progress === null && !i.read && notHero(i));
-      if (papers.length === 0 && next.length === 0) {
-        content = [zk.ui.items({ id: "papers", style: "row", items: [], empty: "Papers you open or pin show up here." })];
-      } else if (papers.length > 0 && next.length > 0) {
-        content = [
-          zk.ui.items({ id: "papers", style: "row", items: papers.map(ref) }),
-          label("UP NEXT"),
-          zk.ui.items({ id: "next", style: "row", items: next.map(ref) })
-        ];
-        units = rows(papers.length + next.length);
-        extra = LABEL_H + 2 * gapPx();
-      } else {
-        content = [
-          next.length > 0 && label("UP NEXT"),
-          zk.ui.items({ id: next.length > 0 ? "next" : "papers", style: "row", items: [...papers, ...next].map(ref) })
-        ];
-        units = rows(papers.length + next.length);
-        extra = next.length > 0 ? LABEL_H + gapPx() : 0;
-      }
-    } else if (tab === "pinned") {
-      const all = (await pinnedNow()).filter(notHero);
-      content = [
-        zk.ui.items({
-          id: "pinned",
-          style: "shelf",
-          items: all.map(ref),
-          empty: "Long-press an item \u2192 More\u2026 \u2192 Pin."
+function segmented(segments, selected) {
+  return zk.ui.box(
+    zk.ui.row(
+      segments.map(
+        (s) => zk.ui.box(zk.ui.text(s.text, { align: "center", font: "sans", size: "body", weight: "medium" }), {
+          id: s.id,
+          pad: "small",
+          fill: s.id === selected ? "ink" : "none",
+          radius: "small"
         })
-      ];
-      units = shelfRows(all.length);
-    } else {
-      const items = (unread ?? []).filter(notHero);
-      content = [zk.ui.items({ id: "new", style: "row", items: items.map(ref), empty: "Nothing new in the inbox." })];
-      units = rows(items.length);
-    }
-    let fixed = (hero ? (shortScreen() ? HERO_ROW_H : HERO_CARD_H) + gapPx() : 0) + CHIPS_H + gapPx() + extra;
-    if (units.length === 0) units = [112];
-    if (tab === "papers" && extra === LABEL_H + 2 * gapPx() && pagesFor(fixed, units) > 1) {
-      const all = content.flatMap((c) => c && typeof c === "object" && c.kind === "items" ? c.items : []);
-      content = [zk.ui.items({ id: "papers", style: "row", items: all })];
-      fixed -= extra;
-    }
-    const pick = prefs.passage === false ? void 0 : await keptPassage();
-    const showPassage = !!pick && pagesFor(fixed, units, passageH(pick.text) + gapPx()) <= pagesFor(fixed, units);
-    return zk.ui.column(
-      [
-        nowReading(hero, kicker),
-        zk.ui.chips({ id: "tabs", select: "one", chips, selected: [tab] }),
-        ...content,
-        showPassage && zk.ui.quote({ id: "passage", text: pick.text, source: pick.source })
-      ],
-      { gap: shortScreen() ? "small" : "medium" }
-    );
-  },
-  onEvent: async (e) => {
-    if (e.kind === "chips" && e.id === "tabs" && TABS.includes(e.chip)) {
-      await zk.storage.set("tab", e.chip);
-    } else if (e.kind === "tap" && e.id === "passage") {
-      const kept = await zk.storage.get("passage");
-      const pick = kept?.pick;
-      if (!pick) return;
-      const why = (err) => err instanceof Error ? err.message : String(err);
-      try {
-        await zk.library.open({ key: pick.itemKey, library: pick.library }, { annotation: pick.key });
-      } catch (err) {
-        const reason = why(err);
-        if (reason.includes("Cancelled")) return;
-        if (reason.includes("Item not found") || reason.includes("Annotation not found")) {
-          await zk.storage.delete("passage");
-          zk.ui.refresh();
-        }
-        if (!reason.includes("Annotation not found")) {
-          if (!reason.includes("Item not found")) console.warn("the passage didn't open:", reason);
-          return;
-        }
-        try {
-          await zk.library.open({ key: pick.itemKey, library: pick.library });
-        } catch (again) {
-          if (!why(again).includes("Cancelled")) console.warn("the passage's item didn't open:", why(again));
-        }
+      ),
+      { gap: "none" }
+    ),
+    { border: "thin", radius: "small" }
+  );
+}
+function coverGrid(cells) {
+  return zk.ui.grid(
+    cells.map(
+      ({ item, caption: caption2 }) => zk.ui.item(
+        ref(item),
+        zk.ui.column([
+          zk.ui.cover(ref(item)),
+          item.progress !== null && zk.ui.progress(item.progress),
+          zk.ui.column([title(item.title, "small", 1), caption2 && meta(caption2, "xsmall")], { gap: "xsmall" })
+        ])
+      )
+    ),
+    { columns: "auto", minWidth: "22%", gap: "large" }
+  );
+}
+
+// examples/reading-desk/src/desk.ts
+var TABS = ["reading", "pinned", "inbox"];
+var EMPTY = {
+  reading: "Books and papers you open show up here.",
+  pinned: "Nothing pinned yet. Long-press an item \u2192 More\u2026 \u2192 Pin to Home / Unpin.",
+  inbox: "Nothing new in the inbox."
+};
+function caption(i) {
+  return [authorsOf(i, { most: 1 }), i.read ? "Read" : percentOf(i)].filter(Boolean).join(" \xB7 ");
+}
+var picked = null;
+function registerDesk() {
+  zk.screen("all", {
+    title: "Your desk",
+    render: async (params) => {
+      const inbox = inboxOf(await loadPrefs());
+      const unread = inbox ? await inboxItems(inbox) : null;
+      const asked = picked ?? params?.tab ?? "reading";
+      const tab = TABS.includes(asked) && (asked !== "inbox" || unread) ? asked : "reading";
+      const items = tab === "reading" ? await inProgress(READING_WALK) : tab === "pinned" ? await pinnedItems(await loadPins()) : unread;
+      const segments = [
+        { id: "tab-reading", text: "Reading" },
+        { id: "tab-pinned", text: "Pinned" },
+        unread && { id: "tab-inbox", text: `Inbox ${countOf(unread.length, unread.length)}` }
+      ].filter((s) => !!s);
+      return zk.ui.column(
+        [
+          segmented(segments, `tab-${tab}`),
+          items.length > 0 ? coverGrid(items.map((item) => ({ item, caption: caption(item) }))) : zk.ui.text(EMPTY[tab], { tone: "secondary" })
+        ],
+        { gap: "large" }
+      );
+    },
+    onEvent: (e) => {
+      if (e.kind === "open" || e.kind === "back") picked = null;
+      else if (e.kind === "tap" && e.id.startsWith("tab-")) {
+        const tab = e.id.slice(4);
+        if (TABS.includes(tab)) picked = tab;
       }
     }
-  }
-});
+  });
+}
+
+// examples/reading-desk/src/home.ts
+var PINS_SHOWN = 8;
+var tall = () => zk.display.height >= 2e3;
+var bandGap = () => zk.display.height < 1400 ? "medium" : "large";
+var coverMinWidth = () => zk.display.width >= 1600 ? "14%" : "17%";
+var FIRST_USE = "Open a book or a paper and it will wait for you here. Pin things from an item's menu: long-press \u2192 More\u2026 \u2192 Pin to Home.";
+function sideMeta(s) {
+  if (!s.started) return "Not started";
+  return [percentOf(s.item), whenOf(s.item.openedAt)].filter(Boolean).join(" \xB7 ");
+}
+function registerHome() {
+  zk.screen("desk", {
+    title: "Reading Desk",
+    home: true,
+    render: async () => {
+      const prefs = await loadPrefs();
+      const inbox = inboxOf(prefs);
+      const [opened, pins, unread] = await Promise.all([openedPair(), loadPins(), inbox ? inboxItems(inbox) : null]);
+      const pinned = await pinnedItems(pins);
+      const upNext = (book) => pinned.find((i) => isBook(i) === book && i.openedAt === null && !i.read);
+      const side = (item, kicker, book) => {
+        if (item) return { kicker, item, started: true };
+        const next = upNext(book);
+        return next && { kicker: "Up next", item: next, started: false };
+      };
+      const sides = [side(opened.book, "Book", true), side(opened.paper, "Paper", false)].filter((s) => !!s);
+      const inPair = (i) => sides.some((s) => same(ref(s.item), ref(i)));
+      const wide = sides.length === 1;
+      const pairBand = sides.length > 0 && zk.ui.row(
+        sides.map(
+          (s) => pair({ kicker: s.kicker, item: s.item, authors: authorsOf(s.item, { most: 2, full: true }), meta: sideMeta(s), wide })
+        ),
+        { align: "top", gap: "medium" }
+      );
+      const shelf = pinned.filter((i) => !inPair(i)).slice(0, PINS_SHOWN);
+      const pinnedBand = shelf.length > 0 && zk.ui.column([heading("Pinned", { id: "all-pinned", text: `All ${pinned.length} \u203A` }), shelfRow(shelf, coverMinWidth())]);
+      const fresh = (unread ?? []).filter((i) => !inPair(i));
+      const inboxBand = fresh.length > 0 && zk.ui.column(
+        [
+          heading(`Inbox \xB7 ${countOf(fresh.length, unread.length)} new`, { id: "all-inbox", text: "All \u203A" }),
+          ...lines(fresh.slice(0, tall() ? 3 : 2).map((item) => ({ item, byline: bylineOf(item), right: whenOf(item.addedAt) })))
+        ],
+        { gap: "small" }
+      );
+      const pick = prefs.passage === false || inboxBand && !tall() ? void 0 : await keptPassage();
+      const firstUse = !pairBand && !pinnedBand && !inboxBand;
+      return zk.ui.column(
+        [
+          pairBand,
+          pinnedBand,
+          inboxBand,
+          firstUse && zk.ui.text(FIRST_USE, { tone: "secondary" }),
+          pick && zk.ui.quote({ id: "passage", text: pick.text, source: pick.source })
+        ],
+        { gap: bandGap(), fit: "trim" }
+      );
+    },
+    onEvent: async (e) => {
+      if (e.kind !== "tap") return;
+      if (e.id === "all-pinned") zk.ui.open("all", { tab: "pinned" });
+      else if (e.id === "all-inbox") zk.ui.open("all", { tab: "inbox" });
+      else if (e.id === "passage") await openPassage();
+    }
+  });
+}
+
+// examples/reading-desk/src/settings.ts
 var collectionName = (c) => c.path.join(" / ") + (c.libraryId !== 0 ? ` (${c.libraryName})` : "");
-var authorsOf = (i) => {
+var authorsLine = (i) => {
   const names = i.creators.map((c) => c.last ?? c.name ?? "").filter(Boolean);
   const who = names.length > 2 ? `${names[0]} et al.` : names.join(", ");
   return [who, i.year ?? ""].filter(Boolean).join(" \xB7 ");
 };
+var label2 = (text) => zk.ui.text(text, { style: "label" });
 var unpinAsk = null;
 var pinId = (p) => `${p.library}:${p.key}`;
-zk.screen("settings", {
-  title: "Settings",
-  main: true,
-  render: async () => {
-    const prefs = await loadPrefs();
-    const inbox = inboxOf(prefs);
-    let inboxName = "None: the New tab is hidden";
-    if (inbox) {
-      const c = (await zk.library.collections()).find((c2) => same({ key: c2.key, library: c2.libraryId }, inbox));
-      inboxName = c ? collectionName(c) : "A collection no longer on the Kindle";
-    }
-    const pins = await loadPins();
-    const items = await Promise.all(pins.map((p) => zk.library.item(p.key)));
-    const asked = pins.findIndex((p) => pinId(p) === unpinAsk);
-    const askedTitle = asked >= 0 ? items[asked]?.title || "this item" : "";
-    return zk.ui.column(
-      [
-        zk.ui.list({
-          id: "prefs",
-          rows: [
-            { id: "inbox", title: "Inbox collection", subtitle: inboxName },
-            {
-              id: "passage",
-              title: "A passage each day",
-              subtitle: "One of your highlights under the desk, a new one each day",
-              meta: prefs.passage === false ? "Off" : "On"
-            }
-          ]
-        }),
-        label(`PINNED (${pins.length})`),
-        asked >= 0 && zk.ui.notice(`Unpin \u201C${askedTitle}\u201D?`),
-        asked >= 0 && zk.ui.buttons([
-          { id: "keep", title: "Keep" },
-          { id: "unpin", title: "Unpin", primary: true }
-        ]),
-        zk.ui.list({
-          id: "pins",
-          rows: pins.map((p, n) => ({
-            id: pinId(p),
-            title: items[n]?.title || "An item no longer on the Kindle",
-            subtitle: items[n] ? authorsOf(items[n]) : void 0,
-            meta: "Unpin\u2026",
-            // a tap asks first
-            selected: pinId(p) === unpinAsk
-          })),
-          empty: "Nothing pinned. Long-press an item \u2192 More\u2026 \u2192 Pin to Home / Unpin."
-        })
-      ],
-      { gap: "medium" }
-    );
-  },
-  onEvent: async (e) => {
-    if (e.kind === "select" && e.id === "prefs") {
-      if (e.row === "inbox") zk.ui.open("inbox");
-      else if (e.row === "passage") {
-        const prefs = await loadPrefs();
-        await savePrefs({ passage: prefs.passage === false });
-      }
-    } else if (e.kind === "select" && e.id === "pins") {
-      unpinAsk = unpinAsk === e.row ? null : e.row;
-    } else if (e.kind === "tap" && e.id === "keep") {
-      unpinAsk = null;
-    } else if (e.kind === "tap" && e.id === "unpin" && unpinAsk) {
-      const gone = unpinAsk;
-      await zk.storage.update("pins", (pins = []) => pins.filter((p) => pinId(p) !== gone));
-      unpinAsk = null;
-    } else if (e.kind === "back" || e.kind === "open") {
-      unpinAsk = null;
-    }
-  }
-});
 var inboxSearch = "";
-zk.screen("inbox", {
-  title: "Inbox collection",
-  render: async () => {
-    const inbox = inboxOf(await loadPrefs());
-    const words = inboxSearch.toLowerCase().split(/\s+/).filter(Boolean);
-    const all = await zk.library.collections();
-    const matches = all.map((c) => ({ c, name: collectionName(c) })).filter(({ name }) => words.every((w) => name.toLowerCase().includes(w))).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
-    return zk.ui.column([
-      zk.ui.search({ id: "find", placeholder: "Find a collection", value: inboxSearch }),
-      zk.ui.list({
-        id: "collections",
-        rows: [
-          ...words.length === 0 ? [{ id: "none", title: "None", subtitle: "No New tab", selected: !inbox }] : [],
-          ...matches.map(({ c, name }) => ({
-            id: `${c.libraryId}:${c.key}`,
-            title: name,
-            selected: !!inbox && same({ key: c.key, library: c.libraryId }, inbox)
-          }))
-        ],
-        empty: "No collection matches"
-      })
-    ]);
-  },
-  onEvent: async (e) => {
-    if (e.kind === "open" || e.kind === "back") inboxSearch = "";
-    else if ((e.kind === "change" || e.kind === "submit") && e.id === "find") inboxSearch = e.text;
-    else if (e.kind === "select" && e.id === "collections") {
-      if (e.row === "none") await savePrefs({ inbox: null });
-      else {
-        const colon = e.row.indexOf(":");
-        await savePrefs({ inbox: { library: Number(e.row.slice(0, colon)), key: e.row.slice(colon + 1) } });
-      }
-      inboxSearch = "";
-      zk.ui.close();
+function registerSettings() {
+  zk.itemAction({
+    id: "pin",
+    title: "Pin to Home / Unpin",
+    run: async (item) => {
+      let reply = "";
+      await zk.storage.update("pins", (pins = []) => {
+        const rest = pins.filter((p) => !same(p, ref(item)));
+        if (rest.length < pins.length) {
+          reply = "Unpinned";
+          return rest;
+        }
+        if (pins.length >= MAX_PINS) {
+          reply = `Home holds ${MAX_PINS} pins: unpin one first (Plugins \u2192 Reading Desk)`;
+          return pins;
+        }
+        reply = "Pinned to Home";
+        return [...pins, ref(item)];
+      });
+      zk.ui.refresh();
+      return reply;
     }
-  }
-});
+  });
+  zk.screen("settings", {
+    title: "Settings",
+    main: true,
+    render: async () => {
+      const prefs = await loadPrefs();
+      const inbox = inboxOf(prefs);
+      let inboxName = "None: Home shows a passage instead";
+      if (inbox) {
+        const c = (await zk.library.collections()).find((c2) => same({ key: c2.key, library: c2.libraryId }, inbox));
+        inboxName = c ? collectionName(c) : "A collection no longer on the Kindle";
+      }
+      const pins = await loadPins();
+      const items = await Promise.all(pins.map((p) => zk.library.item(p.key)));
+      const asked = pins.findIndex((p) => pinId(p) === unpinAsk);
+      const askedTitle = asked >= 0 ? items[asked]?.title || "this item" : "";
+      return zk.ui.column(
+        [
+          zk.ui.list({
+            id: "prefs",
+            rows: [
+              { id: "inbox", title: "Inbox collection", subtitle: inboxName },
+              {
+                id: "passage",
+                title: "A passage each day",
+                subtitle: "One of your highlights on Home, a new one each day",
+                meta: prefs.passage === false ? "Off" : "On"
+              }
+            ]
+          }),
+          label2(`PINNED (${pins.length})`),
+          asked >= 0 && zk.ui.notice(`Unpin \u201C${askedTitle}\u201D?`),
+          asked >= 0 && zk.ui.buttons([
+            { id: "keep", title: "Keep" },
+            { id: "unpin", title: "Unpin", primary: true }
+          ]),
+          zk.ui.list({
+            id: "pins",
+            rows: pins.map((p, n) => ({
+              id: pinId(p),
+              title: items[n]?.title || "An item no longer on the Kindle",
+              subtitle: items[n] ? authorsLine(items[n]) : void 0,
+              meta: "Unpin\u2026",
+              // a tap asks first
+              selected: pinId(p) === unpinAsk
+            })),
+            empty: "Nothing pinned. Long-press an item \u2192 More\u2026 \u2192 Pin to Home / Unpin."
+          })
+        ],
+        { gap: "medium" }
+      );
+    },
+    onEvent: async (e) => {
+      if (e.kind === "select" && e.id === "prefs") {
+        if (e.row === "inbox") zk.ui.open("inbox");
+        else if (e.row === "passage") {
+          const prefs = await loadPrefs();
+          await savePrefs({ passage: prefs.passage === false });
+        }
+      } else if (e.kind === "select" && e.id === "pins") {
+        unpinAsk = unpinAsk === e.row ? null : e.row;
+      } else if (e.kind === "tap" && e.id === "keep") {
+        unpinAsk = null;
+      } else if (e.kind === "tap" && e.id === "unpin" && unpinAsk) {
+        const gone = unpinAsk;
+        await zk.storage.update("pins", (pins = []) => pins.filter((p) => pinId(p) !== gone));
+        unpinAsk = null;
+      } else if (e.kind === "back" || e.kind === "open") {
+        unpinAsk = null;
+      }
+    }
+  });
+  zk.screen("inbox", {
+    title: "Inbox collection",
+    render: async () => {
+      const inbox = inboxOf(await loadPrefs());
+      const words = inboxSearch.toLowerCase().split(/\s+/).filter(Boolean);
+      const all = await zk.library.collections();
+      const matches = all.map((c) => ({ c, name: collectionName(c) })).filter(({ name }) => words.every((w) => name.toLowerCase().includes(w))).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
+      return zk.ui.column([
+        zk.ui.search({ id: "find", placeholder: "Find a collection", value: inboxSearch }),
+        zk.ui.list({
+          id: "collections",
+          rows: [
+            ...words.length === 0 ? [{ id: "none", title: "None", subtitle: "No inbox on Home", selected: !inbox }] : [],
+            ...matches.map(({ c, name }) => ({
+              id: `${c.libraryId}:${c.key}`,
+              title: name,
+              selected: !!inbox && same({ key: c.key, library: c.libraryId }, inbox)
+            }))
+          ],
+          empty: "No collection matches"
+        })
+      ]);
+    },
+    onEvent: async (e) => {
+      if (e.kind === "open" || e.kind === "back") inboxSearch = "";
+      else if ((e.kind === "change" || e.kind === "submit") && e.id === "find") inboxSearch = e.text;
+      else if (e.kind === "select" && e.id === "collections") {
+        if (e.row === "none") await savePrefs({ inbox: null });
+        else {
+          const colon = e.row.indexOf(":");
+          await savePrefs({ inbox: { library: Number(e.row.slice(0, colon)), key: e.row.slice(colon + 1) } });
+        }
+        inboxSearch = "";
+        zk.ui.close();
+      }
+    }
+  });
+}
+
+// examples/reading-desk/src/main.ts
+registerHome();
+registerDesk();
+registerSettings();

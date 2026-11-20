@@ -1,40 +1,46 @@
 # Reading Desk
 
-A Home written by a plugin (app 0.11.0): what you are in the middle of, a shelf of books, the
-papers next in line, your pins, what is new in an inbox, and a passage from your highlights each
-day. In Settings → Home, choose **Reading Desk — Reading Desk**. It is the example for `home: true`
-screens, the `items` block (cards, rows and the shelf), `zk.ui.quote`, `zk.display` and
-`zk.library.open(item, { annotation })`.
+A Home written by a plugin (app 0.12.0): the book and the paper you are in, side by side; a row of
+your pins; what is new in an inbox, or a passage from your highlights each day. In Settings →
+Home, choose **Reading Desk — Reading Desk**. It is the example for composing a screen from the
+app's primitives — rows with widths and alignment, `spacer`, `box`, styled `text`, `cover`,
+`progress`, `item`, `grid` and a Home body's `fit: "trim"` — with no Reading-Desk-specific code in
+the app. The pieces it is made of are in `src/pieces.ts`.
 
-## What it shows
+## Home
 
-- **Now reading** — the item you opened last and haven't marked read, any kind, with the kicker
-  **CONTINUE · BOOK** or **CONTINUE · PAPER** (a book is item type `book` or `bookSection`, or an
-  EPUB file). A card on a tall screen (Scribe); on a Paperwhite or a basic Kindle a label over a
-  row, so a shelf row and the passage fit under it. Nothing opened yet: **START HERE** with the
-  newest unread pin; no pins either: nothing.
-- **Tabs** — chips; the one you pick is kept.
-  - **Books**: a shelf of the books in progress (most recent first), then your other pinned
-    books.
-  - **Papers**: rows of the papers in progress, then **UP NEXT**: pinned papers never opened on
-    this Kindle and not marked read. When the two would page, they are one list (rows say "42%"
-    or "new").
-  - **Pinned**: a shelf of every pin, in the order pinned.
-  - **New n**: unread items of the inbox collection, newest added first. Only with an inbox. At
-    most the newest 100 are looked at ("New 99+"), so a big inbox doesn't slow Home down.
+Three bands, and never a pager: the body's root column is trimmed to the page, so what doesn't
+fit is left out from the end (first the passage, then inbox lines, then the row of pins).
 
-  "Now reading" is never listed again below it. "Unread" is the read mark, never progress: a
-  book at 100% stays until you mark it read.
+- **The pair** — **BOOK** on the left, **PAPER** on the right: the most recently opened item of
+  each kind not marked read, its cover, title, authors, a bar and "13% · today". A book is item
+  type `book` or `bookSection`, or an EPUB file; everything else is a paper. A kind with nothing
+  opened shows its first pin never opened and not read, **UP NEXT**, "Not started". A kind with
+  nothing at all: the other side takes the whole width; neither: no pair.
+- **Pinned** — **All n ›** (every pin) and one row of covers in pin order, minus the pair: 5 on a
+  Paperwhite or a basic Kindle, 7 on a Scribe. A bar under a cover once it was opened.
+- **Inbox · n new** — **All ›** and the newest unread items of the inbox collection as lines:
+  title, "authors · year", and when it was added ("today", "yesterday", "Mon", "Nov 12"). 2 lines,
+  3 on a Scribe; minus the pair. At most the newest 100 are looked at ("99+").
 - **A passage** — one of your highlights (40–400 characters, from the newest 300), picked once a
-  day and the same all day. The pick runs after Home has drawn (it then refreshes), never inside
-  a render; until it has run, yesterday's passage shows. Tap it: the reader opens at that
-  highlight; if the highlight was deleted the item opens where you left it, and if the item is
-  gone another passage is picked. It goes under the tab's
-  content when that fits, and is left out of a render where it would cost a page (it never pushes
-  your items onto a second page). Off in the settings.
+  day and the same all day, in the inbox's band when there is no inbox or nothing new in it, and
+  under the inbox on a Scribe. The pick runs after Home has drawn (it then refreshes); until then
+  yesterday's shows. Tap it: the reader opens at that highlight (the highlight deleted: the item
+  where you left it; the item gone: another passage is picked). Off in the settings.
 
-Taps on items open them; long-press shows the library's item menu. The app draws the items and
-keeps their progress current; the plugin only picks the keys.
+First use (nothing opened, no pins, no inbox): a line on how to start, and the passage.
+
+Taps open items; long-press shows the library's item menu; **All ›** opens Your desk.
+
+## Your desk
+
+A switch **Reading · Pinned · Inbox n** (Inbox only with an inbox), on the tab of the All ›
+tapped, over a grid of covers that pages: each with its bar once opened, its title and "author ·
+42%" ("Read" once marked read).
+
+- **Reading**: opened and not marked read, books and papers together, most recent first (60).
+- **Pinned**: every pin, in pin order.
+- **Inbox**: unread inbox items, newest added first (100).
 
 ## Pins
 
@@ -45,7 +51,7 @@ did. At most 50 pins.
 
 Plugins → **Reading Desk**:
 
-- **Inbox collection** — a searchable list of your collections, or *None* (no New tab).
+- **Inbox collection** — a searchable list of your collections, or *None*.
 - **A passage each day** — on or off.
 - **Pinned** — your pins; tap one, then **Unpin**.
 
@@ -55,8 +61,8 @@ until you pick an inbox (or *None*) there.
 ## Permissions
 
 `library:read`, for the items and collections; `annotations:read`, for the passage. What it keeps
-is in the plugin's own storage: `pins` (`{ key, library }[]`), `tab`, `prefs` and the day's
-`passage`.
+is in the plugin's own storage: `pins` (`{ key, library }[]`), `prefs` and the day's `passage`.
+(0.2's `tab` is no longer written, and ignored.)
 
 ## Build
 
