@@ -244,3 +244,23 @@ TEST_CASE("plugin diff: a quote's new text redraws it with Fast in place, Ui whe
     REQUIRE_FALSE(d.empty());
     CHECK(d[0].wave == Waveform::Ui);
 }
+
+TEST_CASE("plugin diff: a top-level cover, grid or item piece redraws with Quality, as a shelf does") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    for (const char* piece : {R"({"kind":"cover","item":"B","width":"20%"})",
+                              R"({"kind":"grid","columns":3,"children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"}]})",
+                              R"({"kind":"item","item":"B","child":{"kind":"cover","item":"B","width":"20%"}})"}) {
+        INFO(piece);
+        const std::string j = std::string(R"({"kind":"column","children":[{"kind":"text","text":"Shelf","style":"label"},)") + piece + "]}";
+        Rows before, after;
+        after.rows["B"].progress = 0.5;
+        const Block a = tree(j), b = tree(j);
+        const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &after);
+        CHECK(diffTrees(la, layoutTree(b, blocksArea(), 0, &before)).empty());
+        const auto d = diffTrees(la, lb);
+        REQUIRE(d.size() == 1);
+        CHECK(d[0].rect == lb.children[1].rect);
+        CHECK(d[0].wave == Waveform::Quality);
+    }
+}

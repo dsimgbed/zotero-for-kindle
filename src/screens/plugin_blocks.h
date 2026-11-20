@@ -91,11 +91,11 @@ Rect blocksArea();
 // `items` resolves the refs of items blocks, covers and item pieces (once per layout); without it
 // items blocks take no room and draw nothing, covers are blank and item pieces inert.
 //
-// `package` is the plugin's folder: an image's `src` is a path in it. Its PNG (at most 2 MB) is
-// loaded once while any laid tree holds it, in greys; a missing or unreadable one (or no package)
+// `package` is the plugin's folder: an image's `src` is a path in it. Its PNG (at most 2 MB, 4 megapixels
+// and 4096 px a side, read from its header before decoding) is loaded once while any laid tree holds it, in greys; a missing or unreadable one (or no package)
 // takes no room, and is logged once.
 //
-// 0.12's pieces: a cover is 2:3 at its width; a progress bar 6 px tall; a cover's, a progress bar's
+// 0.12's pieces: a cover is 2:3 at its width (in a stretched row, at the top of its slot); a progress bar 6 px tall; a cover's, a progress bar's
 // or an image's own `width` is a percent of what its parent gives it (in a row, the row sizes it).
 // An item piece is its child, hit as the item (Hit::kind Item); while its file downloads, the
 // status is drawn in a bar over the piece's bottom. A grid's cells are equal, in rows as tall as

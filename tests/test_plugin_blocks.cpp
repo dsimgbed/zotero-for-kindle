@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 
@@ -1445,4 +1446,62 @@ TEST_CASE("plugin primitives: golden on PW5 — a desk grid (auto columns at 22%
                                           json{{"kind", "text"}, {"text", "Desk"}, {"caps", true}, {"style", "label"}}, desk}));
     drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
     checkGolden(c, "tests/golden/plugin-primitives-grid.png");
+}
+
+TEST_CASE("plugin primitives: a cover in a stretched row stays 2:3, at the top of its slot") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(1);
+    const Block t = columnOf(json::parse(R"([{"kind":"row","align":"stretch","children":[
+      {"kind":"cover","item":"S0","width":"20%"},
+      {"kind":"text","text":"A\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nZ"}]}])"));
+    const Laid l = layoutTree(t, {0, 0, 1000, 1 << 20}, 0, &items);
+    const Laid& row = l.children.at(0);
+    const Rect cover = row.children.at(0).rect;
+    REQUIRE(row.rect.h > cover.w * 3 / 2);  // the row is taller than the cover
+    CHECK(cover.y == row.rect.y);
+    CHECK(cover.h == cover.w * 3 / 2);
+    // Nothing drawn under it.
+    Canvas c(1000, row.rect.h + 40);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawTree(c.cr(), l, {}, &items);
+    const auto g = grayOf(c);
+    CHECK(g[(size_t)(cover.y + cover.h + 20) * c.width() + cover.x + cover.w / 2] == 255);
+}
+
+TEST_CASE("plugin primitives: an image over 4 megapixels or 4096 px a side is refused before decoding (no room)") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Package pkg;
+    // A PNG signature and an IHDR claiming the size, nothing more: refused on the header alone.
+    const auto header = [&](const char* name, uint32_t w, uint32_t h) {
+        std::string s("\x89PNG\r\n\x1a\n", 8);
+        s += std::string("\0\0\0\x0d", 4) + "IHDR";
+        for (uint32_t v : {w, h})
+            for (int sh = 24; sh >= 0; sh -= 8) s += static_cast<char>((v >> sh) & 0xff);
+        s += std::string("\x08\x02\0\0\0", 5) + std::string(4, '\0');
+        std::ofstream(pkg.dir / name, std::ios::binary) << s;
+    };
+    header("huge.png", 30000, 20000);  // 600 MP: refused before any decoding
+    header("wide.png", 5000, 10);      // a side over 4096
+    // Real PNGs a few KB small (one colour compresses well) that would decode to 24 MB and over 4096 px.
+    const auto real = [&](const char* name, int w, int h) {
+        cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+        REQUIRE(cairo_surface_write_to_png(s, (pkg.dir / name).c_str()) == CAIRO_STATUS_SUCCESS);
+        cairo_surface_destroy(s);
+        CHECK(std::filesystem::file_size(pkg.dir / name) < (2u << 20));
+    };
+    real("big.png", 3000, 2000);  // 6 MP
+    real("long.png", 4100, 100);  // 0.4 MP, but a side over 4096
+    real("edge.png", 4096, 1000);  // just inside: loads
+    const Block t = columnOf(json::parse(R"([{"kind":"image","src":"huge.png"},{"kind":"image","src":"wide.png"},
+      {"kind":"image","src":"big.png"},{"kind":"image","src":"long.png"},{"kind":"image","src":"edge.png"},
+      {"kind":"image","src":"img/logo.png"}])"));
+    const Laid l = layoutTree(t, {0, 0, 1000, 4000}, 0, nullptr, pkg.dir.string());
+    for (int i = 0; i < 4; ++i) {
+        INFO(i);
+        CHECK(l.children.at(i).rect.h == 0);
+    }
+    CHECK(l.children.at(4).rect.h == 1000 * 1000 / 4096);
+    CHECK(l.children.at(5).rect.h == 500);  // a small one still loads
 }

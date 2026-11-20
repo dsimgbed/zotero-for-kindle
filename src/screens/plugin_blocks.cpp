@@ -1,7 +1,9 @@
 #include "screens/plugin_blocks.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <numeric>
 #include <set>
 #include <utility>
@@ -225,6 +227,9 @@ struct PluginImage {
 namespace {
 
 constexpr uintmax_t kMaxImageBytes = 2u << 20;
+// What a PNG may decode to: a small file can hold a huge picture, so its header is read first.
+constexpr uint64_t kMaxImagePixels = 4u << 20;
+constexpr uint32_t kMaxImageSide = 4096;
 const std::string* gPackage = nullptr;
 std::map<const Block*, std::shared_ptr<const PluginImage>>* gImages = nullptr;
 
@@ -234,6 +239,20 @@ std::shared_ptr<const PluginImage> loadGreyPng(const std::string& path, std::str
     const uintmax_t bytes = std::filesystem::file_size(path, ec);
     if (ec) return *why = "not found", nullptr;
     if (bytes > kMaxImageBytes) return *why = "over 2 MB", nullptr;
+    {  // the signature, then IHDR's width and height (big-endian), before any decoding
+        unsigned char head[24] = {};
+        std::ifstream in(path, std::ios::binary);
+        in.read(reinterpret_cast<char*>(head), sizeof head);
+        static const unsigned char kSig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+        if (in.gcount() != sizeof head || std::memcmp(head, kSig, 8) != 0 || std::memcmp(head + 12, "IHDR", 4) != 0)
+            return *why = "not a PNG", nullptr;
+        const auto be = [&](int at) {
+            return uint32_t{head[at]} << 24 | uint32_t{head[at + 1]} << 16 | uint32_t{head[at + 2]} << 8 | head[at + 3];
+        };
+        const uint32_t w = be(16), h = be(20);
+        if (w > kMaxImageSide || h > kMaxImageSide || uint64_t{w} * h > kMaxImagePixels)
+            return *why = std::to_string(w) + "x" + std::to_string(h) + " px: over 4 megapixels or 4096 px a side", nullptr;
+    }
     cairo_surface_t* png = cairo_image_surface_create_from_png(path.c_str());
     if (cairo_surface_status(png) != CAIRO_STATUS_SUCCESS) {
         cairo_surface_destroy(png);
@@ -700,7 +719,10 @@ Laid place(const Block& b, Rect r, int first, int count) {
             l.children.push_back(placeChild(b.children[0], inner, 0, static_cast<int>(u.h.size())));
             break;
         }
-        case K::Cover: l.items = resolved(b).rows; break;
+        case K::Cover:  // 2:3 always: in a stretched row, at the top of its slot
+            l.rect.h = std::min(r.h, r.w * 3 / 2);
+            l.items = resolved(b).rows;
+            break;
         case K::Image: l.image = imageOf(b); break;
         case K::Item: {  // its child fills it; the item's row (if its ref resolved) is the part hit and repainted
             l.items = resolved(b).rows;

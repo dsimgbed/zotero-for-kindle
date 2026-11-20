@@ -28,6 +28,9 @@ Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
         case K::Deck: return a->block->children == b->block->children ? Waveform::Fast : Waveform::Quality;
         case K::Card: return Waveform::Quality;
         case K::Items: return a->block->itemStyle != Block::ItemStyle::Row ? Waveform::Quality : Waveform::Ui;  // covers: Quality
+        case K::Cover:  // 0.12's pieces: covers too, as a shelf's
+        case K::Grid:
+        case K::Item: return Waveform::Quality;
         case K::Text:
         case K::Notice:
         case K::Quote: return a->rect == b->rect ? Waveform::Fast : Waveform::Ui;
