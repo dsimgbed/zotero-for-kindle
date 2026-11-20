@@ -142,6 +142,23 @@ TEST_CASE("push triggers: changes made close together go up once, a delay after 
     CHECK(rig.ui->dirtyAnnotations().empty());
 }
 
+TEST_CASE("push triggers: a push that falls in Zotero's quiet goes up when it ends") {
+    // Final wave: the push was dropped, so with Sync every Off the edits waited for a tap.
+    Rig rig;
+    rig.start(50);
+    rig.pullFirst();
+    const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    rig.ui->setMetaValue("zoteroWaitUntil", std::to_string(nowMs + 800));
+    rig.newHighlight("written during the wait");
+    rig.service->pushSoon();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rig.count("POST ") == 0);  // not asked during the wait
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::PushFinished), 4000);
+    CHECK_FALSE(events.back().error);
+    CHECK(rig.count("POST ") == 1);
+    CHECK(rig.ui->dirtyAnnotations().empty());
+}
+
 TEST_CASE("push triggers: a sync sends unsent changes before pulling") {
     Rig rig;
     rig.start(60'000);

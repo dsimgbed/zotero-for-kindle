@@ -25,6 +25,7 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
+constexpr int64_t kMaxZoteroWaitS = 24 * 3600;  // longer asks (or a clock that was ahead) never lock sync out for more
 constexpr const char* kZoteroWaitMeta = "zoteroWaitUntil";  // wall ms Zotero asked not to be asked before
 
 // Puts the service's cancel flag on every request and refuses new ones once it is set.
@@ -262,7 +263,7 @@ void SyncService::run() {
         if (lib->userId() == 0 && deps_.config.userId > 0) lib->setUser(deps_.config.userId, "");
         w.rate.setSleeper([this](int s) { return sleepFor(s); });  // stop() cuts it short
         // A long wait Zotero asks for isn't slept: no sync asks before it is over (zoteroWaitUntil).
-        w.rate.setOnGiveUp([this, lib](int s) { lib->setMetaValue(kZoteroWaitMeta, std::to_string(deps_.wallMs() + int64_t{s} * 1000)); });
+        w.rate.setOnGiveUp([this, lib](int s) { lib->setMetaValue(kZoteroWaitMeta, std::to_string(deps_.wallMs() + std::min<int64_t>(s, kMaxZoteroWaitS) * 1000)); });
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setRateLimiter(w.rate);
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
@@ -338,7 +339,12 @@ void SyncService::run() {
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
                 case Command::Kind::Push: {
-                    if (zoteroWaitUntil(w)) break;  // the edits stay unsent; the first sync after it sends them
+                    if (const auto until = zoteroWaitUntil(w)) {
+                        // The edits wait for Zotero's quiet to end, then go up: re-armed for then.
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        if (!pushDue_) pushDue_ = Clock::now() + std::chrono::milliseconds(*until - deps_.wallMs() + 1);
+                        break;
+                    }
                     std::vector<int64_t> passed;
                     const SyncReport pushed = pushChanges(w, &passed);
                     recordGroupErrors(*w.lib, passed, pushed);
@@ -556,7 +562,12 @@ std::optional<int64_t> SyncService::zoteroWaitUntil(Worker& w) {
     } catch (...) {
         return std::nullopt;
     }
-    if (until <= deps_.wallMs()) return std::nullopt;
+    const int64_t now = deps_.wallMs();
+    if (until <= now) return std::nullopt;
+    if (until > now + kMaxZoteroWaitS * 1000) {  // set while the clock was ahead, or the clock was reset since
+        w.lib->setMetaValue(kZoteroWaitMeta, "");
+        return std::nullopt;
+    }
     return until;
 }
 

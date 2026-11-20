@@ -955,6 +955,40 @@ TEST_CASE("kept: files from Zotero storage aren't asked for while Zotero asked f
     CHECK(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
 }
 
+TEST_CASE("sync service: a stored Zotero wait months away is no wait (a clock that was ahead)") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.setMetaValue("zoteroWaitUntil", std::to_string(rig.wallMs + int64_t{90} * 24 * 3600 * 1000));
+    }
+    rig.service->syncNow();
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK_FALSE(events.back().error);
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.metaValue("zoteroWaitUntil").empty());  // cleared, not kept
+}
+
+TEST_CASE("sync service: a Zotero wait asked for is stored at most a day") {
+    Rig rig;
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (r.url.rfind("https://api.zotero.org/", 0) == 0) return FakeHttp::status(429, {{"retry-after", "9999999"}});
+        return base(r);
+    };
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    const int64_t until = std::stoll(ui.metaValue("zoteroWaitUntil"));
+    CHECK(until <= rig.wallMs + int64_t{24} * 3600 * 1000);
+    CHECK(until > rig.wallMs);
+}
+
 TEST_CASE("kept: a stalled file no longer kept, or gone, is off the stalled list") {
     KeptRig rig;
     rig.startOnZotero();
