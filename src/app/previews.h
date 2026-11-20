@@ -35,4 +35,10 @@ PluginEvents::PreviewOpener previewOpener(PreviewCache& cache, std::function<Plu
 int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, const EngineEnv&, Version,
                      const std::string& id, const std::string& screenId, int page, const std::string& out);
 
+// Dev only (desktop --screenshot home --home ID/SCREEN): Home as the app draws it with that
+// plugin screen as its body (Settings → Home), through the app's own HomeScreen and PluginHome, once
+// the plugin's first tree has come (or after 5 s: 1, Home's built-in body drawn). 0 on success.
+int homeScreenshot(const std::string& pluginsDir, const std::string& dbPath, const EngineEnv&, Version,
+                   const std::string& id, const std::string& screenId, const std::string& out);
+
 }  // namespace zk

@@ -4,7 +4,9 @@
 //          [--enable-plugin ID]... (desktop, with --plugins-dir) turn these plugins on in DIR
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
 //          (also reader:KEY[:page][:menus]; preview:FILE[:page][:menus] [--title T]; desktop, dev only:
-//          plugin:ID:SCREEN[:page] with --plugins-dir DIR)
+//          plugin:ID:SCREEN[:page] with --plugins-dir DIR, its items blocks read from --db;
+//          home --home ID/SCREEN with --plugins-dir DIR: Home with that plugin screen as its body,
+//          drawn by the app's own Home once the plugin's first tree came)
 //                                                  render a screen to a PNG and exit; also library:filter,
 //                                                  collections:group:<id>, settings:groups[:remove:<id>|:off:<id>],
 //                                                  reader:<attachment>[:page][:menus|:annotation:<key>]
@@ -106,6 +108,7 @@ bool gPluginDevLoop = false;
 std::vector<std::string> gEnablePlugins;  // --enable-plugin <id>, developer mode only
 std::string gShotPluginsDir;              // --screenshot plugin:… (desktop): the --plugins-dir to load from
 std::string gShotTitle;                   // --screenshot preview:… --title T: the previewed document's title
+std::string gShotHome;                    // --screenshot home --home ID/SCREEN (desktop): the plugin body to draw
 
 // The plugin host's settings for this run (safe mode decides whether start() is called at all).
 PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
@@ -204,6 +207,16 @@ int screenshot(std::string screen, const std::string& out, const std::string& db
         }
         return pluginScreenshot(gShotPluginsDir, dbPath, kEngineEnv, appVersion(), id, screenId,
                                 b == std::string::npos ? 0 : std::atoi(screen.c_str() + b + 1), out);
+    }
+    // home --home <id>/<screen> (with --plugins-dir): Home with that plugin screen as its body.
+    if (screen == "home" && !gShotHome.empty()) {
+        const size_t slash = gShotHome.find('/');
+        if (gShotPluginsDir.empty() || slash == std::string::npos) {
+            log(LogLevel::Error, "--home %s: needs --plugins-dir and ID/SCREEN", gShotHome.c_str());
+            return 2;
+        }
+        return homeScreenshot(gShotPluginsDir, dbPath, kEngineEnv, appVersion(), gShotHome.substr(0, slash),
+                              gShotHome.substr(slash + 1), out);
     }
 #endif
     ReaderScreen* reader = nullptr;
@@ -392,8 +405,10 @@ int main(int argc, char** argv) {
         std::printf("%zu families in %.0f ms\n", fonts.size(), ms);
         return 0;
     }
-    for (int i = 1; i + 1 < argc; ++i)
+    for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--title")) gShotTitle = argv[i + 1];
+        if (!std::strcmp(argv[i], "--home")) gShotHome = argv[i + 1];
+    }
 #ifndef ZK_KINDLE
     if (gPluginDevLoop) gShotPluginsDir = paths.pluginsDir;
 #endif
