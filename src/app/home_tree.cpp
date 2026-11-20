@@ -114,6 +114,7 @@ void PluginHome::shown(Nav& nav, std::function<Rect(Nav&)> area, std::function<R
     body_ = std::make_unique<PluginBody>(
         *this, o.instance, o.pluginName, o.title, [this](Nav& n) { return area_(n); }, TreeUse::HomeBody, items_, tap_);
     body_->setWindow([this] { return window_(); });
+    body_->setPackage(o.package);
 }
 
 void PluginHome::synced() {

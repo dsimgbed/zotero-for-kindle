@@ -19,7 +19,7 @@
 //   out in the area the owner gives (it keeps them above the keyboard), on the page that holds the
 //   focused input.
 // - Each new tree redraws only the top-level blocks that changed (diffTrees picks the waveforms).
-// - Items (the `items` block): a tap opens the item the app's way (ItemTap::open), nothing goes to
+// - Items (the `items` block, and 0.12's item pieces): a tap opens the item the app's way (ItemTap::open), nothing goes to
 //   the plugin; a long-press shows the item sheet over the whole window (Changed: the blocks are
 //   laid out again, the rows read afresh). When the body shows again after an item was opened (by
 //   a tap, or by the plugin's zk.library.open), `{kind: "reader", closed: true}` goes to the plugin.
@@ -91,6 +91,8 @@ public:
     void onPluginClose(std::function<void(Nav&)> f) { pluginClose_ = std::move(f); }
     // What the item sheet and the error pop-up cover (default: the whole window).
     void setWindow(std::function<Rect()> f) { window_ = std::move(f); }
+    // The plugin's folder, where its images are (layoutTree's `package`; none: images take no room).
+    void setPackage(std::string dir) { package_ = std::move(dir); }
 
     // The Shown state's blocks, the item sheet and "Working…"; the error pop-up in any state.
     // Paints nothing else (the owner fills the background and draws Loading/Failed).
@@ -144,6 +146,7 @@ private:
     const std::string pluginName_, title_;
     Area area_;
     const TreeUse use_;
+    std::string package_;
     std::function<void(Nav&)> pluginClose_;
     std::function<Rect()> window_;
     State state_ = State::Loading;

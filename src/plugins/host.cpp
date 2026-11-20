@@ -2137,6 +2137,8 @@ bool PluginHost::poll(PluginHostEvent& out) {
     return true;
 }
 
+std::string PluginHost::packageDir(const std::string& id) const { return (fs::path(impl_->deps.pluginsDir) / id).string(); }
+
 std::vector<PluginStatus> PluginHost::status() const {
     Impl& h = *impl_;
     std::vector<PluginStatus> out;

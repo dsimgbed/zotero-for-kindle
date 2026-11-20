@@ -73,11 +73,11 @@ void PluginBody::relayout(Nav& nav) {
     if (!tree_) return;
     const Rect a = area(nav);
     laidIn_ = a;
-    laid_ = layoutTree(*tree_, a, page_, items_);
+    laid_ = layoutTree(*tree_, a, page_, items_, package_);
     page_ = laid_.page;
     if (focus_.focused.empty() || findLaid(laid_, focus_.focused)) return;
     for (int p = 0; p < laid_.pages; ++p) {  // the page that holds the focused input
-        Laid l = layoutTree(*tree_, a, p, items_);
+        Laid l = layoutTree(*tree_, a, p, items_, package_);
         if (findLaid(l, focus_.focused)) {
             laid_ = std::move(l);
             page_ = p;
@@ -317,7 +317,7 @@ void PluginBody::turnPage(int delta, Nav& nav) {
     const Laid before = std::move(laid_);
     page_ = np;
     laidIn_ = area(nav);
-    laid_ = layoutTree(*tree_, laidIn_, page_, items_);
+    laid_ = layoutTree(*tree_, laidIn_, page_, items_, package_);
     if (!focus_.focused.empty() && !findLaid(laid_, focus_.focused)) {
         setFocus("", nav);  // its input went off the page: the keyboard goes
         return;
@@ -336,6 +336,7 @@ void PluginBody::tapBlocks(Point p, Nav& nav) {
         case K::Quote:   // one with an id (0.11)
         case K::Text:    // one with an id: a link (0.12)
         case K::Box:     // one with an id (0.12)
+        case K::Image:   // one with an id (0.12)
             enqueue({{"kind", "tap"}, {"id", hit->id}}, nav);
             break;
         case K::List: enqueue({{"kind", "select"}, {"id", hit->id}, {"row", hit->part}}, nav); break;
@@ -358,6 +359,7 @@ void PluginBody::tapBlocks(Point p, Nav& nav) {
             break;
         }
         case K::Items:
+        case K::Item:  // an item piece (0.12): as an items block's item
             if (hit->item) openItem(*hit->item);
             break;
         case K::Search:
@@ -378,7 +380,7 @@ void PluginBody::onGesture(const Gesture& g, Nav& nav) {
     if (state_ != State::Shown) return;
     if (g.type == GestureType::LongPress) {
         const auto hit = hitTest(laid_, g.pos);
-        if (hit && hit->kind == K::Items && hit->item)
+        if (hit && (hit->kind == K::Items || hit->kind == K::Item) && hit->item)
             if (auto d = nav.library().details(hit->item->key)) {
                 sheet_.emplace(*hit->item, std::move(*d));
                 nav.damage(sheetArea(), Waveform::Ui);

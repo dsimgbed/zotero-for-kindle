@@ -235,6 +235,9 @@ public:
     HttpResponse previewDownload(const std::string& pluginId, HttpRequest req, size_t maxBytes, int timeoutMs) const;
     bool poll(PluginHostEvent&);
     std::vector<PluginStatus> status() const;
+    // A plugin's package: the folder its files are in (<pluginsDir>/<id>), where its screens'
+    // images are. Any thread.
+    std::string packageDir(const std::string& id) const;
     // Turning a plugin on clears its failures; turning it off unloads it. Ignored for an id that
     // isn't a listed folder, and turning on for a folder with a problem (broken, incompatible).
     void setEnabled(const std::string& id, bool);

@@ -1,11 +1,14 @@
 #include "screens/plugin_blocks.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
+#include <set>
 #include <utility>
 
 #include <glib.h>
 
+#include "core/log.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -202,6 +205,116 @@ const Resolved& resolved(const Block& b) {
     return (*gResolved)[&b] = std::move(r);
 }
 
+// ── Images (0.12): a PNG from the plugin's package, in greys ──
+//
+// Kept while any laid tree holds one (Laid::image), found again by its path; while layoutTree runs,
+// the ones it has used are held per block (as items are), so a layout reads each file at most once.
+}  // namespace
+
+struct PluginImage {
+    cairo_surface_t* surface = nullptr;  // ARGB32, premultiplied, every pixel grey
+    int w = 0, h = 0;
+    PluginImage() = default;
+    PluginImage(const PluginImage&) = delete;
+    PluginImage& operator=(const PluginImage&) = delete;
+    ~PluginImage() {
+        if (surface) cairo_surface_destroy(surface);
+    }
+};
+
+namespace {
+
+constexpr uintmax_t kMaxImageBytes = 2u << 20;
+const std::string* gPackage = nullptr;
+std::map<const Block*, std::shared_ptr<const PluginImage>>* gImages = nullptr;
+
+// The PNG at `path` in greys (alpha kept), or null and *why.
+std::shared_ptr<const PluginImage> loadGreyPng(const std::string& path, std::string* why) {
+    std::error_code ec;
+    const uintmax_t bytes = std::filesystem::file_size(path, ec);
+    if (ec) return *why = "not found", nullptr;
+    if (bytes > kMaxImageBytes) return *why = "over 2 MB", nullptr;
+    cairo_surface_t* png = cairo_image_surface_create_from_png(path.c_str());
+    if (cairo_surface_status(png) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(png);
+        return *why = "not a PNG that can be read", nullptr;
+    }
+    auto img = std::make_shared<PluginImage>();
+    img->w = cairo_image_surface_get_width(png);
+    img->h = cairo_image_surface_get_height(png);
+    if (img->w <= 0 || img->h <= 0) {
+        cairo_surface_destroy(png);
+        return *why = "empty", nullptr;
+    }
+    img->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, img->w, img->h);
+    cairo_t* cr = cairo_create(img->surface);
+    cairo_set_source_surface(cr, png, 0, 0);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    cairo_surface_destroy(png);
+    cairo_surface_flush(img->surface);
+    unsigned char* data = cairo_image_surface_get_data(img->surface);
+    const int stride = cairo_image_surface_get_stride(img->surface);
+    for (int y = 0; y < img->h; ++y) {
+        auto* px = reinterpret_cast<uint32_t*>(data + static_cast<ptrdiff_t>(y) * stride);
+        for (int x = 0; x < img->w; ++x) {
+            const uint32_t p = px[x];
+            const uint32_t r = (p >> 16) & 0xff, g = (p >> 8) & 0xff, b = p & 0xff;
+            const uint32_t l = (r * 77 + g * 150 + b * 29) >> 8;  // premultiplied: never over alpha
+            px[x] = (p & 0xff000000u) | (l << 16) | (l << 8) | l;
+        }
+    }
+    cairo_surface_mark_dirty(img->surface);
+    return img;
+}
+
+// An image block's picture: null (no room) when there is no package or its PNG can't be had.
+std::shared_ptr<const PluginImage> imageOf(const Block& b) {
+    if (!gImages) return nullptr;
+    if (auto it = gImages->find(&b); it != gImages->end()) return it->second;
+    std::shared_ptr<const PluginImage> img;
+    if (gPackage && !gPackage->empty()) {
+        static std::map<std::string, std::weak_ptr<const PluginImage>> kept;
+        static std::set<std::string> logged;
+        const std::string path = *gPackage + "/" + b.src;
+        if (auto k = kept.find(path); k != kept.end()) img = k->second.lock();
+        if (!img) {
+            for (auto it = kept.begin(); it != kept.end();)  // the images no tree holds any more
+                it = it->second.expired() ? kept.erase(it) : std::next(it);
+            std::string why;
+            img = loadGreyPng(path, &why);
+            if (img) kept[path] = img;
+            else if (logged.insert(path).second) log(LogLevel::Warn, "plugin image %s: %s", path.c_str(), why.c_str());
+        }
+    }
+    return (*gImages)[&b] = img;
+}
+
+// ── 0.12's pieces: own widths, covers, progress bars, grids ──
+
+// A cover's, a progress bar's or an image's own width in `w` (what its parent gives it, not a row:
+// a row sizes its children itself): a percent of it; an image's auto, its pixels' (at most w).
+int ownW(const Block& b, int w) {
+    if (b.kind != K::Cover && b.kind != K::Progress && b.kind != K::Image) return w;
+    if (b.width == Block::Width::Percent) return std::max(1, w * b.widthPct / 100);
+    if (b.kind == K::Image && b.width == Block::Width::Auto)
+        if (auto img = imageOf(b)) return std::min(w, img->w);
+    return w;
+}
+
+constexpr int kProgressH = 6, kStatusBarH = 40;
+const TextStyle kStatusBar{kSans, 6.5, 500};
+constexpr uint8_t kBlankCover = 214;
+
+int gridColumns(const Block& g, int w) {
+    if (g.columns > 0) return g.columns;
+    return std::max(1, w / std::max(1, w * g.minWidthPct / 100));
+}
+int gridCellW(const Block& g, int w) {
+    const int n = gridColumns(g, w);
+    return std::max(1, (w - gapPx(g.gap) * (n - 1)) / n);
+}
+
 // A card is as tall as Home's (cover 400), a gap under it; a row is the app's row.
 constexpr int kItemCardH = 400, kItemCardGap = 36;
 bool itemCards(const Block& b) { return b.itemStyle == Block::ItemStyle::Card; }
@@ -271,6 +384,30 @@ struct Units {
 };
 
 int naturalH(const Block& b, int w);
+Units unitsOf(const Block& b, int w);
+Laid place(const Block& b, Rect r, int first, int count);
+
+// A child of anything but a row (a column's, a box's, an item piece's, a grid cell): sized by its own width.
+Units childUnits(const Block& c, int w) { return unitsOf(c, ownW(c, w)); }
+Laid placeChild(const Block& c, Rect r, int first, int count) {
+    r.w = ownW(c, r.w);
+    return place(c, r, first, count);
+}
+
+// The height of each of a grid's rows (all of them, or at most `rows`): its tallest cell's, cells `cellW` wide.
+std::vector<int> gridRowHs(const Block& g, int w) {
+    const size_t n = static_cast<size_t>(gridColumns(g, w));
+    const int cellW = gridCellW(g, w);
+    std::vector<int> hs;
+    for (size_t i = 0; i < g.children.size(); ++i) {
+        if (i % n == 0) {
+            if (g.maxRows > 0 && static_cast<int>(hs.size()) == g.maxRows) break;
+            hs.push_back(0);
+        }
+        hs.back() = std::max(hs.back(), childUnits(g.children[i], cellW).natural());
+    }
+    return hs;
+}
 
 std::vector<int> diffs(const std::vector<int>& tops) {
     std::vector<int> h;
@@ -299,6 +436,11 @@ int naturalW(const Block& b, int w) {
             return most;
         }
         case K::Spacer: return 0;
+        case K::Item: return b.children.empty() ? 0 : naturalW(b.children[0], w);
+        case K::Image: {
+            auto img = imageOf(b);
+            return img ? std::min(w, img->w) : 0;
+        }
         default: return w;
     }
 }
@@ -421,6 +563,16 @@ Units unitsOf(const Block& b, int w) {
             for (int i = 0; i < lines; ++i) u.h.push_back(kChipH + (i + 1 < lines ? kChipGapY : 0));
             break;
         }
+        case K::Grid: {  // its rows are its page units; with `rows`, one whole that never pages
+            const auto hs = gridRowHs(b, w);
+            const int gap = gapPx(b.gap);
+            for (size_t i = 0; i < hs.size(); ++i) u.h.push_back(hs[i] + (i + 1 < hs.size() ? gap : 0));
+            if (b.maxRows > 0) {
+                u.head = u.sum();
+                u.h.clear();
+            }
+            break;
+        }
         default: u.head = naturalH(b, w);
     }
     return u;
@@ -430,7 +582,7 @@ int naturalH(const Block& b, int w) {
     switch (b.kind) {
         case K::Column: {
             int h = 0;
-            for (size_t i = 0; i < b.children.size(); ++i) h += (i ? gapPx(b.gap) : 0) + unitsOf(b.children[i], w).natural();
+            for (size_t i = 0; i < b.children.size(); ++i) h += (i ? gapPx(b.gap) : 0) + childUnits(b.children[i], w).natural();
             return h;
         }
         case K::Row: {
@@ -458,13 +610,15 @@ int naturalH(const Block& b, int w) {
         case K::Box: {
             OnInk ink(b);
             const int in = boxInset(b);
-            return 2 * in + (b.children.empty() ? 0 : unitsOf(b.children[0], std::max(1, w - 2 * in)).natural());
+            return 2 * in + (b.children.empty() ? 0 : childUnits(b.children[0], std::max(1, w - 2 * in)).natural());
         }
-        case K::Cover:  // laid out by the next tasks; until then no room
-        case K::Progress:
-        case K::Item:
-        case K::Grid:
-        case K::Image: return 0;
+        case K::Cover: return w * 3 / 2;
+        case K::Progress: return kProgressH;
+        case K::Item: return b.children.empty() ? 0 : childUnits(b.children[0], w).natural();
+        case K::Image: {
+            auto img = imageOf(b);
+            return img ? w * img->h / img->w : 0;
+        }
         default: return unitsOf(b, w).natural();
     }
 }
@@ -484,15 +638,13 @@ std::vector<std::pair<int, int>> split(const std::vector<int>& h, int budget) {
     return pages;
 }
 
-Laid place(const Block& b, Rect r, int first, int count);
-
 // A column's children top to bottom. A column given more than its natural height (one stretched in
 // a row) shares what is left between its spacers.
 std::vector<Laid> stack(const std::vector<Block>& kids, Rect r, int gap) {
     std::vector<Units> units;
     int total = 0, spacers = 0;
     for (size_t i = 0; i < kids.size(); ++i) {
-        units.push_back(unitsOf(kids[i], r.w));
+        units.push_back(childUnits(kids[i], r.w));
         total += (i ? gap : 0) + units.back().natural();
         if (kids[i].kind == K::Spacer) ++spacers;
     }
@@ -504,7 +656,7 @@ std::vector<Laid> stack(const std::vector<Block>& kids, Rect r, int gap) {
         int h = units[i].natural();
         if (kids[i].kind == K::Spacer) h = spare / spacers + (static_cast<int>(k++) < spare % spacers ? 1 : 0);
         h = std::min(h, r.y + r.h - y);
-        out.push_back(place(kids[i], {r.x, y, r.w, h}, 0, static_cast<int>(units[i].h.size())));
+        out.push_back(placeChild(kids[i], {r.x, y, r.w, h}, 0, static_cast<int>(units[i].h.size())));
         y += h + gap;
     }
     return out;
@@ -544,8 +696,35 @@ Laid place(const Block& b, Rect r, int first, int count) {
             OnInk ink(b);
             const int in = boxInset(b);
             const Rect inner{r.x + in, r.y + in, std::max(0, r.w - 2 * in), std::max(0, r.h - 2 * in)};
-            const Units u = unitsOf(b.children[0], inner.w);
-            l.children.push_back(place(b.children[0], inner, 0, static_cast<int>(u.h.size())));
+            const Units u = childUnits(b.children[0], inner.w);
+            l.children.push_back(placeChild(b.children[0], inner, 0, static_cast<int>(u.h.size())));
+            break;
+        }
+        case K::Cover: l.items = resolved(b).rows; break;
+        case K::Image: l.image = imageOf(b); break;
+        case K::Item: {  // its child fills it; the item's row (if its ref resolved) is the part hit and repainted
+            l.items = resolved(b).rows;
+            if (!l.items.empty()) l.parts.push_back({0, r, l.items[0]});
+            if (b.children.empty()) break;
+            const Units u = childUnits(b.children[0], r.w);
+            l.children.push_back(placeChild(b.children[0], r, 0, static_cast<int>(u.h.size())));
+            break;
+        }
+        case K::Grid: {  // the rows first..first+count (with `rows`: all it shows), cells cut at the bottom
+            const auto hs = gridRowHs(b, r.w);
+            const int n = gridColumns(b, r.w), cellW = gridCellW(b, r.w), gap = gapPx(b.gap);
+            const int last = b.maxRows > 0 ? static_cast<int>(hs.size()) : std::min<int>(first + count, static_cast<int>(hs.size()));
+            int y = r.y;
+            for (int row = b.maxRows > 0 ? 0 : first; row < last && y < r.y + r.h; ++row) {
+                for (int c = 0; c < n; ++c) {
+                    const size_t i = static_cast<size_t>(row) * n + c;
+                    if (i >= b.children.size()) break;
+                    const Units u = childUnits(b.children[i], cellW);
+                    const int h = std::min(u.natural(), r.y + r.h - y);
+                    l.children.push_back(placeChild(b.children[i], {r.x + c * (cellW + gap), y, cellW, h}, 0, static_cast<int>(u.h.size())));
+                }
+                y += hs[row] + gap;
+            }
             break;
         }
         case K::Items: {
@@ -776,11 +955,34 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             break;
         }
         case K::Spacer: break;
-        case K::Cover:  // 0.12 primitives: drawn by the next tasks
-        case K::Progress:
-        case K::Item:
+        case K::Cover:
+            if (l.items.empty()) fillRect(cr, r, kBlankCover);  // its ref didn't resolve: blank
+            else drawCover(cr, r, l.items[0]);
+            break;
+        case K::Progress: progressBar(cr, {r.x, r.y, r.w, std::min(r.h, kProgressH)}, b.fraction); break;
         case K::Grid:
-        case K::Image: break;
+            for (const auto& c : l.children) drawLaid(cr, c, f);
+            break;
+        case K::Item: {
+            for (const auto& c : l.children) drawLaid(cr, c, f);
+            const std::string status = !l.items.empty() && gDrawSource ? gDrawSource->status(l.items[0].attachmentKey) : "";
+            if (!status.empty()) {  // a download's progress or error, over the piece's bottom
+                const Rect bar = Rect{r.x, r.y + r.h - kStatusBarH, r.w, kStatusBarH}.intersected(r);
+                fillRect(cr, bar, 255);
+                centredText(cr, status, kStatusBar, {bar.x + 10, bar.y, bar.w - 20, bar.h}, Align::Left);
+            }
+            break;
+        }
+        case K::Image:
+            if (l.image) {
+                cairo_translate(cr, r.x, r.y);
+                const double scale = static_cast<double>(r.w) / l.image->w;  // aspect kept; a cut one is cropped
+                cairo_scale(cr, scale, scale);
+                cairo_set_source_surface(cr, l.image->surface, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+                cairo_paint(cr);
+            }
+            break;
     }
     cairo_restore(cr);
 }
@@ -797,9 +999,13 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
         case K::Deck: hit = Hit{b.id, "", b.kind, l.rect}; break;
         case K::Notice:
         case K::Quote:
-        case K::Text:  // a link (0.12)
-        case K::Box:   // a custom button, a segment of a switch (0.12)
+        case K::Text:   // a link (0.12)
+        case K::Box:    // a custom button, a segment of a switch (0.12)
+        case K::Image:  // (0.12)
             if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
+            break;
+        case K::Item:  // the item, as an items block's (0.12); inert when its ref didn't resolve
+            if (!l.parts.empty()) hit = Hit{b.id, l.parts[0].item->key, b.kind, l.rect, l.parts[0].item};
             break;
         case K::Buttons:
         case K::Items:
@@ -845,7 +1051,7 @@ static Laid layOut(const Block& root, Rect area, int page) {
     std::vector<Units> units;
     int total = 0;
     for (int i = 0; i < n; ++i) {
-        units.push_back(unitsOf(*kids[i], area.w));
+        units.push_back(childUnits(*kids[i], area.w));
         total += (i ? gap : 0) + units[i].natural();
     }
     Laid out;
@@ -874,7 +1080,7 @@ static Laid layOut(const Block& root, Rect area, int page) {
         for (int i = 0; i < n; ++i) {
             const int h = i == deck ? deckH : units[i].natural();
             const Rect r{area.x, y, area.w, h};
-            out.children.push_back(i == deck ? place(*kids[i], r, first, count) : place(*kids[i], r, 0, static_cast<int>(units[i].h.size())));
+            out.children.push_back(i == deck ? place(*kids[i], r, first, count) : placeChild(*kids[i], r, 0, static_cast<int>(units[i].h.size())));
             if (i == deck && out.pages > 1) out.corner = {r.x + r.w - kCardPad - kCornerW, r.y + r.h - kCardPad / 2 - kCornerH, kCornerW, kCornerH};
             y += h + gap;
         }
@@ -884,7 +1090,7 @@ static Laid layOut(const Block& root, Rect area, int page) {
     if (total <= area.h) {  // it all fits
         int y = area.y;
         for (int i = 0; i < n; ++i) {
-            out.children.push_back(place(*kids[i], {area.x, y, area.w, units[i].natural()}, 0, static_cast<int>(units[i].h.size())));
+            out.children.push_back(placeChild(*kids[i], {area.x, y, area.w, units[i].natural()}, 0, static_cast<int>(units[i].h.size())));
             y += units[i].natural() + gap;
         }
         return out;
@@ -927,7 +1133,7 @@ static Laid layOut(const Block& root, Rect area, int page) {
                 first = pg.first, count = pg.second;
                 h = u.head + budget[i] + u.tail;
             }
-            out.children.push_back(place(*kids[i], {area.x, y, area.w, h}, first, count));
+            out.children.push_back(placeChild(*kids[i], {area.x, y, area.w, h}, first, count));
             y += h + gap;
         }
         return out;
@@ -977,20 +1183,25 @@ static Laid layOut(const Block& root, Rect area, int page) {
     out.pages = static_cast<int>(pages.size());
     out.page = std::clamp(page, 0, out.pages - 1);
     for (const Seg& s : pages[out.page])
-        out.children.push_back(place(*kids[s.kid], {area.x, area.y + s.y, area.w, s.h}, s.first, s.count));
+        out.children.push_back(placeChild(*kids[s.kid], {area.x, area.y + s.y, area.w, s.h}, s.first, s.count));
     return out;
 }
 
-Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items) {
+Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items, const std::string& package) {
     std::vector<std::shared_ptr<const KeptText>> pins;
     std::map<const Block*, Resolved> res;
+    std::map<const Block*, std::shared_ptr<const PluginImage>> images;
     auto* outer = std::exchange(gPins, &pins);
     auto* outerRes = std::exchange(gResolved, &res);
     auto* outerSource = std::exchange(gSource, items);
+    auto* outerPackage = std::exchange(gPackage, &package);
+    auto* outerImages = std::exchange(gImages, &images);
     Laid out = layOut(root, area, page);
     gPins = outer;
     gResolved = outerRes;
     gSource = outerSource;
+    gPackage = outerPackage;
+    gImages = outerImages;
     std::sort(pins.begin(), pins.end());
     pins.erase(std::unique(pins.begin(), pins.end()), pins.end());
     out.kept = std::move(pins);

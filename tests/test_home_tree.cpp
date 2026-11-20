@@ -308,3 +308,35 @@ zk.screen("desk", {
     r.tap("reading");
     REQUIRE(r.until([&] { return r.shownText() == "tapped reading"; }));
 }
+
+TEST_CASE("home tree: an item piece opens the item sheet on a long-press; an image comes from the plugin's package") {
+    HomeRig r(std::nullopt, R"JS(
+zk.screen("desk", {
+  title: "Desk", home: true,
+  render: () => zk.ui.column([
+    zk.ui.item("IT000009", zk.ui.row([zk.ui.cover("IT000009", { width: "20%" }), zk.ui.text("Pinned one")])),
+    zk.ui.image({ src: "art/pic.png", id: "pic", width: "25%" }),
+  ]),
+});
+)JS");
+    {  // a 40×20 PNG in the plugin's folder
+        cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 40, 20);
+        std::filesystem::create_directories(r.fp.path("desk/art"));
+        REQUIRE(cairo_surface_write_to_png(s, r.fp.path("desk/art/pic.png").c_str()) == CAIRO_STATUS_SUCCESS);
+        cairo_surface_destroy(s);
+    }
+    r.start();
+    REQUIRE(r.until([&] {
+        const PluginBody* b = r.home().pluginBody();
+        return r.home().showsPluginBody() && b->laid() && findLaid(*b->laid(), "pic");
+    }));
+    const Laid& laid = *r.home().pluginBody()->laid();
+    const Rect pic = findLaid(laid, "pic")->rect;
+    CHECK(pic.w > 0);
+    CHECK(pic.h == pic.w / 2);
+    const Rect piece = laid.children.at(0).rect;
+    const Point at = piece.center();
+    r.home().onGesture(Gesture{GestureType::LongPress, at, at}, r.app);
+    REQUIRE(r.home().pluginBody()->sheet());
+    CHECK(r.home().pluginBody()->sheet()->row().key == "IT000009");
+}

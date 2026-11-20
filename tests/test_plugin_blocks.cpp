@@ -3,6 +3,8 @@
 
 #include <doctest/doctest.h>
 
+#include <unistd.h>
+
 #include <filesystem>
 #include <map>
 #include <set>
@@ -1109,4 +1111,338 @@ TEST_CASE("plugin primitives: golden on PW5 — boxes: borders, fills, radii, a 
           "child":{"kind":"text","text":"nested"}}}}]}]})"));
     drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
     checkGolden(c, "tests/golden/plugin-primitives-box.png");
+}
+
+// ---- primitives (0.12): covers, progress, item targets, grids, images -----------------------------
+
+namespace {
+
+Block columnOf(const json& children) { return tree({{"kind", "column"}, {"children", children}}); }
+
+// An item piece over `key`: its cover above a progress bar (the Home pinned row's cell).
+json coverCell(const std::string& key, double progress = 0.3) {
+    return {{"kind", "item"},
+            {"item", key},
+            {"child", {{"kind", "column"},
+                       {"gap", "xsmall"},
+                       {"children", json::array({json{{"kind", "cover"}, {"item", key}},
+                                                 json{{"kind", "progress"}, {"value", progress}}})}}}};
+}
+
+json gridOf(int n, const json& opts = json::object()) {
+    json g = {{"kind", "grid"}, {"children", json::array()}};
+    g.update(opts);
+    for (int i = 0; i < n; ++i) g["children"].push_back(coverCell("S" + std::to_string(i)));
+    return g;
+}
+
+// A plugin's package in a temp folder, with a 200×100 PNG in it: red on the left, blue on the right.
+struct Package {
+    std::filesystem::path dir;
+    Package() {
+        static int n = 0;
+        dir = std::filesystem::temp_directory_path() / ("zk-package-" + std::to_string(::getpid()) + "-" + std::to_string(++n));
+        std::filesystem::create_directories(dir / "img");
+        cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 200, 100);
+        cairo_t* cr = cairo_create(s);
+        cairo_set_source_rgb(cr, 1, 0, 0);
+        cairo_rectangle(cr, 0, 0, 100, 100);
+        cairo_fill(cr);
+        cairo_set_source_rgb(cr, 0, 0, 1);
+        cairo_rectangle(cr, 100, 0, 100, 100);
+        cairo_fill(cr);
+        cairo_destroy(cr);
+        cairo_surface_write_to_png(s, (dir / "img" / "logo.png").c_str());
+        cairo_surface_destroy(s);
+    }
+    ~Package() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("plugin primitives: an auto grid at minWidth 18% of 1116 px has 5 equal columns; a row is as tall as its tallest cell") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    REQUIRE(blocksArea().w == 1116);
+    FakeItems items = shelfItems(9);
+    json g = gridOf(9, {{"minWidth", "18%"}});
+    g["children"][2]["child"]["children"].push_back({{"kind", "text"}, {"text", "A cell with a line under it"}});
+    const Block t = columnOf(json::array({g}));
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    const Laid& grid = l.children.at(0);
+    REQUIRE(grid.children.size() == 9);
+    for (int i = 0; i < 5; ++i) {
+        CHECK(grid.children[i].rect.y == grid.rect.y);
+        CHECK(grid.children[i].rect.w == grid.children[0].rect.w);
+    }
+    CHECK(grid.children[0].rect.x == grid.rect.x);
+    const Rect last = grid.children[4].rect;
+    CHECK(last.x + last.w <= grid.rect.x + grid.rect.w);
+    CHECK(last.x + last.w > grid.rect.x + grid.rect.w - 5);
+    CHECK(grid.children[5].rect.x == grid.rect.x);  // the sixth starts the next row
+    const int tallest = grid.children[2].rect.h;
+    CHECK(tallest > grid.children[0].rect.h);
+    CHECK(grid.children[5].rect.y == grid.rect.y + tallest + 18);  // the row's height, then the gap (small)
+
+    // Given columns win over minWidth.
+    json three = gridOf(9, {{"columns", 3}, {"minWidth", "18%"}});
+    const Block t3 = columnOf(json::array({three}));
+    const Laid l3 = layoutTree(t3, blocksArea(), 0, &items);
+    CHECK(l3.children.at(0).children.at(3).rect.x == l3.children.at(0).rect.x);
+    CHECK(l3.children.at(0).children.at(2).rect.y == l3.children.at(0).rect.y);
+}
+
+TEST_CASE("plugin primitives: a grid with rows: 1 shows one row of 9 cells (5) and never pages") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(9);
+    const Block t = columnOf(json::array({gridOf(9, {{"minWidth", "18%"}, {"rows", 1}})}));
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    CHECK(l.pages == 1);
+    const Laid& grid = l.children.at(0);
+    CHECK(grid.children.size() == 5);
+    for (const auto& c : grid.children) CHECK(c.rect.y == grid.rect.y);
+    CHECK(grid.rect.h == grid.children[0].rect.h);
+    // Even in an area too short for the row: cut, not paged.
+    const Rect area = blocksArea();
+    const Laid short_ = layoutTree(t, {area.x, area.y, area.w, 150}, 0, &items);
+    CHECK(short_.pages == 1);
+}
+
+TEST_CASE("plugin primitives: a grid without rows pages by row, like a list; nothing outside the area") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        FakeItems items = shelfItems(40);
+        const Block t = columnOf(json::array({json{{"kind", "text"}, {"text", "Pinned"}}, gridOf(40, {{"minWidth", "22%"}})}));
+        const Laid first = layoutTree(t, blocksArea(), 0, &items);
+        CHECK(first.pages > 1);
+        std::set<std::string> seen;
+        for (int p = 0; p < first.pages; ++p) {
+            const Laid l = layoutTree(t, blocksArea(), p, &items);
+            const Laid& grid = l.children.at(1);
+            for (const auto& cell : grid.children) {
+                CHECK(cell.rect.x >= grid.rect.x);
+                REQUIRE(cell.items.size() == 1);
+                CHECK(seen.insert(cell.items[0].key).second);
+            }
+        }
+        CHECK(seen.size() == 40);
+        checkFits(t, &items);
+    }
+}
+
+TEST_CASE("plugin primitives: a cover is 2:3 at its width — a percent of its parent, the row's slot, or the whole width") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(2);
+    const Block t = columnOf(json::parse(R"([
+      {"kind":"cover","item":"S0","width":"17%"},
+      {"kind":"row","children":[{"kind":"cover","item":"S1","width":"35%"},{"kind":"text","text":"Pride and Prejudice"}]},
+      {"kind":"cover","item":"S1"}])"));
+    const Laid l = layoutTree(t, {0, 0, 1116, 1 << 20}, 0, &items);
+    const Rect c17 = l.children.at(0).rect;
+    CHECK(c17.w == 1116 * 17 / 100);
+    CHECK(c17.h == c17.w * 3 / 2);
+    const Rect c35 = l.children.at(1).children.at(0).rect;
+    CHECK(c35.w == (1116 - 18) * 35 / 100);
+    CHECK(c35.h == c35.w * 3 / 2);
+    const Rect whole = l.children.at(2).rect;
+    CHECK(whole.w == 1116);
+    CHECK(whole.h == 1116 * 3 / 2);
+    CHECK(l.children.at(0).items.at(0).key == "S0");
+}
+
+TEST_CASE("plugin primitives: a progress bar is 6 px tall at its width") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = columnOf(json::parse(R"([{"kind":"progress","value":0.4,"width":"50%"},{"kind":"progress","value":1}])"));
+    const Laid l = layoutTree(t, {0, 0, 1000, 1000}, 0);
+    CHECK(l.children.at(0).rect == Rect{0, 0, 500, 6});
+    CHECK(l.children.at(1).rect.w == 1000);
+    CHECK(l.children.at(1).rect.h == 6);
+    Canvas c(1000, 100);
+    fillRect(c.cr(), {0, 0, 1000, 100}, 255);
+    drawTree(c.cr(), l, {});
+    const auto g = grayOf(c);
+    CHECK(g[3 * 1000 + 10] < 80);    // filled from the left
+    CHECK(g[3 * 1000 + 400] > 150);  // the track past 40%
+    CHECK(g[3 * 1000 + 700] == 255); // nothing past its width
+}
+
+TEST_CASE("plugin primitives: an item piece hit-tests to its row; one whose ref doesn't resolve is drawn but inert") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(2);
+    const Block t = columnOf(json::parse(R"([
+      {"kind":"item","item":"S1","child":{"kind":"row","children":[{"kind":"cover","item":"S1","width":"20%"},{"kind":"text","text":"Moby-Dick"}]}},
+      {"kind":"item","item":"GONE","child":{"kind":"row","children":[{"kind":"cover","item":"GONE","width":"20%"},{"kind":"text","text":"Gone"}]}}])"));
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    const Laid& piece = l.children.at(0);
+    const auto h = hitTest(l, piece.rect.center());
+    REQUIRE(h);
+    CHECK(h->kind == K::Item);
+    CHECK(h->part == "S1");
+    CHECK(h->rect == piece.rect);
+    REQUIRE(h->item);
+    CHECK(h->item->title == "Moby-Dick; or, The Whale");
+    // The text beside the cover is the item too.
+    const Rect text = piece.children.at(0).children.at(1).rect;
+    REQUIRE(hitTest(l, {text.x + 10, text.y + 10}));
+    CHECK(hitTest(l, {text.x + 10, text.y + 10})->kind == K::Item);
+
+    const Laid& gone = l.children.at(1);
+    CHECK(gone.rect.h > 0);  // drawn
+    CHECK_FALSE(hitTest(l, gone.rect.center()));
+    CHECK(gone.items.empty());
+    // Its cover: a blank light-grey rectangle.
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawTree(c.cr(), l, {}, &items);
+    const auto g = grayOf(c);
+    const Rect cover = gone.children.at(0).children.at(0).rect;
+    CHECK(cover.h == cover.w * 3 / 2);
+    const uint8_t mid = g[(size_t)cover.center().y * c.width() + cover.center().x];
+    CHECK(mid > 150);
+    CHECK(mid < 245);
+}
+
+TEST_CASE("plugin primitives: a downloading item shows its status in a bar over the bottom of the piece") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    FakeItems items = shelfItems(2);
+    const Block t = columnOf(json::array({gridOf(2, {{"columns", 4}})}));
+    const auto shot = [&](Rect r) {
+        Canvas c(kPw5.width, kPw5.height);
+        fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+        drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
+        const auto g = grayOf(c);
+        std::vector<uint8_t> px;
+        for (int y = r.y; y < r.y + r.h; ++y)
+            for (int x = r.x; x < r.x + r.w; ++x) px.push_back(g[static_cast<size_t>(y) * c.width() + x]);
+        return px;
+    };
+    const Laid l = layoutTree(t, blocksArea(), 0, &items);
+    const Rect piece = l.children.at(0).children.at(0).rect;
+    const Rect bar{piece.x, piece.y + piece.h - 40, piece.w, 40}, above{piece.x, piece.y, piece.w, piece.h - 40};
+    const Rect other = l.children.at(0).children.at(1).rect;
+    const auto plainBar = shot(bar), plainAbove = shot(above), plainOther = shot(other);
+    items.download["AS0"] = "Downloading 42%";
+    CHECK(shot(bar) != plainBar);
+    CHECK(shot(above) == plainAbove);
+    CHECK(shot(other) == plainOther);
+    // The bar is white with ink text.
+    const auto b = shot(bar);
+    size_t white = 0, ink = 0;
+    for (uint8_t v : b) white += v == 255, ink += v < 60;
+    CHECK(white > b.size() / 2);
+    CHECK(ink > 0);
+}
+
+TEST_CASE("plugin primitives: an image from the plugin's package is drawn in greys at its width, aspect kept; a missing one takes no room") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Package pkg;
+    const Block t = columnOf(json::parse(R"([
+      {"kind":"image","src":"img/logo.png","width":"50%","id":"logo"},
+      {"kind":"image","src":"img/missing.png"},
+      {"kind":"text","text":"Under"}])"));
+    const Laid l = layoutTree(t, {0, 0, 1000, 2000}, 0, nullptr, pkg.dir.string());
+    const Rect img = l.children.at(0).rect;
+    CHECK(img == Rect{0, 0, 500, 250});
+    CHECK(l.children.at(1).rect.h == 0);
+    CHECK(l.children.at(2).rect.y == 250 + 18 + 18);  // the missing image's gaps only
+    Canvas c(1000, 400);
+    fillRect(c.cr(), {0, 0, 1000, 400}, 255);
+    drawTree(c.cr(), l, {});
+    // Red and blue in greys: two different greys, neither white.
+    const auto g = grayOf(c);
+    const uint8_t left = g[125 * 1000 + 100], right = g[125 * 1000 + 400];
+    CHECK(left < 200);
+    CHECK(right < 200);
+    CHECK(left != right);
+    std::vector<uint32_t> rgb(1000 * 400);
+    cairo_surface_flush(c.surface());
+    const auto* data = cairo_image_surface_get_data(c.surface());
+    const int stride = cairo_image_surface_get_stride(c.surface());
+    const uint32_t px = *reinterpret_cast<const uint32_t*>(data + 125 * stride + 100 * 4);
+    CHECK(((px >> 16) & 0xff) == ((px >> 8) & 0xff));  // grey: red == green == blue
+    CHECK(((px >> 8) & 0xff) == (px & 0xff));
+    // With an id it is tapped as itself.
+    const auto h = hitTest(l, img.center());
+    REQUIRE(h);
+    CHECK(h->id == "logo");
+    CHECK(h->kind == K::Image);
+    // No package (or one without the file): no room.
+    const Laid none = layoutTree(t, {0, 0, 1000, 2000}, 0);
+    CHECK(none.children.at(0).rect.h == 0);
+}
+
+TEST_CASE("plugin primitives: golden on PW5 — covers, progress, item pieces (a download, an unresolved ref)") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items = shelfItems(8);
+    items.download["AS3"] = "Downloading 42%";
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", false);
+    const Block t = tree(json::parse(R"({"kind":"column","gap":"large","children":[
+      {"kind":"row","gap":"medium","align":"stretch","children":[
+        {"kind":"item","item":"S0","width":"50%","child":{"kind":"row","gap":"medium","align":"stretch","children":[
+          {"kind":"cover","item":"S0","width":"35%"},
+          {"kind":"column","gap":"xsmall","children":[
+            {"kind":"text","text":"Book","caps":true,"font":"sans","weight":"bold","size":"small","tone":"secondary"},
+            {"kind":"text","text":"Pride and Prejudice","font":"serif","weight":"bold","size":"large","lines":3},
+            {"kind":"text","text":"Jane Austen","font":"sans","tone":"secondary"},
+            {"kind":"spacer"},
+            {"kind":"progress","value":0.13},
+            {"kind":"text","text":"13% · today","font":"sans","tone":"secondary","size":"small"}]}]}},
+        {"kind":"item","item":"S3","child":{"kind":"row","gap":"medium","align":"stretch","children":[
+          {"kind":"cover","item":"S3","width":"35%"},
+          {"kind":"column","gap":"xsmall","children":[
+            {"kind":"text","text":"Paper","caps":true,"font":"sans","weight":"bold","size":"small","tone":"secondary"},
+            {"kind":"text","text":"Gaussian random fields","font":"serif","weight":"bold","size":"large","lines":3},
+            {"kind":"text","text":"Adler","font":"sans","tone":"secondary"},
+            {"kind":"spacer"},
+            {"kind":"progress","value":0.67},
+            {"kind":"text","text":"67% · yesterday","font":"sans","tone":"secondary","size":"small"}]}]}}]},
+      {"kind":"row","gap":"medium","children":[
+        {"kind":"item","item":"S1","width":"17%","child":{"kind":"column","gap":"xsmall","children":[
+          {"kind":"cover","item":"S1"},{"kind":"progress","value":0.62}]}},
+        {"kind":"item","item":"GONE","width":"17%","child":{"kind":"column","gap":"xsmall","children":[
+          {"kind":"cover","item":"GONE"},{"kind":"progress","value":0}]}},
+        {"kind":"cover","item":"S4","width":"17%"},
+        {"kind":"spacer"}]},
+      {"kind":"item","item":"S2","child":{"kind":"column","gap":"none","children":[
+        {"kind":"text","text":"The Brothers Karamazov","font":"serif","weight":"bold","lines":1},
+        {"kind":"text","text":"Dostoevsky · 1880","font":"sans","tone":"secondary","size":"small"}]}}]})"));
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
+    checkGolden(c, "tests/golden/plugin-primitives-items.png");
+}
+
+TEST_CASE("plugin primitives: golden on PW5 — a desk grid (auto columns at 22%) and a one-row shelf (rows 1 at 17%)") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items = shelfItems(12);
+    items.download["AS6"] = "Downloading 42%";
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Your desk", true);
+    json shelf = gridOf(9, {{"minWidth", "17%"}, {"rows", 1}, {"gap", "medium"}});
+    json desk = {{"kind", "grid"}, {"minWidth", "22%"}, {"gap", "medium"}, {"children", json::array()}};
+    for (int i = 0; i < 8; ++i) {
+        const std::string k = "S" + std::to_string(i);
+        desk["children"].push_back({{"kind", "item"}, {"item", k}, {"child", {{"kind", "column"}, {"gap", "xsmall"}, {"children", json::array({
+            json{{"kind", "cover"}, {"item", k}}, json{{"kind", "progress"}, {"value", 0.1 * (i + 1)}},
+            json{{"kind", "text"}, {"text", items.rows[k].title}, {"font", "serif"}, {"weight", "bold"}, {"lines", 1}},
+            json{{"kind", "text"}, {"text", "Author · " + std::to_string(10 * (i + 1)) + "%"}, {"font", "sans"}, {"tone", "secondary"}, {"size", "small"}}})}}}});
+    }
+    const Block t = columnOf(json::array({json{{"kind", "text"}, {"text", "Pinned"}, {"caps", true}, {"style", "label"}}, shelf,
+                                          json{{"kind", "text"}, {"text", "Desk"}, {"caps", true}, {"style", "label"}}, desk}));
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0, &items), {}, &items);
+    checkGolden(c, "tests/golden/plugin-primitives-grid.png");
 }

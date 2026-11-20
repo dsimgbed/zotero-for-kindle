@@ -48,9 +48,12 @@ public:
     virtual std::string status(const std::string& attachmentKey) = 0;
 };
 
+// An image block's picture (0.12): its PNG in greys, loaded once while any laid tree holds it.
+struct PluginImage;
+
 struct Laid {
     struct Part {
-        int index = 0;  // a list row, a chip, a button of `buttons`, an item
+        int index = 0;  // a list row, a chip, a button of `buttons`, an item (an item piece's: 0)
         Rect rect;
         std::optional<ItemRow> item;  // an items block's row or card
 
@@ -60,13 +63,14 @@ struct Laid {
     Rect rect;
     std::vector<Laid> children;  // the root's: the top-level blocks shown on this page
     std::vector<Part> parts;
-    std::vector<ItemRow> items;  // an items block: the rows its refs resolved to, in order (skipped ones left out)
+    std::vector<ItemRow> items;  // an items block: the rows its refs resolved to, in order (skipped ones left out); a cover's, an item piece's: its row
     std::vector<std::string> itemLabels;  // and each one's label
     std::vector<std::string> itemMetas;   // and, for cards, the meta line (as of the layout; "" for rows)
     int first = 0, count = 0;    // the units shown: text lines, list rows, chip lines, card body lines
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
     Rect corner;                 // on the root: a filling deck's page indicator, in the card's corner (else empty)
     std::shared_ptr<const KeptText> text;               // a text block's lines, laid out once
+    std::shared_ptr<const PluginImage> image;           // an image block's picture (none: it takes no room)
     std::vector<std::shared_ptr<const KeptText>> kept;  // on the root: every text block's, on any page
 };
 
@@ -84,9 +88,19 @@ Rect blocksArea();
 // laying out a new tree in which the block's text, style and width are the same (while the earlier
 // tree is still held) reuses that layout.
 //
-// `items` resolves the refs of items blocks (once per layout); without it they take no room and
-// draw nothing.
-Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items = nullptr);
+// `items` resolves the refs of items blocks, covers and item pieces (once per layout); without it
+// items blocks take no room and draw nothing, covers are blank and item pieces inert.
+//
+// `package` is the plugin's folder: an image's `src` is a path in it. Its PNG (at most 2 MB) is
+// loaded once while any laid tree holds it, in greys; a missing or unreadable one (or no package)
+// takes no room, and is logged once.
+//
+// 0.12's pieces: a cover is 2:3 at its width; a progress bar 6 px tall; a cover's, a progress bar's
+// or an image's own `width` is a percent of what its parent gives it (in a row, the row sizes it).
+// An item piece is its child, hit as the item (Hit::kind Item); while its file downloads, the
+// status is drawn in a bar over the piece's bottom. A grid's cells are equal, in rows as tall as
+// their tallest cell; it pages by row, or, with `rows`, shows at most that many and never pages.
+Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items = nullptr, const std::string& package = {});
 
 // How many times a text block's text has been laid out (for tests).
 int64_t textBlockLayouts();
@@ -101,11 +115,11 @@ struct Hit {
     std::string part;  // a list row's or a chip's id
     Block::Kind kind = Block::Kind::Button;
     Rect rect;         // what was hit (the row, the chip, the button, the item)
-    std::optional<ItemRow> item;  // an items block's: part is its key
+    std::optional<ItemRow> item;  // an items block's or an item piece's: part is its key
 };
 
 // The interactive block under `p`: a button, a list row, an item, a chip, a search/field, the deck, a notice,
-// a quote, a text or a box with an id (the innermost one).
+// a quote, a text, a box or an image with an id (the innermost one), an item piece whose ref resolved.
 std::optional<Hit> hitTest(const Laid& root, Point p);
 
 // The laid block with this id (a search/field to redraw while typing), or nullptr.
