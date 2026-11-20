@@ -1,5 +1,7 @@
 #include "app/previews.h"
 
+#include "app/device_settings.h"
+
 #include <unistd.h>
 
 #include <chrono>
@@ -131,6 +133,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
         Library& lib;
         NullSync syncNull;
         NoKeyboard kb;
+        DeviceSettings dev{""};
         explicit ShotNav(Library& l) : lib(l) {}
         void push(std::unique_ptr<Screen>) override {}
         void pop() override {}
@@ -139,6 +142,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
         void redrawAll(Waveform) override {}
         SyncControl& sync() override { return syncNull; }
         Library& library() override { return lib; }
+        DeviceSettings& device() override { return dev; }
         Keyboard& keyboard() override { return kb; }
         int64_t nowMs() const override { return 0; }
         void quit() override {}

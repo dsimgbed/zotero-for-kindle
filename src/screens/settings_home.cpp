@@ -39,7 +39,7 @@ HomeChoices homeChoices(Nav& nav, PluginHost* host) {
     c.options.push_back({"", "Built-in"});
     if (PluginEntries* e = nav.pluginEntries())
         for (const auto& s : e->homeScreens()) c.options.push_back({s.pluginId + "/" + s.screenId, s.title + " — " + s.pluginName});
-    c.stored = loadSettings(nav.library()).homeScreen;
+    c.stored = loadSettings(nav.library(), nav.device()).homeScreen;
     if (c.chosen() < 0) {
         const std::string id = c.stored.substr(0, c.stored.find('/'));
         std::string name = id;
@@ -106,9 +106,9 @@ void HomeSettingScreen::onGesture(const Gesture& g, Nav& nav) {
     const auto rects = optionRects();
     for (size_t i = 0; i < rects.size(); ++i) {
         if (!rects[i].contains(g.pos) || static_cast<int>(i) == choices_.chosen()) continue;
-        AppSettings s = loadSettings(nav.library());
+        AppSettings s = loadSettings(nav.library(), nav.device());
         s.homeScreen = choices_.options[i].value;
-        saveSettings(nav.library(), s);
+        saveSettings(nav.library(), nav.device(), s);
         load(nav);  // the stored choice is offered now: no note
         nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Ui);
         return;

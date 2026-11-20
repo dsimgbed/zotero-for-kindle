@@ -75,6 +75,7 @@ test_sources = files(
   'test_config.cpp',
   'test_accounts.cpp',
   'test_pin.cpp',
+  'test_settings_split.cpp',
   'test_power.cpp',
   'test_keysym.cpp',
   'test_library_screens.cpp',

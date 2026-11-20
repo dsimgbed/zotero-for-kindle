@@ -262,9 +262,9 @@ TEST_CASE("push triggers: with Sync every Off, closing the book sends the change
     Library lib{db};
     FakeNav nav{lib};
     fillFixtureLibrary(lib, 10);
-    AppSettings off = loadSettings(lib);
+    AppSettings off = loadSettings(lib, nav.device());
     off.syncIntervalMinutes = 0;
-    saveSettings(lib, off);
+    saveSettings(lib, nav.device(), off);
     ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
         return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
     }, 6);

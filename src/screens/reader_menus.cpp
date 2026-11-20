@@ -311,9 +311,9 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
     }
     for (int i = 0; i < 2; ++i)
         if (orientationRect(i).contains(p)) {
-            AppSettings s = loadSettings(nav.library());
+            AppSettings s = loadSettings(nav.library(), nav.device());
             s.landscapeReading = landscape_ = i == 1;
-            saveSettings(nav.library(), s);
+            saveSettings(nav.library(), nav.device(), s);
             nav.damage(displayPanelRect(), Waveform::Ui);
             nav.orientationChanged();  // the app turns the screen (a Resize follows)
             return true;
@@ -380,7 +380,7 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
 }
 
 void ReaderMenus::open(Nav& nav) {
-    landscape_ = loadSettings(nav.library()).landscapeReading;
+    landscape_ = loadSettings(nav.library(), nav.device()).landscapeReading;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(topBarRect(), Waveform::Ui);
     nav.damage(panelRect(), Waveform::Ui);
@@ -495,7 +495,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
         if (!reader_.preview()) {  // closing the book: send what was changed in it, and get Zotero's news
-            if (loadSettings(nav.library()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
+            if (loadSettings(nav.library(), nav.device()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
             else nav.sync().syncNow();
         }
         nav.pop();

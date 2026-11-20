@@ -23,6 +23,7 @@ namespace zk {
 class Screen;
 class PluginEntries;  // plugin_entries.h
 class CatalogService;  // app/catalog_service.h
+class DeviceSettings;  // app/device_settings.h
 
 class Nav {
 public:
@@ -39,6 +40,7 @@ public:
     virtual void redrawAll(Waveform) = 0;
     virtual SyncControl& sync() = 0;
     virtual Library& library() = 0;
+    virtual DeviceSettings& device() = 0;  // the Kindle's own settings: the same whichever account is open
     virtual Keyboard& keyboard() = 0;
     virtual int64_t nowMs() const = 0;
     virtual void quit() = 0;

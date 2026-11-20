@@ -293,6 +293,7 @@ int screenshot(std::string screen, const std::string& out, const std::string& db
         Library& lib;
         SyncControl& syncRef;
         NullKeyboard kb;
+        DeviceSettings dev{""};
         explicit ShotNav(Library& l, SyncControl& s) : lib(l), syncRef(s) {}
         void push(std::unique_ptr<Screen>) override {}
         void pop() override {}
@@ -301,6 +302,7 @@ int screenshot(std::string screen, const std::string& out, const std::string& db
         void redrawAll(Waveform) override {}
         SyncControl& sync() override { return syncRef; }
         Library& library() override { return lib; }
+        DeviceSettings& device() override { return dev; }
         Keyboard& keyboard() override { return kb; }
         int64_t nowMs() const override { return 0; }
         void quit() override {}
@@ -428,6 +430,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     Library lib(*db);
+    DeviceSettings device(paths.deviceSettingsFile);  // the Kindle's settings; the account session (Task 6) will own it
+    moveDeviceKeys(lib, device);  // settings from before the split (Task 4 moves this to the account migration)
     // Before the sync worker can download anything: the folders of attachments deleted in Zotero,
     // and downloads cut short by a kill. Not on a library never pulled (or just rebuilt), which
     // would take every download for an orphan.
@@ -469,6 +473,7 @@ int main(int argc, char** argv) {
     // Before the app: a preview's reader saves its place into it until the reader closes.
     PreviewCache previewCache(paths.cacheDir + "/preview", wallMs);
     App app(*display, lib, nullSync, *keyboard);
+    app.setDeviceSettings(device);
     // Some plugin is on and running: only then do the screens and the sync worker build events for
     // plugins (kept by the poll hook; read on both threads). Outlives the sync service.
     std::atomic<bool> pluginsListening{false};
@@ -550,7 +555,7 @@ int main(int argc, char** argv) {
     // plugin's own net rules (the app's HTTP stack, on the download screen's thread).
     pluginEvents.setPreviewOpener(previewOpener(
         previewCache, [&] { return plugins && pluginsRunning && !pluginsOff ? plugins.get() : nullptr; },
-        [&lib, &lipc](const PreviewEntry& e) { return previewReader(e, kEngineEnv, loadSettings(lib).flashEvery, lipc.get()); }));
+        [&lib, &device, &lipc](const PreviewEntry& e) { return previewReader(e, kEngineEnv, loadSettings(lib, device).flashEvery, lipc.get()); }));
     // The start counts as good after 60 s of running (not at the first screen: plugins start after
     // it); a clean exit counts too. Until then a crash leaves the count for the next start. Only a
     // start with some plugin on was counted; with none on there is nothing to confirm.
@@ -618,7 +623,7 @@ int main(int argc, char** argv) {
         deps.filesDir = paths.filesDir;
         deps.config = c;
         deps.keepAwake = &keepAwake;
-        deps.intervalMinutes = loadSettings(lib).syncIntervalMinutes;
+        deps.intervalMinutes = loadSettings(lib, device).syncIntervalMinutes;
         deps.pluginEventsWanted = [&pluginsListening] { return pluginsListening.load(std::memory_order_relaxed); };
         service = std::make_unique<SyncService>(std::move(deps));
         app.setSync(*service);
@@ -629,10 +634,10 @@ int main(int argc, char** argv) {
         flow.onSyncEvent(e, nav);
         forwardSyncToPlugins(e, pluginSink);
         backgroundRound.onSyncEvent(e, !app.inBackground(), app.nowMs());  // after syncFinished is queued
-        updateNotice.poll(nav.library());
-        if (e.kind == SyncEvent::Kind::SyncFinished) updateNotice.onSyncFinished(nav.library(), !e.error);
+        updateNotice.poll(nav.device());
+        if (e.kind == SyncEvent::Kind::SyncFinished) updateNotice.onSyncFinished(nav.device(), !e.error);
     });
-    flow.setReaderFactory([&lib, &lipc](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
+    flow.setReaderFactory([&lib, &device, &lipc](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
         auto att = nav.library().attachment(row.attachmentKey);
         if (!att || att->localPath.empty()) return nullptr;
         const DocType type = att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub;
@@ -644,7 +649,7 @@ int main(int argc, char** argv) {
                     return loadEngine(t, kEngineEnv, &err);
                 });
             },
-            loadSettings(lib).flashEvery, lipc.get());
+            loadSettings(lib, device).flashEvery, lipc.get());
     });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     // `items` blocks on plugin screens read the library as the app's own lists do; a tap opens the item.
@@ -656,7 +661,7 @@ int main(int argc, char** argv) {
     // Home's body written by a plugin (Settings → Home): its last tree is kept, so the first frame of
     // the next start shows it (plugins load after the first screen).
     HomeTreeStore homeTrees(paths.stateDir + "/home-tree.json");
-    PluginHome pluginHome(pluginEvents, homeTrees, [&lib] { return loadSettings(lib).homeScreen; }, &pluginItems, itemTap);
+    PluginHome pluginHome(pluginEvents, homeTrees, [&lib, &device] { return loadSettings(lib, device).homeScreen; }, &pluginItems, itemTap);
     // zk.library.open: the item, the file asked for, or the file an annotation is in, opened at it
     // (itemToOpen). The promise follows OpenFlow's outcome.
     pluginEvents.setItemOpener([&lib, &flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
@@ -694,7 +699,7 @@ int main(int argc, char** argv) {
             }));
     };
     auto pendingUpdate = [&]() -> std::optional<std::string> {
-        const auto v = updateNotice.pending(lib);
+        const auto v = updateNotice.pending(device);
         return v ? std::optional<std::string>(v->str()) : std::nullopt;
     };
     // The automatic case's Home notice stays until the user has seen Settings → Plugins.
@@ -719,8 +724,8 @@ int main(int argc, char** argv) {
         home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
         home.openSettings = openSettings;
         home.updateNotice = [&]() -> std::optional<std::string> {
-            updateNotice.poll(lib);
-            const auto v = updateNotice.available(lib);
+            updateNotice.poll(device);
+            const auto v = updateNotice.available(device);
             return v ? std::optional<std::string>(v->str()) : std::nullopt;
         };
         home.openUpdate = [&] {
@@ -738,7 +743,7 @@ int main(int argc, char** argv) {
             app.push(std::make_unique<PluginsScreen>([&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; },
                                                      pluginsOffInfo));
         };
-        home.dismissUpdate = [&] { updateNotice.dismiss(lib); };
+        home.dismissUpdate = [&] { updateNotice.dismiss(device); };
         home.openItem = openItem;
         home.status = flow.statusFn();
         home.body = [&pluginHome]() -> HomeBodyLink* { return &pluginHome; };
@@ -776,7 +781,7 @@ int main(int argc, char** argv) {
         app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported, false));
     }
     CurrentSync current(app);
-    Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
+    Lifecycle lifecycle(current, status, [&lib, &device] { return loadSettings(lib, device).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
     lifecycle.setOnBackground([&] {
@@ -786,7 +791,7 @@ int main(int argc, char** argv) {
     lifecycle.setOnForeground([&] {
         if (plugins) plugins->setBackground(false);
     });
-    app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
+    app.setReadingLandscape([&lib, &device] { return loadSettings(lib, device).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.
     StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {

@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+#include "app/device_settings.h"
 #include "screens/plugin_confirm.h"
 #include "screens/screen.h"
 
@@ -84,6 +85,9 @@ public:
         watchdogPeriodMs_ = periodMs;
     }
     Library& library() override { return lib_; }
+    DeviceSettings& device() override { return *device_; }
+    // Where the device settings are kept (default: in memory only, for tests).
+    void setDeviceSettings(DeviceSettings& d) { device_ = &d; }
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
     // A system dialog or the screensaver is over the app (the Kindle may be asleep).
@@ -134,6 +138,8 @@ private:
 
     Display& display_;
     Library& lib_;
+    DeviceSettings memoryDevice_{""};
+    DeviceSettings* device_ = &memoryDevice_;
     SyncControl* sync_;
     Keyboard& keyboard_;
     std::function<int64_t()> clock_;

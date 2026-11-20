@@ -250,7 +250,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/catalog_list.cpp',
   'src/screens/catalog_page.cpp',
   'src/app/catalog_service.cpp',
-  'src/app/settings_store.cpp',
+  'src/app/settings_store.cpp', 'src/app/device_settings.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
   dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep])
 

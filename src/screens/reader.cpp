@@ -338,11 +338,11 @@ void ReaderScreen::onShow(Nav& nav) {
         sendAnnotations(nav, true);  // unchanged: the app's redraw is the only repaint
         return;
     }
-    twoColumnsSetting_ = loadSettings(nav.library()).twoColumns;
+    twoColumnsSetting_ = loadSettings(nav.library(), nav.device()).twoColumns;
     layout_ = loadLayout(nav.library(), row_.key, type_, twoColumnsSetting_);
-    if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
-    penWrites_ = nav.library().metaValue(kPenModeKey) != "tap";
-    if (const std::string w = nav.library().metaValue(kPenWidthKey); w == "0" || w == "2") penWidth_ = w[0] - '0';
+    if (const std::string c = nav.device().get(kColourKey).value_or(""); !c.empty()) colour_ = c;
+    penWrites_ = nav.device().get(kPenModeKey).value_or("") != "tap";
+    if (const std::string w = nav.device().get(kPenWidthKey).value_or(""); w == "0" || w == "2") penWidth_ = w[0] - '0';
     nav.setSystemInkWidth(inkWidthPx());
     DocPosition start;
     start.value = preview_ ? preview_->position : nav.library().readingLocation(row_.attachmentKey);
@@ -688,9 +688,9 @@ void ReaderScreen::placeRemoteAgain() {
 }
 
 void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
-    AppSettings s = loadSettings(nav.library());
+    AppSettings s = loadSettings(nav.library(), nav.device());
     s.twoColumns = twoColumnsSetting_ = on ? 1 : 0;
-    saveSettings(nav.library(), s);
+    saveSettings(nav.library(), nav.device(), s);
     applyLayout(layout_, nav);
 }
 
@@ -811,7 +811,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
                 nav.sync().pushSoon();
                 if (editor_->key() == newAreaKey_ && editor_->bar().colour() != colour_) {  // as a new highlight's
                     colour_ = editor_->bar().colour();
-                    nav.library().setMetaValue(kColourKey, colour_);
+                    nav.device().set(kColourKey, colour_);
                 }
             }
             return;
@@ -1142,7 +1142,7 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     a.tags = selTags_;  // the chips marked on the bar
     for (auto it = selTags_.rbegin(); it != selTags_.rend(); ++it) nav.library().rememberAnnotationTag(*it);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", nav.library().createAnnotation(a));
-    nav.library().setMetaValue(kColourKey, colour_);
+    nav.device().set(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
     else nav.sync().pushSoon();
     refreshHighlights(nav);
@@ -1635,7 +1635,7 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
     a.pageLabel = e.ink->pageLabel;
     const std::string key = nav.library().createAnnotation(a);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
-    nav.library().setMetaValue(kColourKey, sent.colour);
+    nav.device().set(kColourKey, sent.colour);
     nav.sync().pushSoon();
     areaSaved_.push_back(SavedArea{key, sent.page, sent.rect, sent.colour});
     refreshHighlights(nav);
@@ -1680,7 +1680,7 @@ void ReaderScreen::saveNote(const std::string& text, Nav& nav) {
     closeSelection(nav);
     if (!place || !worker_ || text.find_first_not_of(" \t\n") == std::string::npos) return;  // empty: no note
     noteSent_[worker_->note(place->page, place->at)] = SentNote{text, colour_};
-    nav.library().setMetaValue(kColourKey, colour_);
+    nav.device().set(kColourKey, colour_);
 }
 
 bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
@@ -1785,13 +1785,13 @@ bool ReaderScreen::wantsSystemInk() const {
 
 void ReaderScreen::setPenWidth(int i, Nav& nav) {
     penWidth_ = std::clamp(i, 0, 2);
-    nav.library().setMetaValue(kPenWidthKey, std::to_string(penWidth_));
+    nav.device().set(kPenWidthKey, std::to_string(penWidth_));
     nav.setSystemInkWidth(inkWidthPx());
 }
 
 void ReaderScreen::setPenWrites(bool on, Nav& nav) {
     penWrites_ = on;
-    nav.library().setMetaValue(kPenModeKey, on ? "" : "tap");
+    nav.device().set(kPenModeKey, on ? "" : "tap");
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
 }
 

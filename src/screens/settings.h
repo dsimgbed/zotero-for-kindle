@@ -65,7 +65,7 @@ public:
     Rect storageTextRect() const;
 
 private:
-    void load(Library&);
+    void load(Nav&);
     void loadHome(Nav&);
     Config config_;
     std::function<void(Nav&)> changeAccount_;

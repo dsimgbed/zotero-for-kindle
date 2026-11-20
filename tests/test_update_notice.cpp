@@ -2,8 +2,6 @@
 
 #include "fake_http.h"
 #include "fn_http.h"
-#include "store/db.h"
-#include "store/library.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -20,8 +18,7 @@ constexpr int64_t kHour = 3600 * 1000LL;
 
 // GitHub's latest release, as an Updater on 0.2.0 sees it; every request counted.
 struct Rig {
-    Db db{Db::open(":memory:")};
-    Library lib{db};
+    DeviceSettings dev{""};
     std::shared_ptr<std::string> tag = std::make_shared<std::string>("v0.3.0");
     std::shared_ptr<bool> down = std::make_shared<bool>(false);
     std::shared_ptr<std::atomic<int>> requests = std::make_shared<std::atomic<int>>(0);
@@ -47,9 +44,9 @@ struct Rig {
     }
     // A sync finished; the check (if one started) answered and was noted.
     void synced(bool ok = true) {
-        notice->onSyncFinished(lib, ok);
+        notice->onSyncFinished(dev, ok);
         updater->wait();
-        notice->poll(lib);
+        notice->poll(dev);
     }
 };
 
@@ -79,7 +76,7 @@ TEST_CASE("update notice: a failed check tries again an hour later, not before")
     *rig.down = true;
     rig.synced();
     CHECK(*rig.requests == 1);
-    CHECK_FALSE(rig.notice->available(rig.lib));
+    CHECK_FALSE(rig.notice->available(rig.dev));
     rig.now += 30 * 60 * 1000LL;
     rig.synced();
     CHECK(*rig.requests == 1);
@@ -91,45 +88,45 @@ TEST_CASE("update notice: a failed check tries again an hour later, not before")
 TEST_CASE("update notice: names the newer version; dismissed, it waits for a newer one") {
     Rig rig;
     rig.synced();
-    REQUIRE(rig.notice->available(rig.lib));
-    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
-    rig.notice->dismiss(rig.lib);
-    CHECK_FALSE(rig.notice->available(rig.lib));
-    CHECK(rig.notice->pending(rig.lib)->str() == "0.3.0");  // Settings still says so
+    REQUIRE(rig.notice->available(rig.dev));
+    CHECK(rig.notice->available(rig.dev)->str() == "0.3.0");
+    rig.notice->dismiss(rig.dev);
+    CHECK_FALSE(rig.notice->available(rig.dev));
+    CHECK(rig.notice->pending(rig.dev)->str() == "0.3.0");  // Settings still says so
     *rig.tag = "v0.4.0";
     rig.now += 2 * kHour;
     rig.synced();
-    REQUIRE(rig.notice->available(rig.lib));
-    CHECK(rig.notice->available(rig.lib)->str() == "0.4.0");
+    REQUIRE(rig.notice->available(rig.dev));
+    CHECK(rig.notice->available(rig.dev)->str() == "0.4.0");
 }
 
 TEST_CASE("update notice: remembered across restarts, gone once installed") {
     Rig rig;
     rig.synced();
     UpdateNotice again(*rig.updater, [&] { return rig.now; });
-    CHECK(again.available(rig.lib)->str() == "0.3.0");
+    CHECK(again.available(rig.dev)->str() == "0.3.0");
     Rig updated({0, 3, 0});
-    updated.lib.setMetaValue("update:available", "0.3.0");
-    CHECK_FALSE(updated.notice->available(updated.lib));
-    CHECK_FALSE(updated.notice->pending(updated.lib));
+    updated.dev.set("update:available", "0.3.0");
+    CHECK_FALSE(updated.notice->available(updated.dev));
+    CHECK_FALSE(updated.notice->pending(updated.dev));
 }
 
 TEST_CASE("update notice: up to date clears an old notice") {
     Rig rig;
     rig.synced();
-    REQUIRE(rig.notice->available(rig.lib));
+    REQUIRE(rig.notice->available(rig.dev));
     *rig.tag = "v0.2.0";  // the release was pulled
     rig.now += 2 * kHour;
     rig.synced();
-    CHECK_FALSE(rig.notice->available(rig.lib));
+    CHECK_FALSE(rig.notice->available(rig.dev));
 }
 
 TEST_CASE("update notice: a check from Settings counts as the week's check") {
     Rig rig;
     rig.updater->check();
     rig.updater->wait();
-    rig.notice->poll(rig.lib);
-    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
+    rig.notice->poll(rig.dev);
+    CHECK(rig.notice->available(rig.dev)->str() == "0.3.0");
     rig.synced();
     CHECK(*rig.requests == 1);
 }
@@ -144,20 +141,20 @@ TEST_CASE("update notice: a clock set back doesn't stop checks forever") {
     CHECK(*rig.requests == 2);
 }
 
-TEST_CASE("update notice: the banner is read from the library once, and again when it can have changed") {
+TEST_CASE("update notice: the banner is read from the settings once, and again when it can have changed") {
     Rig rig;
     rig.synced();
-    REQUIRE(rig.notice->available(rig.lib));
+    REQUIRE(rig.notice->available(rig.dev));
     // Home asks on every loop step: no query until the updater has news or it is dismissed.
-    rig.lib.setMetaValue("update:available", "0.9.0");  // behind its back
-    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
-    CHECK_FALSE(rig.notice->poll(rig.lib));  // no news from the updater: still cached
-    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
-    rig.notice->dismiss(rig.lib);  // dismisses what the library says now
-    CHECK_FALSE(rig.notice->available(rig.lib));
+    rig.dev.set("update:available", "0.9.0");  // behind its back
+    CHECK(rig.notice->available(rig.dev)->str() == "0.3.0");
+    CHECK_FALSE(rig.notice->poll(rig.dev));  // no news from the updater: still cached
+    CHECK(rig.notice->available(rig.dev)->str() == "0.3.0");
+    rig.notice->dismiss(rig.dev);  // dismisses what the settings say now
+    CHECK_FALSE(rig.notice->available(rig.dev));
     *rig.tag = "v0.4.0";
     rig.now += 2 * kHour;
     rig.synced();  // the updater's news is noted
-    REQUIRE(rig.notice->available(rig.lib));
-    CHECK(rig.notice->available(rig.lib)->str() == "0.4.0");
+    REQUIRE(rig.notice->available(rig.dev));
+    CHECK(rig.notice->available(rig.dev)->str() == "0.4.0");
 }

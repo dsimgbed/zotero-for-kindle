@@ -125,9 +125,11 @@ int SettingsScreen::keptCountFor(Library& lib) {
     return n;
 }
 
-void SettingsScreen::load(Library& lib) {
-    interval_ = loadSettings(lib).syncIntervalMinutes;
-    flashEvery_ = loadSettings(lib).flashEvery;
+void SettingsScreen::load(Nav& nav) {
+    Library& lib = nav.library();
+    const AppSettings s = loadSettings(lib, nav.device());
+    interval_ = s.syncIntervalMinutes;
+    flashEvery_ = s.flashEvery;
     allOffline_ = lib.allAnnotationsOffline();
     readTag_ = lib.readTag();
     keptCount_ = keptCountFor(lib);
@@ -152,7 +154,7 @@ void SettingsScreen::loadHome(Nav& nav) {
 }
 
 void SettingsScreen::onShow(Nav& nav) {
-    load(nav.library());
+    load(nav);
     loadHome(nav);
     pluginsDot_ = nav.catalog() && nav.catalog()->updatesWaiting() > 0;
     confirmRemove_ = false;
@@ -310,18 +312,18 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     for (int i = 0; i < 4; ++i)
         if (intervalRect(i).contains(g.pos)) {
-            AppSettings s = loadSettings(nav.library());
+            AppSettings s = loadSettings(nav.library(), nav.device());
             s.syncIntervalMinutes = kIntervals[i];
-            saveSettings(nav.library(), s);
+            saveSettings(nav.library(), nav.device(), s);
             interval_ = kIntervals[i];
             nav.sync().setIntervalMinutes(interval_);
             nav.damage({0, rows(homeRow_).interval, W(), 160}, Waveform::Ui);
             return;
         }
     if (flashMinusRect().contains(g.pos) || flashPlusRect().contains(g.pos)) {
-        AppSettings st = loadSettings(nav.library());
+        AppSettings st = loadSettings(nav.library(), nav.device());
         st.flashEvery = std::clamp(st.flashEvery + (flashPlusRect().contains(g.pos) ? 1 : -1), 1, 12);
-        saveSettings(nav.library(), st);
+        saveSettings(nav.library(), nav.device(), st);
         flashEvery_ = st.flashEvery;
         nav.damage({0, rows(homeRow_).flash, W(), 120}, Waveform::Ui);
         return;
@@ -355,7 +357,7 @@ void SettingsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind != SyncEvent::Kind::SyncFinished && e.kind != SyncEvent::Kind::DownloadFinished) return;
     const bool groups = groupsRow_;
     const std::string line = groupsLine_;
-    load(nav.library());
+    load(nav);
     nav.damage({0, rows(homeRow_).storage, W(), 200}, Waveform::Quality);
     if (groups != groupsRow_) nav.damage({0, rows(homeRow_).account, W(), rows(homeRow_).readTag - rows(homeRow_).account}, Waveform::Quality);
     else if (line != groupsLine_) nav.damage(groupsRect(), Waveform::Ui);

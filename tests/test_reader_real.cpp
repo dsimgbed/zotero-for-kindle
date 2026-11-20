@@ -90,9 +90,9 @@ TEST_CASE("settings: the full-refresh interval is adjustable and remembered") {
     FakeNav nav(lib);
     SettingsScreen s(Config{}, [](Nav&) {});
     s.onShow(nav);
-    CHECK(loadSettings(lib).flashEvery == 6);
+    CHECK(loadSettings(lib, nav.device()).flashEvery == 6);
     s.onGesture(tapAt(s.flashPlusRect().center()), nav);
-    CHECK(loadSettings(lib).flashEvery == 7);
+    CHECK(loadSettings(lib, nav.device()).flashEvery == 7);
     for (int i = 0; i < 20; ++i) s.onGesture(tapAt(s.flashMinusRect().center()), nav);
-    CHECK(loadSettings(lib).flashEvery == 1);
+    CHECK(loadSettings(lib, nav.device()).flashEvery == 1);
 }
