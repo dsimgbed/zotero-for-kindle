@@ -115,21 +115,23 @@ services_lib = static_library('zk-services',
   dependencies : [core_dep])
 services_dep = declare_dependency(link_with : services_lib, dependencies : [core_dep])
 
+# Monocypher: signatures (updates) and PIN hashing (accounts).
+monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
+  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp', 'src/sync/libraries.cpp',
   'src/sync/files_sweep.cpp',
   'src/sync/webdav.cpp', 'src/sync/zotero_storage.cpp', 'src/sync/snapshot_zip.cpp',
   'src/sync/config.cpp',
-  'src/app/accounts.cpp',
+  'src/app/accounts.cpp', 'src/app/pin.cpp',
   'src/sync/sync_service.cpp',
   'third_party/pugixml/pugixml.cpp',
-  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
-  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
-sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
+  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', 'third_party/monocypher', is_system : true)],
+  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep],
+  link_with : monocypher_lib)
+sync_dep = declare_dependency(link_with : [sync_lib, monocypher_lib], dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
 
 # Updates (Plan 7): versions, signatures (Monocypher), checking, downloading, installing.
-monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
-  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 update_lib = static_library('zk-update',
   'src/update/version.cpp', 'src/update/signature.cpp', 'src/update/manifest.cpp', 'src/update/release_check.cpp',
   'src/update/download.cpp', 'src/update/install.cpp', 'src/update/updater.cpp',
