@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -86,6 +87,27 @@ std::optional<std::pair<std::string, std::map<std::string, Asset>>> releaseAsset
 }
 
 bool cancelled(const std::shared_ptr<std::atomic<bool>>& c) { return c && *c; }
+
+constexpr int64_t kStampSlackMs = 24LL * 3600 * 1000;
+
+// A registry's "updated" as tools/registry.sh stamps it (YYYY-MM-DDTHH:MM:SSZ, UTC), in ms since
+// the epoch; nullopt for anything else.
+std::optional<int64_t> stampMs(const std::string& s) {
+    if (s.size() != 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':' || s[19] != 'Z')
+        return std::nullopt;
+    for (size_t i : {0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18})
+        if (s[i] < '0' || s[i] > '9') return std::nullopt;
+    std::tm tm{};
+    tm.tm_year = std::stoi(s.substr(0, 4)) - 1900;
+    tm.tm_mon = std::stoi(s.substr(5, 2)) - 1;
+    tm.tm_mday = std::stoi(s.substr(8, 2));
+    tm.tm_hour = std::stoi(s.substr(11, 2));
+    tm.tm_min = std::stoi(s.substr(14, 2));
+    tm.tm_sec = std::stoi(s.substr(17, 2));
+    if (tm.tm_mon > 11 || tm.tm_mday < 1 || tm.tm_mday > 31 || tm.tm_hour > 23 || tm.tm_min > 59 || tm.tm_sec > 60)
+        return std::nullopt;
+    return static_cast<int64_t>(::timegm(&tm)) * 1000;
+}
 
 CheckResult failure(const HttpResponse& r) {
     if (r.curlCode != 0) return {CheckStatus::Offline, "Couldn't reach GitHub: " + r.curlError};
@@ -197,11 +219,15 @@ CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& plu
     auto registry = parseRegistry(body.body, &why);
     if (!registry) return {CheckStatus::Failed, "The catalog couldn't be read: " + why};
     // An older registry is still validly signed: served again (a stale mirror, an attacker), it
-    // would undo a revocation or a key change. "updated" is stamped by tools/registry.sh as
-    // YYYY-MM-DDTHH:MM:SSZ, so its text orders as its time. Kept one changed on disk: no reference.
-    if (const Cache kept = loadCache(pluginsDir, &opt.registryKey);
-        kept.registry && !kept.registry->updated.empty() && registry->updated < kept.registry->updated)
-        return {CheckStatus::Failed, "The catalog is older than the one this Kindle has."};
+    // would undo a revocation or a key change. Kept one changed on disk: no reference. A kept
+    // stamp that isn't tools/registry.sh's form, or lies more than a day ahead of this Kindle's
+    // clock, is no reference either: it would refuse every later registry.
+    const Cache kept = loadCache(pluginsDir, &opt.registryKey);
+    const auto keptAt = kept.registry ? stampMs(kept.registry->updated) : std::nullopt;
+    if (keptAt && *keptAt <= opt.wallMs() + kStampSlackMs) {
+        const auto newAt = stampMs(registry->updated);
+        if (!newAt || *newAt < *keptAt) return {CheckStatus::Failed, "The catalog is older than the one this Kindle has."};
+    }
 
     const fs::path dir = cacheDir(pluginsDir);
     if (!writeAtomic(dir / "registry.json.sig", sig.body) || !writeAtomic(dir / "registry.json", body.body))

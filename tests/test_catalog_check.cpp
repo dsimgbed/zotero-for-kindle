@@ -230,12 +230,14 @@ TEST_CASE("catalog check: no cache yet, and provenance round-trips") {
 TEST_CASE("catalog check: a signed registry older than the one kept is refused (no replay of a revocation)") {
     TempDir dir;
     Clock clock;
+    clock.now = 1'794'700'000'000;  // 2026-11-15: after the stamps
     FakeHttp http;
     const std::string body = registryJson("2026-11-10T12:00:00Z");
     expectRegistry(http, body, sign(body, kSeed));
     REQUIRE(runCheck(http, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
 
-    for (const std::string& older : {std::string("2026-11-09T00:00:00Z"), std::string("")}) {
+    for (const std::string& older : {std::string("2026-11-09T00:00:00Z"), std::string(""), std::string("2099-01-01"),
+                                     std::string("tomorrow")}) {  // no stamp of the right form: none
         FakeHttp replay;
         const std::string old = registryJson(older);
         expectRegistry(replay, old, sign(old, kSeed));
@@ -277,4 +279,23 @@ TEST_CASE("catalog check: the kept registry is verified again when read with the
     const std::string old = registryJson("2026-01-01T00:00:00Z");
     expectRegistry(again, old, sign(old, kSeed));
     CHECK(runCheck(again, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+}
+
+TEST_CASE("catalog check: a kept stamp of another form, or far ahead of the clock, refuses nothing later") {
+    for (const std::string& stamp : {std::string("2099-01-01T00:00:00Z"), std::string("9999-99-99T99:99:99Z"),
+                                     std::string("2026-11-10 12:00"), std::string("zzzz")}) {
+        CAPTURE(stamp);
+        TempDir dir;
+        Clock clock;
+        clock.now = 1'794'700'000'000;  // 2026-11-15
+        FakeHttp http;
+        const std::string body = registryJson(stamp);
+        expectRegistry(http, body, sign(body, kSeed));
+        REQUIRE(runCheck(http, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+        FakeHttp later;
+        const std::string next = registryJson("2026-11-14T00:00:00Z");
+        expectRegistry(later, next, sign(next, kSeed));
+        CHECK(runCheck(later, options(clock), dir.str(), {}, false, nullptr).status == CheckStatus::Ok);
+        CHECK(slurp(dir.path / ".catalog" / "registry.json") == next);
+    }
 }
