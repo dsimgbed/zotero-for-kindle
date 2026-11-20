@@ -252,6 +252,7 @@ void SyncService::run() {
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
         w.engine->setPluginEventsWanted(deps_.pluginEventsWanted);
         w.files = makeFileStore(*w.guard, deps_.config);
+        w.files->setRateWait([this](int s) { sleepFor(s); });  // stop() cuts it short
     } catch (const DbError& e) {
         log(LogLevel::Error, "sync service: can't open the database: %s", e.what());
         SyncEvent ev;

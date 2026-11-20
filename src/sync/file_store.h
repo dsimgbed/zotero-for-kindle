@@ -27,6 +27,8 @@ public:
     virtual bool download(const AttachmentRecord&, const std::string& destDir, UserError*) = 0;
     // Called while the file downloads (bytes done, total; total 0 = unknown).
     virtual void setProgress(std::function<void(int64_t done, int64_t total)>) = 0;
+    // How Zotero's rate-limit waits are slept (see zotero/rate_limit.h); WebDAV has none.
+    virtual void setRateWait(std::function<void(int seconds)>) {}
 };
 
 // WebDAV when the account has a WebDAV address, Zotero storage otherwise. A group's files always

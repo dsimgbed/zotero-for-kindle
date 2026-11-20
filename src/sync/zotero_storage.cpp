@@ -43,7 +43,7 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
     where.headers = {{"Zotero-API-Key", apiKey_}, {"Zotero-API-Version", "3"}};
     where.followRedirects = false;
     where.timeoutS = 60;
-    const HttpResponse r = http_.send(where);
+    const HttpResponse r = rate_.send(http_, where);
     if (r.curlCode == 0 && r.status == 404)
         return fail(err, {ErrorKind::NotOnServer, name + " isn't in Zotero storage. Sync it from your computer first.",
                           "HTTP 404"});
@@ -122,6 +122,7 @@ public:
         webdav_.setProgress(f);
         zotero_.setProgress(std::move(f));
     }
+    void setRateWait(std::function<void(int)> f) override { zotero_.setRateWait(std::move(f)); }
 
 private:
     WebDav webdav_;

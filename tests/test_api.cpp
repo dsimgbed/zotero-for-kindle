@@ -116,6 +116,39 @@ TEST_CASE("api: a Backoff header delays the next request") {
     CHECK(d->collections == std::vector<std::string>{"GONE2345"});
 }
 
+TEST_CASE("api: a 429 with both Retry-After and Backoff waits once, the longer of the two") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3"}, {"backoff", "5"}}));
+    rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}", {{"last-modified-version", "1"}}));
+    rig.http.expect("GET", kBase + "/users/1/deleted?since=1",
+                    FakeHttp::ok(R"({"items":[],"collections":[],"searches":[],"tags":[],"settings":[]})", {{"last-modified-version", "1"}}));
+    REQUIRE(rig.api.versions("items", 0, nullptr));
+    REQUIRE(rig.api.deleted(1, nullptr));
+    CHECK(rig.slept == std::vector<int>{5});
+}
+
+TEST_CASE("api: a wait over a minute isn't slept through; the request ends RateLimited, the next sync tries") {
+    {
+        Rig rig;
+        rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3600"}}));
+        UserError err;
+        CHECK_FALSE(rig.api.versions("items", 0, &err));
+        CHECK(err.kind == ErrorKind::RateLimited);
+        CHECK(rig.slept.empty());
+        CHECK(rig.http.sent.size() == 1);
+    }
+    {
+        Rig rig;
+        rig.http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}", {{"last-modified-version", "1"}, {"backoff", "600"}}));
+        REQUIRE(rig.api.versions("items", 0, nullptr));
+        UserError err;
+        CHECK_FALSE(rig.api.deleted(1, &err));  // not sent: Zotero asked for ten minutes' quiet
+        CHECK(err.kind == ErrorKind::RateLimited);
+        CHECK(rig.slept.empty());
+        CHECK(rig.http.sent.size() == 1);
+    }
+}
+
 TEST_CASE("api: fetch asks for the keys and returns the objects") {
     Rig rig;
     rig.http.expect("GET", kBase + "/users/1/items?itemKey=AAAA2345,BBBB2345&format=json",

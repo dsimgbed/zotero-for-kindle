@@ -147,11 +147,30 @@ TEST_CASE("zotero storage: a refused key and a busy server read as usual") {
     }
     {
         Rig rig;
-        rig.http.expect("GET", kFileUrl, FakeHttp::status(429, {{"retry-after", "5"}}));
+        std::vector<int> slept;
+        rig.store.setRateWait([&](int s) { slept.push_back(s); });
+        rig.http.expect("GET", kFileUrl, FakeHttp::status(429, {{"retry-after", "3600"}}));
         UserError err;
         CHECK_FALSE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
         CHECK(err.kind == ErrorKind::RateLimited);
+        CHECK(slept.empty());  // an hour isn't slept through: the next sync tries
     }
+}
+
+TEST_CASE("zotero storage: Zotero's Retry-After and Backoff are waited out, as for the API's own requests") {
+    Rig rig;
+    std::vector<int> slept;
+    rig.store.setRateWait([&](int s) { slept.push_back(s); });
+    rig.http.expect("GET", kFileUrl, FakeHttp::status(429, {{"retry-after", "5"}}));
+    rig.http.expect("GET", kFileUrl, FakeHttp::status(302, {{"location", kS3}, {"backoff", "7"}}));
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    UserError err;
+    REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
+    CHECK(slept == std::vector<int>{5});
+    rig.redirect();
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
+    CHECK(slept == std::vector<int>{5, 7});  // the Backoff, before the next request to Zotero
 }
 
 TEST_CASE("zotero storage: a redirect without a location is an error, not a crash") {

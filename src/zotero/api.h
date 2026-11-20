@@ -1,11 +1,11 @@
 #pragma once
 // Zotero Web API v3 for the user's library and the groups the key reaches: library calls go to
 // /users/<id> or, after setLibrary(groupId), to /groups/<groupId>; settings always to the user's. Every call returns nullopt on failure and fills
-// `err` (when given) with a plain-language UserError. Rate limiting (429/503 + Retry-After) is
-// waited out up to three times; a Backoff header delays the next request.
+// `err` (when given) with a plain-language UserError. Rate limits: see zotero/rate_limit.h.
 
 #include "net/errors.h"
 #include "net/http.h"
+#include "zotero/rate_limit.h"
 
 #include <nlohmann/json.hpp>
 
@@ -121,9 +121,8 @@ private:
     Http& http_;
     int64_t userId_;
     std::string apiKey_;
-    std::function<void(int)> sleeper_;
+    RateLimiter rate_;
     std::function<void(const UserError&)> onWait_;
-    int backoffS_ = 0;
     int64_t library_ = 0;
 };
 
