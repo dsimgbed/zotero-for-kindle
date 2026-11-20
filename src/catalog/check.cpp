@@ -97,10 +97,13 @@ CheckResult failure(const HttpResponse& r) {
 
 std::string cacheDir(const std::string& pluginsDir) { return (fs::path(pluginsDir) / ".catalog").string(); }
 
-Cache loadCache(const std::string& pluginsDir) {
+Cache loadCache(const std::string& pluginsDir, const std::array<uint8_t, 32>* registryKey) {
     Cache c;
     const fs::path dir = cacheDir(pluginsDir);
-    if (auto text = readFile(dir / "registry.json")) c.registry = parseRegistry(*text, nullptr);
+    if (auto text = readFile(dir / "registry.json")) {
+        const auto sig = registryKey ? readFile(dir / "registry.json.sig") : std::nullopt;
+        if (!registryKey || (sig && verifySignature(*text, *sig, *registryKey))) c.registry = parseRegistry(*text, nullptr);
+    }
     if (auto text = readFile(dir / "latest.json")) {
         const auto j = json::parse(*text, nullptr, false);
         try {
@@ -193,6 +196,12 @@ CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& plu
     std::string why;
     auto registry = parseRegistry(body.body, &why);
     if (!registry) return {CheckStatus::Failed, "The catalog couldn't be read: " + why};
+    // An older registry is still validly signed: served again (a stale mirror, an attacker), it
+    // would undo a revocation or a key change. "updated" is stamped by tools/registry.sh as
+    // YYYY-MM-DDTHH:MM:SSZ, so its text orders as its time. Kept one changed on disk: no reference.
+    if (const Cache kept = loadCache(pluginsDir, &opt.registryKey);
+        kept.registry && !kept.registry->updated.empty() && registry->updated < kept.registry->updated)
+        return {CheckStatus::Failed, "The catalog is older than the one this Kindle has."};
 
     const fs::path dir = cacheDir(pluginsDir);
     if (!writeAtomic(dir / "registry.json.sig", sig.body) || !writeAtomic(dir / "registry.json", body.body))

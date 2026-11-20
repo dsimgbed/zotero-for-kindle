@@ -60,7 +60,7 @@ void CatalogService::set(const std::function<void(State&)>& change) {
 }
 
 void CatalogService::refresh(State& s) {
-    s.cache = loadCache(config_.pluginsDir);
+    s.cache = loadCache(config_.pluginsDir, &config_.registryKey);  // what it trusts, verified again
     s.kept = keptVersions(config_.pluginsDir);
 }
 
