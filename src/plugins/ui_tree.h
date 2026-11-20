@@ -48,7 +48,7 @@ struct Block {
     enum class Gap { None, Small, Medium, Large };  // also a space's size
     enum class Style { Title, Body, Meta, Label };
     enum class Select { None, One, Many };
-    enum class ItemStyle { Card, Row };
+    enum class ItemStyle { Card, Row, Shelf };  // Shelf (0.11): cover tiles in rows; a ref's label isn't drawn
 
     Kind kind = Kind::Column;
     std::string id;                // deck, list, search, field, chips, button; a notice's and a quote's (optional)

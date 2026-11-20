@@ -70,6 +70,10 @@ struct Laid {
     std::vector<std::shared_ptr<const KeptText>> kept;  // on the root: every text block's, on any page
 };
 
+// How many tiles a shelf (an items block in the "shelf" style) puts in a row `width` wide: tiles of
+// about 240 px (200 at least), 36 px apart, spanning the width (PW5 4, KT4 4, Scribe 6), at least 1.
+int shelfColumns(int width);
+
 // Where a plugin screen's blocks go: under the header, inside the margins.
 Rect blocksArea();
 

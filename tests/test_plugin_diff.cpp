@@ -204,6 +204,25 @@ TEST_CASE("plugin diff: an items block nested in a column is diffed on its rows 
     CHECK(d2[0].rect == le.children[0].rect);
 }
 
+TEST_CASE("plugin diff: a shelf is diffed on its rows: one book's progress redraws the shelf only, with Quality") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const char* shelf = R"({"kind":"column","children":[
+      {"kind":"text","text":"Shelf","style":"label"},
+      {"kind":"items","id":"shelf","style":"shelf","items":["A","B","C"]},
+      {"kind":"buttons","buttons":[{"id":"more","title":"More"}]}]})";
+    Rows before, after;
+    after.rows["B"].progress = 0.5;
+    const Block a = tree(shelf), b = tree(shelf);
+    const Laid la = layoutTree(a, blocksArea(), 0, &before), lb = layoutTree(b, blocksArea(), 0, &before);
+    CHECK(diffTrees(la, lb).empty());
+    const Laid lc = layoutTree(b, blocksArea(), 0, &after);
+    const auto d = diffTrees(la, lc);
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].rect == lc.children[1].rect);
+    CHECK(d[0].wave == Waveform::Quality);  // dark covers: a partial refresh that leaves no ghost
+}
+
 TEST_CASE("plugin diff: a quote's new text redraws it with Fast in place, Ui when its size changed") {
     if (!fonts()) return;
     ScopedMetrics m(kPw5);

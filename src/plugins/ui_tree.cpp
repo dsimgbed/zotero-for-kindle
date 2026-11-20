@@ -255,7 +255,8 @@ struct Parser {
                 b.id = id(o, where);
                 b.empty = str(o, "empty", where, false);
                 b.itemStyle = choice<Block::ItemStyle>(o, "style", where, Block::ItemStyle::Row,
-                                                       {{"card", Block::ItemStyle::Card}, {"row", Block::ItemStyle::Row}});
+                                                       {{"card", Block::ItemStyle::Card}, {"row", Block::ItemStyle::Row},
+                                                        {"shelf", Block::ItemStyle::Shelf}});
                 if (!field(o, "style")) bad(where, "\"style\" is missing");
                 const json* refs = field(o, "items");
                 if (!refs) bad(where, "\"items\" is missing");
