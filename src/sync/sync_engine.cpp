@@ -711,9 +711,17 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
                 log(LogLevel::Warn, "sync: read tag of %s blocked by the write guard; next time", mark.itemKey.c_str());
                 break;
             }
-            if (!res || !res->failed.empty()) {
+            if (!res) {
                 rep.error = err;
                 return false;
+            }
+            if (!res->failed.empty()) {
+                // What was sent is refused (400/413), and would be again: the mark goes, so the
+                // item reads as Zotero has it, and the other marks and later pushes still go.
+                log(LogLevel::Warn, "sync: read tag of %s refused by Zotero (%s); mark dropped", mark.itemKey.c_str(),
+                    res->failed.begin()->second.c_str());
+                lib_.clearReadMark(mark);
+                break;
             }
             if (res->gone) {  // deleted in Zotero meanwhile: the next pull removes it here too
                 lib_.clearReadMark(mark);
