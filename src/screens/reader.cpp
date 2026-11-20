@@ -332,6 +332,7 @@ bool ReaderScreen::refuseReadOnly(Nav& nav, bool always) {
 }
 
 void ReaderScreen::onShow(Nav& nav) {
+    notePicking_ = false;
     readLibrary(nav);
     if (worker_) {  // back from a pushed panel: the book stays open (its notes may have changed)
         refreshHighlights(nav);
@@ -1535,9 +1536,9 @@ void ReaderScreen::endArea(Point to, Nav& nav) {
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
 }
 
-void ReaderScreen::dropArea() {
+void ReaderScreen::dropArea(bool keepNotePopup) {
     areaArmed_ = areaDrawing_ = areaPen_ = noteArmed_ = false;
-    notePopup_.reset();
+    if (!keepNotePopup) notePopup_.reset();
     if (selecting_ && !selection_) selecting_ = false;  // a long press still waiting can't start one later
 }
 
@@ -1676,6 +1677,7 @@ void ReaderScreen::onNotePopup(const Gesture& g, Nav& nav) {
         return;
     }
     if (act == NotePopup::Action::AddTag) {
+        notePicking_ = true;
         pickAnnotationTag(nav, [this, n = &nav, key = notePopup_->key()](const std::string& tag) {
             const auto tags = setAnnotationTag(*n, key, tag, true);
             if (tags) n->sync().pushSoon();

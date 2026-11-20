@@ -203,7 +203,7 @@ public:
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override {
         commitInk();
-        dropArea();  // also Add note and a note's pop-up
+        dropArea(notePicking_);  // also Add note, and a note's pop-up unless its own + Tag picker covers it
     }
     void onBackground(Nav&) override {
         commitInk();
@@ -239,7 +239,8 @@ private:
     void moveArea(Point to, Nav&);
     void endArea(Point to, Nav&);  // saves it when big enough
     void cancelArea(Nav&);         // armed or drawn: neither any more
-    void dropArea();               // the same without repainting (the page or screen changes anyway); Add note too
+    // The same without repainting (the page or screen changes anyway); Add note and a note's pop-up too.
+    void dropArea(bool keepNotePopup = false);
     void onArea(const RenderEvent&, Nav&);
     void placeNote(Point, Nav&);                    // the tap after Add note: the note box opens
     void saveNote(const std::string& text, Nav&);  // Return in it (empty: nothing)
@@ -365,6 +366,7 @@ private:
     };
     std::map<uint64_t, SentNote> noteSent_;  // being placed by the worker
     std::unique_ptr<NotePopup> notePopup_;
+    bool notePicking_ = false;  // its + Tag picker is pushed: the pop-up is back with the tag after it
     // Handwriting.
     bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
