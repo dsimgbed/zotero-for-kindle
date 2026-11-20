@@ -91,6 +91,18 @@ TEST_CASE("zotero storage: a file downloads through the redirect, without sendin
     CHECK(total == static_cast<int64_t>(kBook.size()));
 }
 
+TEST_CASE("zotero storage: a large file isn't cut off by a limit on the whole download; only a stall ends it") {
+    Rig rig;
+    rig.redirect();
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    UserError err;
+    REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
+    REQUIRE(rig.http.sent.size() == 2);
+    CHECK(rig.http.sent[1].timeoutS == 0);
+    CHECK(rig.http.sent[1].stallSeconds == kFileStallSeconds);
+    CHECK(rig.http.sent[0].timeoutS > 0);  // the redirect is a small answer: a limit still holds
+}
+
 TEST_CASE("zotero storage: a file that was never uploaded is NotOnServer") {
     Rig rig;
     rig.http.expect("GET", kFileUrl, FakeHttp::status(404));

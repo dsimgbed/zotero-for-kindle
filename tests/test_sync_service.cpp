@@ -352,6 +352,7 @@ struct KeptRig : Rig {
     std::vector<std::string> fetched;  // attachment keys whose file was asked for, in order
     std::function<void(const HttpRequest&)> onFile;  // e.g. hold one back
     std::map<std::string, long> fileStatus;          // answer /file for this key with this status
+    std::set<std::string> stalls;                    // these files start, then stall (curl 28)
 
     KeptRig() {
         zotero.putCollection("SHELF001", "Shelf");
@@ -382,6 +383,18 @@ struct KeptRig : Rig {
             }
             if (r.url.rfind("https://files.example/", 0) == 0) {
                 HttpResponse ok = FakeHttp::ok(content(r.url.substr(22)));
+                bool stalled;
+                {
+                    std::lock_guard<std::mutex> lock(fileMutex);
+                    stalled = stalls.count(r.url.substr(22)) > 0;
+                }
+                if (stalled) {
+                    if (r.onProgress) r.onProgress(3, static_cast<int64_t>(ok.body.size()));
+                    HttpResponse timedOut;
+                    timedOut.curlCode = 28;
+                    timedOut.curlError = "Operation too slow";
+                    return timedOut;
+                }
                 if (r.onProgress) {  // like CurlHttp: the size is known early
                     r.onProgress(0, static_cast<int64_t>(ok.body.size()));
                     if (r.cancel && *r.cancel) {
@@ -417,6 +430,11 @@ struct KeptRig : Rig {
     }
     void startOnZotero() { start(""); }
     bool downloaded(const std::string& att) { return fs::exists(fs::path(files()) / att / "book.epub"); }
+    void stall(const std::string& key, bool on = true) {
+        std::lock_guard<std::mutex> lock(fileMutex);
+        if (on) stalls.insert(key);
+        else stalls.erase(key);
+    }
     void answerFile(const std::string& key, long status) {
         std::lock_guard<std::mutex> lock(fileMutex);
         if (status) fileStatus[key] = status;
@@ -752,4 +770,43 @@ TEST_CASE("kept: every readable file of an item downloads, not only the one Open
     CHECK(ui.attachment("ATTA0002")->state == AttachmentRecord::State::Local);
     CHECK(ui.attachment("ATTA0002")->title == "Full Text PDF");
     CHECK(ui.rowFor("BOOKA001")->files == 2);
+}
+
+TEST_CASE("kept: a file whose download stalls goes behind the others; it doesn't hold them up, now or after") {
+    KeptRig rig;
+    rig.book("BOOKD001", "ATTD0001", "SHELF001");
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    // The file the round asks for first stalls.
+    std::string first;
+    rig.onFile = [&](const HttpRequest& r) {
+        std::lock_guard<std::mutex> lock(rig.fileMutex);
+        if (first.empty()) {
+            first = r.url.substr(std::string("https://api.zotero.org/users/1/items/").size(), 8);
+            rig.stalls.insert(first);
+        }
+    };
+    rig.service->downloadKept();
+    std::vector<std::string> others;
+    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (const char* k : {"ATTA0001", "ATTB0001", "ATTD0001"})
+        if (k != first) others.push_back(k);
+    REQUIRE(others.size() == 2);
+    CHECK(rig.downloaded(others[0]));  // the others came in the same round
+    CHECK(rig.downloaded(others[1]));
+    CHECK_FALSE(rig.downloaded(first));
+    CHECK(rig.fetches(first) == 1);  // tried once this round, not over and over
+    // The next round (rebuilt from the library, as after a restart) asks for a new file first.
+    rig.book("BOOKE001", "ATTE0001", "SHELF001");
+    rig.syncAndWait();
+    REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTE0001") && rig.fetches(first) == 2; }));
+    const auto fetched = rig.fetchedCopy();
+    const auto e = std::find(fetched.begin(), fetched.end(), "ATTE0001");
+    const auto again = std::find(std::next(std::find(fetched.begin(), fetched.end(), first)), fetched.end(), first);
+    CHECK(e < again);
+    rig.stall(first, false);  // the line is good again: it comes in
+    rig.syncAndWait();
+    CHECK(rig.waitUntil([&] { return rig.downloaded(first); }));
 }

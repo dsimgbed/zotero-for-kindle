@@ -15,6 +15,10 @@ namespace zk {
 struct Config;
 class Http;
 
+// A file's download has no limit on its whole time (a large book over a slow line takes long);
+// it ends once it has stalled (under 1 KB/s) for this long.
+constexpr int kFileStallSeconds = 60;
+
 class FileStore {
 public:
     virtual ~FileStore() = default;

@@ -77,6 +77,7 @@ struct SyncService::Worker {
     };
     std::vector<KeptFile> keptQueue;
     std::map<std::string, int> keptTotal;
+    std::set<std::string> keptStalledNow;  // stalled in this round: moved to the back once
 };
 
 SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {
@@ -461,7 +462,7 @@ void SyncService::run() {
 }
 
 bool SyncService::download(Worker& w, const std::string& itemKey, const AttachmentRecord& att, UserError* err,
-                           const std::function<void(int64_t)>& onTotal) {
+                           const std::function<void(int64_t)>& onTotal, bool* started) {
     SyncEvent p0;
     p0.kind = SyncEvent::Kind::DownloadProgress;
     p0.itemKey = itemKey;
@@ -470,7 +471,9 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
     auto last = Clock::now();
     int lastPct = 0;
     bool totalSeen = false;
+    if (started) *started = false;
     w.files->setProgress([&](int64_t d, int64_t t) {
+        if (started && d > 0) *started = true;
         if (onTotal && !totalSeen && t > 0) {
             totalSeen = true;
             onTotal(t);
@@ -499,6 +502,14 @@ constexpr int64_t kKeptRetryMs = int64_t{7} * 24 * 3600 * 1000;  // a file that 
 // attachment changed in Zotero.
 nlohmann::json keptFailures(Library& lib) {
     auto j = nlohmann::json::parse(lib.metaValue("keptFailures"), nullptr, false);
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+// Files whose download began and then broke off (stalled, connection lost), kept in the library
+// meta across syncs: {key: ms}. They go behind the other files, so a large file over a poor line
+// never holds up the rest; once one downloads, it is off the list.
+nlohmann::json keptStalled(Library& lib) {
+    auto j = nlohmann::json::parse(lib.metaValue("keptStalled"), nullptr, false);
     return j.is_object() ? j : nlohmann::json::object();
 }
 
@@ -554,6 +565,10 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
                 it->collections.insert(key);
                 ++w.keptTotal[key];
             }
+        w.keptStalledNow.clear();
+        const auto stalled = keptStalled(*w.lib);
+        std::stable_partition(w.keptQueue.begin(), w.keptQueue.end(),
+                              [&](const Worker::KeptFile& f) { return !stalled.contains(f.att.key); });
     } else {  // keeping turned off meanwhile, or its group hidden: those collections' files are no longer wanted
         std::set<std::string> keptSet;
         for (const auto& key : kept)
@@ -577,6 +592,7 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
         return stop(status);  // the next sync looks again
     };
     if (deps_.freeBytes() < kKeptMinFree) return paused();
+    if (w.keptStalledNow.count(w.keptQueue.front().att.key)) return stop({});  // only stalled ones left: the next sync
     setKept(status);
 
     const Worker::KeptFile next = w.keptQueue.front();
@@ -602,7 +618,8 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
         done.cancelReset = true;
     };
     UserError err;
-    const bool ok = download(w, next.itemKey, next.att, &err, onTotal);
+    bool started = false;
+    const bool ok = download(w, next.itemKey, next.att, &err, onTotal, &started);
     bool yielded;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -612,6 +629,8 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
     if (ok) {
         if (auto failures = keptFailures(*w.lib); failures.erase(next.att.key))
             w.lib->setMetaValue("keptFailures", failures.dump());
+        if (auto stalled = keptStalled(*w.lib); stalled.erase(next.att.key))
+            w.lib->setMetaValue("keptStalled", stalled.dump());
         w.keptQueue.erase(w.keptQueue.begin());
         SyncEvent fin;
         fin.kind = SyncEvent::Kind::DownloadFinished;
@@ -631,6 +650,17 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
         return true;
     }
     if (err.kind == ErrorKind::DiskFull) return paused();
+    // It began and then broke off (a stall, a lost connection) with Wi-Fi still up: the line is
+    // poor for this file, not down. It goes behind the others, now and in later rounds; once only
+    // such files are left, the round ends (above).
+    if (started && (err.kind == ErrorKind::HostNotAnswering || err.kind == ErrorKind::Other)) {
+        auto stalled = keptStalled(*w.lib);
+        stalled[next.att.key] = deps_.wallMs();
+        w.lib->setMetaValue("keptStalled", stalled.dump());
+        w.keptStalledNow.insert(next.att.key);
+        std::rotate(w.keptQueue.begin(), w.keptQueue.begin() + 1, w.keptQueue.end());
+        return true;
+    }
     return stop({});  // network, server, login: not file after file; the next sync tries again
 }
 

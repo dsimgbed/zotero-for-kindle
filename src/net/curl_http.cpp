@@ -136,6 +136,10 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
         curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, static_cast<long>(req.connectTimeoutS));
         curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(req.timeoutS));
     }
+    if (req.stallSeconds > 0) {
+        curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, static_cast<long>(req.stallBytesPerS));
+        curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, static_cast<long>(req.stallSeconds));
+    }
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, onBody);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &sink);
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, onHeader);

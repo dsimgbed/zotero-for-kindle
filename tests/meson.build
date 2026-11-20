@@ -58,6 +58,7 @@ test_sources = files(
   'test_pdf_columns.cpp',
   'test_reader_columns.cpp',
   'test_zotero_storage.cpp',
+  'test_curl_http.cpp',
   'test_item_details.cpp',
   'test_reading_position.cpp',
   'test_reader_position.cpp',

@@ -66,7 +66,8 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
     HttpRequest get;
     get.url = location->second;
     get.outFile = staged.string();
-    get.timeoutS = 600;
+    get.timeoutS = 0;
+    get.stallSeconds = kFileStallSeconds;
     get.onProgress = progress_;
     const HttpResponse f = http_.send(get);
     if (f.curlCode == 23 /* CURLE_WRITE_ERROR */ && freeSpace_(destDir) < (1u << 20))

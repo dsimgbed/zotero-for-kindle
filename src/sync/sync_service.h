@@ -89,9 +89,9 @@ private:
     // `passed` gains the groups pushed to.
     SyncReport pushChanges(Worker&, std::vector<int64_t>* passed = nullptr);
     // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
-    // onTotal: once, when the size is known.
+    // onTotal: once, when the size is known. *started: whether any of the file arrived.
     bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err,
-                  const std::function<void(int64_t total)>& onTotal = nullptr);
+                  const std::function<void(int64_t total)>& onTotal = nullptr, bool* started = nullptr);
     bool keepStep(Worker&, bool fresh);  // true: more to download
     void setKept(std::map<std::string, KeptStatus>);  // KeptChanged if it changed
 
