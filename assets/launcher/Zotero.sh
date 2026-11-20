@@ -65,11 +65,20 @@ if ! take_lock; then
     fi
     exit 0
 fi
-release_lock() {
+# At every end of this launcher, a kill included: the lock goes, and once an app has been started
+# the Kindle may sleep again (the app's keep-awake, which its own signal path can't turn off).
+started=
+finish() {
+    if [ -n "$started" ]; then
+        command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
+    fi
     [ "$(readlink "$ZK_LOCK" 2>/dev/null)" = "$$" ] && rm -f "$ZK_LOCK"
     return 0
 }
-trap release_lock EXIT
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if pid=$(running_pid); then
     # SIGWINCH asks the app to come to the front. An older app ignores it (the signal's default),
@@ -133,6 +142,7 @@ check_update() {
 }
 
 starts=0
+started=1
 while [ "$starts" -lt 5 ]; do
     starts=$((starts + 1))
     rotate_log
@@ -157,6 +167,4 @@ done
 if [ "$code" != 0 ] && [ "$code" != 75 ] && [ -e "$ZK_INK_MARK" ]; then
     DISPLAY=$ZK_DISPLAY ./bin/zotero --reset-system-ink >> log/zotero.log 2>&1
 fi
-# Whatever happened to the app, let the Kindle sleep again.
-command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
-exit 0
+exit 0  # finish: whatever happened to the app, the Kindle may sleep again

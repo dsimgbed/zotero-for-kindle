@@ -283,6 +283,30 @@ TEST_CASE("launcher: after an unclean exit it resets the system ink, not after a
     }
 }
 
+TEST_CASE("launcher: killed itself while the app runs, it still lets the Kindle sleep") {
+    // The system ends the launcher (SIGTERM) along with the app: the app's own signal path can't
+    // call lipc, so the launcher's ending is what turns the keep-awake off.
+    Kindle k(std::string("#!/bin/sh\nkill -TERM $PPID\nsleep 0.3\necho '0.2.0 0' >> runs\n"));
+    writeFile(k.root / "fakebin/lipc-set-prop", "#!/bin/sh\necho \"$*\" >> '" + (k.home / "lipc").string() + "'\n", true);
+    k.launch();
+    CHECK(readFile(k.home / "lipc") == "com.lab126.powerd preventScreenSaver 0\n");
+    CHECK_FALSE(fs::is_symlink(k.lock()));
+    for (int i = 0; i < 20 && !fs::exists(k.home / "runs"); i++) usleep(100 * 1000);  // the stand-in's end
+}
+
+TEST_CASE("launcher: a second start that finds the app running leaves the keep-awake alone") {
+    Kindle k;
+    writeFile(k.root / "fakebin/lipc-set-prop", "#!/bin/sh\necho \"$*\" >> '" + (k.home / "lipc").string() + "'\n", true);
+    const std::string holder = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(holder, k.lock());
+    CHECK(k.launch() == 0);
+    CHECK_FALSE(fs::exists(k.home / "runs"));
+    CHECK_FALSE(fs::exists(k.home / "lipc"));
+    CHECK(fs::read_symlink(k.lock()).string() == holder);  // not ours to release
+    shell("kill " + holder);
+}
+
 TEST_CASE("launcher: endless 75s stop after five") {
     Kindle k(app("0.2.0", 75));
     k.launch();
