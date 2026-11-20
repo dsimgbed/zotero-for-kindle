@@ -424,6 +424,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 break;
             case RenderEvent::Kind::Error:
                 error_ = e.error;
+                bookmarkArriving_ = false;  // no page arrives
                 if (visible) nav.redrawAll(Waveform::Quality);
                 break;
             case RenderEvent::Kind::SearchResults:
@@ -1314,6 +1315,7 @@ void ReaderScreen::draw(Canvas& canvas) {
 
 void ReaderScreen::markJumpOrigin() {
     pendingGo_.reset();  // this jump instead
+    bookmarkArriving_ = false;  // a corner tap was for the page a turn brought, not where this jump goes
     turnTarget_ = -1;  // a jump: where it lands is the worker's to say
     turnsSinceJump_ = 0;
     if (page_ < 0 || position_.value.empty() || layoutPending_) return;
@@ -1339,6 +1341,7 @@ void ReaderScreen::back(Nav& nav) {
     back_.pop_back();
     turnsSinceJump_ = 0;
     pendingGo_.reset();  // Back instead
+    bookmarkArriving_ = false;
     commitInk();
     turning_ = true;
     turnTarget_ = -1;

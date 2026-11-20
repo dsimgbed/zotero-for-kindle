@@ -267,3 +267,33 @@ TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when Zotero asks to wait
     CHECK_FALSE(rig.reader->menus()->syncing());
     CHECK(rig.nav.toasts.back() == "Zotero asks to wait until 14:05.");
 }
+
+TEST_CASE("reader menus fix: a corner tap during a re-layout doesn't bookmark where a jump then goes") {
+    // Audit B fix round 2: the remembered corner tap outlived Go to page and Back.
+    Rig rig;
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // the corner, mid re-layout
+    rig.reader->goToPage(50);  // then Go to page
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.lib.bookmarks("EP000003").empty());
+
+    // Back the same way.
+    REQUIRE(rig.reader->backLabel());
+    Layout smaller = rig.reader->layout();
+    smaller.sizePt = 9;
+    rig.reader->applyLayout(smaller, rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
+    CHECK(rig.waitPage(0));
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.lib.bookmarks("EP000003").empty());
+}
