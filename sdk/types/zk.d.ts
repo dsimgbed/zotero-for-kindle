@@ -1724,8 +1724,8 @@ declare namespace zk {
        * `"card"`: a large entry per item; `"row"`: a compact line per item; `"shelf"`: cover tiles
        * in rows.
        *
-       * A shelf's tile is the item's cover as the app draws it (title and authors on a dark
-       * cover; "PDF" or "WEB" in its corner for a file that isn't an EPUB), a thin progress bar
+       * A shelf's tile is the item's cover as the app draws it (a book in one of three
+       * looks chosen by its key; a paper like a first page; no corner tab; from app 0.12.0), a thin progress bar
        * once it was opened, and one line under it: "13%", "New" or "Read", or the download's
        * progress while it downloads. The tiles per row follow the screen's width (4 on a
        * Paperwhite or a Kindle, 6 on a Scribe), and the shelf pages a row at a time. A ref's

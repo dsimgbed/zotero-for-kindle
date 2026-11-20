@@ -31,6 +31,7 @@ spacing and greys are named tokens, never pixels or colours. See [Composing scre
 - `zk.ui.grid(children, { columns, minWidth, gap, rows })`: cells in rows; `columns: "auto"` fits as
   many as `minWidth` allows. Pages by row, except with `rows`: at most that many rows, the rest
   not drawn, never a pager.
+- `zk.ui.grid`, `cover`, `progress`, `box` and `image` also take `width` like a row's children.
 - `zk.ui.image({ src, width?, id? })`: a PNG from the plugin's package, drawn in greys, aspect kept;
   refused if missing or over 2 MB.
 - `zk.ui.column(children, { fit: "trim" })` on a Home body's root: children in order while they

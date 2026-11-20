@@ -16,6 +16,9 @@ every option.
 const ref = (i: zk.Item) => ({ key: i.key, library: i.libraryId });
 ```
 
+In the snippets, `item` is one `zk.Item`, `items` an array of them, and `byline(item)`, `authors`
+and the like are strings you format yourself from the item.
+
 ## Text lines
 
 A section label is small tracked capitals; a title is serif bold, cut at a number of lines.
