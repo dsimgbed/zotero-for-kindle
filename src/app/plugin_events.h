@@ -14,7 +14,8 @@
 //  - Badge, Log: nothing here (Settings → Plugins reads badges and logs from the host).
 //  - Screens: openScreen() pushes a PluginScreen; ScreenOpen (zk.ui.open) pushes one over its
 //    parent (if the parent is still open; else the host is told it went); trees, errors and
-//    ScreenClose wait for their screen, which takes them when it is visible (PluginScreen::onTick).
+//    ScreenClose wait for their screen, which takes them when it is visible (PluginScreen::onTick);
+//    of its trees only the newest waits (errors all do).
 //    rebind() gives every open plugin screen the error state.
 //  - Entry points (PluginEntries, for the reader's bar, item details and Home): what the enabled
 //    plugins registered, only while plugins run; asking wakes the host once (plugins load lazily)

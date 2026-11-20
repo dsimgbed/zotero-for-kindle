@@ -222,3 +222,38 @@ TEST_CASE("home tree: Settings → Home changed: the next show drops the old bod
     r.showAgain();
     CHECK_FALSE(r.home().pluginBody());
 }
+
+TEST_CASE("home tree: a hidden body keeps only its newest tree waiting; errors are all kept (R-D)") {
+    HomeRig r;
+    r.choice = "";  // Home opens no body itself: this one is never shown, as a body under the reader
+    r.start();
+    const PluginEvents::Opened o = r.events->openHome("desk", "desk");
+    REQUIRE(o.instance != 0);
+    for (int i = 0; i < 20; ++i) {
+        r.events->rerender(o.instance);
+        REQUIRE(r.host->waitIdle(2000));
+        r.events->poll(r.app);
+    }
+    int trees = 0, errors = 0;
+    PluginHostEvent ev;
+    while (r.events->take(o.instance, ev)) {
+        if (ev.kind == PluginHostEvent::Kind::ScreenTree) ++trees;
+        else ++errors;
+    }
+    CHECK(trees == 1);
+    CHECK(errors == 0);
+
+    // An error waiting stays; a newer tree after it replaces only the older trees.
+    r.events->rerender(o.instance);
+    REQUIRE(r.host->waitIdle(2000));
+    r.events->poll(r.app);
+    r.events->send(o.instance, json{{"kind", "tap"}, {"id", "throw"}});  // render now throws: a ScreenError
+    REQUIRE(r.host->waitIdle(2000));
+    r.events->poll(r.app);
+    std::vector<PluginHostEvent::Kind> kinds;
+    while (r.events->take(o.instance, ev)) kinds.push_back(ev.kind);
+    REQUIRE(kinds.size() == 2);
+    CHECK(kinds[0] == PluginHostEvent::Kind::ScreenTree);
+    CHECK(kinds[1] == PluginHostEvent::Kind::ScreenError);
+    r.events->left(o.instance);
+}
