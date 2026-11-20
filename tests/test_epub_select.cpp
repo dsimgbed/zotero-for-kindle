@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/annotation_text.h"
 #include "docs/engine_factory.h"
 
@@ -14,7 +15,7 @@ using json = nlohmann::json;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 std::unique_ptr<DocumentEngine> pride() {
     UserError e;

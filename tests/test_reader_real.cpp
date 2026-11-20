@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "app/settings_store.h"
 #include "docs/engine_factory.h"
 #include "docs/render_worker.h"
@@ -21,7 +22,7 @@ double msSince(Clock::time_point t) { return std::chrono::duration<double, std::
 std::unique_ptr<RenderWorker> realWorker() {
     return std::make_unique<RenderWorker>([](DocType t) {
         UserError e;
-        return loadEngine(t, EngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}, &e);
+        return loadEngine(t, EngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}, &e);
     });
 }
 

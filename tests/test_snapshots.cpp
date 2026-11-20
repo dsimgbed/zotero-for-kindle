@@ -7,6 +7,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 #include "docs/render_worker.h"
 #include "fake_http.h"
@@ -48,7 +49,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 const std::string kRealName = "\xD0\x92\xD0\xB5\xD1\x80\xD0\xB1\xD0\xB8\xD1\x86\xD0\xBA\xD0\xB8\xD0\xB9 - "
                               "\xD0\x90\xD0\xBD\xD1\x82\xD0\xB8\xD0\xBA\xD0\xBE\xD0\xBF\xD0\xB8\xD1\x80\xD0\xB0\xD0\xB9\xD1\x82.html";
@@ -494,7 +495,7 @@ TEST_CASE("snapshots: an item with a PDF and a snapshot asks which file, PDF fir
 }
 
 TEST_CASE("snapshots: an older library learns its snapshots once; Zotero's snapshot annotations go") {
-    const fs::path path = fs::temp_directory_path() / "zk-snapshots-upgrade.db";
+    const fs::path path = test::uniqueTempPath("zk-snapshots-upgrade", ".db");
     fs::remove(path);
     {
         Db db = Db::open(path.string());

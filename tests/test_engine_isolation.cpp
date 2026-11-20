@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 
 #include <cstdio>
@@ -13,20 +14,21 @@ using namespace zk;
 namespace {
 
 std::string exportedSymbols(const std::string& lib) {
+    const std::string nmOut = test::uniqueTempPath("zk-nm", ".txt").string();
 #ifdef __APPLE__
-    const std::string cmd = "nm -gU " + lib + " > /tmp/zk-nm.txt 2>/dev/null";
+    const std::string cmd = "nm -gU " + lib + " > " + nmOut + " 2>/dev/null";
 #else
-    const std::string cmd = "nm -D --defined-only " + lib + " > /tmp/zk-nm.txt 2>/dev/null";
+    const std::string cmd = "nm -D --defined-only " + lib + " > " + nmOut + " 2>/dev/null";
 #endif
     if (std::system(cmd.c_str()) != 0) return "nm failed";
-    std::ifstream in("/tmp/zk-nm.txt");
+    std::ifstream in(nmOut);
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
 }
 
 EngineEnv testEnv() {
-    return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"};
+    return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()};
 }
 
 }  // namespace

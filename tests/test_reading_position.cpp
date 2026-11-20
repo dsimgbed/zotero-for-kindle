@@ -2,6 +2,7 @@
 // a PDF's page index, an EPUB's point CFI ("/6/24!/4/2/2/3:10", no "epubcfi(...)").
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 
 #include <nlohmann/json.hpp>
@@ -13,7 +14,7 @@ using json = nlohmann::json;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 std::unique_ptr<DocumentEngine> open(DocType type, const std::string& path) {
     UserError e;
@@ -163,7 +164,7 @@ TEST_CASE("positions: Go takes Zotero's place; Stay keeps the Kindle's and sends
 }
 
 TEST_CASE("positions: a schema 3 database gains the positions table and keeps its data") {
-    const auto path = std::filesystem::temp_directory_path() / "zk-positions-v3.db";
+    const auto path = test::uniqueTempPath("zk-positions-v3", ".db");
     for (const char* ext : {"", "-wal", "-shm"}) std::filesystem::remove(path.string() + ext);
     {
         Db db = Db::open(path.string());

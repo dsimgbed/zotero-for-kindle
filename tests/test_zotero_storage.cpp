@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_http.h"
 #include "screens/setup.h"
 #include "sync/config.h"
@@ -25,7 +26,7 @@ const std::string kS3 = "https://zoterofilestorage.s3.us-east-1.amazonaws.com/40
 const std::string kBook = "the whole book, as uploaded";
 
 std::string md5Of(const std::string& bytes) {
-    const std::string path = "/tmp/zk-zs-md5";
+    const std::string path = test::uniqueTempPath("zk-zs-md5").string();
     std::ofstream(path, std::ios::binary) << bytes;
     const std::string h = md5OfFile(path);
     fs::remove(path);

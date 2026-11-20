@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "test_paths.h"
 #include "docs/guarded_engine.h"
 #include "fake_engine.h"
 #include "plugins/fulltext.h"
@@ -14,10 +15,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}; }
 
 std::string freshDir(const std::string& name) {
-    const std::string d = "/tmp/zk-fulltext-" + name;
+    const std::string d = test::uniqueTempPath("zk-fulltext-" + name).string();
     fs::remove_all(d);
     fs::create_directories(d);
     return d;

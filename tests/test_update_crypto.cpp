@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "update/manifest.h"
 #include "update/release_key.h"
 #include "update/signature.h"
@@ -64,7 +65,7 @@ TEST_CASE("update: a signature verifies only for its message and key") {
 }
 
 TEST_CASE("update: sha512 of a file") {
-    const std::string path = "/tmp/zk-sha512-test.txt";
+    const std::string path = test::uniqueTempPath("zk-sha512-test", ".txt").string();
     std::ofstream(path) << "abc";
     CHECK(sha512FileHex(path) ==
           "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");

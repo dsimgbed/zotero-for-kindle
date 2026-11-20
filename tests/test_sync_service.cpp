@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_http.h"
 #include "fake_lipc.h"
 #include "fake_zotero.h"
@@ -517,7 +518,7 @@ struct KeptRig : Rig {
     }
     static std::string content(const std::string& key) { return "the book " + key; }
     static std::string md5(const std::string& key) {
-        const std::string path = "/tmp/zk-kept-md5-" + key;
+        const std::string path = test::uniqueTempPath("zk-kept-md5-" + key).string();
         std::ofstream(path, std::ios::binary) << content(key);
         const std::string h = md5OfFile(path);
         fs::remove(path);

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <thread>
 
+#include "test_paths.h"
 #include "fake_plugins.h"
 #include "plugins/fulltext.h"
 #include "plugins/host.h"
@@ -49,7 +50,7 @@ struct Env {
     PluginHostDeps deps() {
         PluginHostDeps d = fp.deps();
         d.dbPath = dbPath;
-        d.engineEnv = {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache-plugin-lib"};
+        d.engineEnv = {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir("-plugin-lib")};
         return d;
     }
     std::string run(const std::string& id) {

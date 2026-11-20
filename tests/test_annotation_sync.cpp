@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_zotero.h"
 #include "net/write_guard.h"
 #include "store/db.h"
@@ -75,7 +76,8 @@ struct Rig {
 };
 
 std::string tempDb(const char* name) {
-    const fs::path p = fs::temp_directory_path() / name;
+    const std::string n = name;
+    const fs::path p = test::uniqueTempPath(n.substr(0, n.rfind('.')), n.substr(n.rfind('.')));
     fs::remove(p);
     fs::remove(p.string() + "-wal");
     fs::remove(p.string() + "-shm");

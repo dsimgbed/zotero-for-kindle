@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "fake_display.h"
 #include "fake_plugins.h"
 #include "fake_nav.h"
@@ -253,7 +254,7 @@ TEST_CASE("kt4 goldens: a real book page, shrunk") {
     if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
     addFontDir("assets/fonts-device");
     UserError err;
-    auto epub = loadEngine(DocType::Epub, {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, "/tmp/zk-cre-cache"}, &err);
+    auto epub = loadEngine(DocType::Epub, {"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, test::creCacheDir()}, &err);
     REQUIRE(epub);
     REQUIRE(epub->open("tests/data/epub/alice-gutenberg-epub3.epub", &err));
     Layout l;

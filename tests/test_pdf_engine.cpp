@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 
 #include <algorithm>
@@ -78,12 +79,13 @@ TEST_CASE("pdf engine: password-protected and damaged files") {
 TEST_CASE("pdf engine: the module exports only its factory") {
     const char* env = std::getenv("ZK_LIB_DIR");
     const std::string lib = std::string(env ? env : "build-desktop") + "/libzk-pdf.so";
+    const std::string nmOut = test::uniqueTempPath("zk-nm-pdf", ".txt").string();
 #ifdef __APPLE__
-    REQUIRE(std::system(("nm -gU " + lib + " > /tmp/zk-nm-pdf.txt").c_str()) == 0);
+    REQUIRE(std::system(("nm -gU " + lib + " > " + nmOut).c_str()) == 0);
 #else
-    REQUIRE(std::system(("nm -D --defined-only " + lib + " > /tmp/zk-nm-pdf.txt").c_str()) == 0);
+    REQUIRE(std::system(("nm -D --defined-only " + lib + " > " + nmOut).c_str()) == 0);
 #endif
-    std::ifstream in("/tmp/zk-nm-pdf.txt");
+    std::ifstream in(nmOut);
     std::stringstream ss;
     ss << in.rdbuf();
     int defined = 0;
@@ -160,7 +162,7 @@ TEST_CASE("pdf engine: a small resource store; text-only engines a smaller one")
 
 TEST_CASE("pdf engine: a page whose image is larger than the store still renders, also after a trim") {
     // 3000x3000 RGB: 27 MB decoded, over the reader's 24 MB store.
-    const std::string path = "/tmp/zk-heavy-page.pdf";
+    const std::string path = test::uniqueTempPath("zk-heavy-page", ".pdf").string();
     {
         std::ofstream f(path, std::ios::binary);
         f << heavyPdf(3000);

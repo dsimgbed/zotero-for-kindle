@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include "test_paths.h"
 #include "docs/engine_factory.h"
 #include "docs/fonts.h"
 
@@ -13,7 +14,7 @@ using namespace zk;
 
 namespace {
 
-EngineEnv env() { return {"third_party/crengine/cr3gui/data", readingFontDirs(), "/tmp/zk-cre-cache-fast"}; }
+EngineEnv env() { return {"third_party/crengine/cr3gui/data", readingFontDirs(), test::creCacheDir("-fast")}; }
 
 // Share of dark pixels on page 8 of Alice (or `page`) in `font`.
 double ink(DocumentEngine& epub, const std::string& font, int page = 8) {
