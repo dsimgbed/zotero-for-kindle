@@ -38,14 +38,25 @@ DeviceSettings::DeviceSettings(std::string file) : file_(std::move(file)) {
 }
 
 std::optional<std::string> DeviceSettings::get(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     const auto it = values_.find(key);
     if (it == values_.end()) return std::nullopt;
     return it->second;
 }
 
-void DeviceSettings::set(const std::string& key, std::string value) {
+bool DeviceSettings::set(const std::string& key, std::string value) {
+    std::lock_guard<std::mutex> lock(mutex_);
     values_[key] = std::move(value);
-    if (file_.empty()) return;
+    return writeLocked();
+}
+
+bool DeviceSettings::flush() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return writeLocked();
+}
+
+bool DeviceSettings::writeLocked() {
+    if (file_.empty()) return true;
     nlohmann::json j = nlohmann::json::object();
     for (const auto& [k, v] : values_) j[k] = v;
     const std::string text = j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
@@ -59,13 +70,15 @@ void DeviceSettings::set(const std::string& key, std::string value) {
     if (!ok) {
         log(LogLevel::Warn, "settings: can't write %s: %s", tmp.c_str(), std::strerror(errno));
         fs::remove(tmp, ec);
-        return;
+        return false;
     }
     fs::rename(tmp, file_, ec);
     if (ec) {
         log(LogLevel::Warn, "settings: can't keep %s: %s", file_.c_str(), ec.message().c_str());
         fs::remove(tmp, ec);
+        return false;
     }
+    return true;
 }
 
 }  // namespace zk

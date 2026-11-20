@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <vector>
+
 namespace zk {
 
 namespace {
@@ -48,30 +50,31 @@ void saveSettings(Library& lib, DeviceSettings& dev, const AppSettings& s) {
 }
 
 void moveDeviceKeys(Library& lib, DeviceSettings& dev) {
+    // First copy everything to the device, then (only once device.json is on disk) clear the library.
     auto j = nlohmann::json::parse(lib.metaValue("settings"), nullptr, false);
-    if (j.is_object()) {
-        bool changed = false;
-        for (auto it = j.begin(); it != j.end();) {
-            if (!isDeviceKey(it.key())) {
-                ++it;
-                continue;
-            }
-            if (!dev.get(it.key())) {
-                if (it.value().is_boolean()) dev.set(it.key(), it.value().get<bool>() ? "1" : "0");
-                else if (it.value().is_number_integer()) dev.set(it.key(), std::to_string(it.value().get<long long>()));
-                else if (it.value().is_string()) dev.set(it.key(), it.value().get<std::string>());
-            }
-            it = j.erase(it);
-            changed = true;
+    std::vector<std::string> inJson, inMeta;
+    if (j.is_object())
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (!isDeviceKey(it.key())) continue;
+            inJson.push_back(it.key());
+            if (dev.get(it.key())) continue;
+            if (it.value().is_boolean()) dev.set(it.key(), it.value().get<bool>() ? "1" : "0");
+            else if (it.value().is_number_integer()) dev.set(it.key(), std::to_string(it.value().get<long long>()));
+            else if (it.value().is_string()) dev.set(it.key(), it.value().get<std::string>());
         }
-        if (changed) lib.setMetaValue("settings", j.dump());
-    }
     for (const char* key : kMetaDeviceKeys) {
         const std::string v = lib.metaValue(key);
         if (v.empty()) continue;
+        inMeta.push_back(key);
         if (!dev.get(key)) dev.set(key, v);
-        lib.setMetaValue(key, "");
     }
+    if (inJson.empty() && inMeta.empty()) return;
+    if (!dev.flush()) return;  // not on disk: the library keeps them (tried again next start)
+    if (!inJson.empty()) {
+        for (const auto& k : inJson) j.erase(k);
+        lib.setMetaValue("settings", j.dump());
+    }
+    for (const auto& k : inMeta) lib.setMetaValue(k, "");
 }
 
 }  // namespace zk

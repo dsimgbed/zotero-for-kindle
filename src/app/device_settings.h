@@ -4,6 +4,7 @@
 // those are; everything else is an account's, in its library.
 
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -14,10 +15,15 @@ public:
     // An empty `file` keeps the settings in memory only (tests, screenshots).
     explicit DeviceSettings(std::string file);
     std::optional<std::string> get(const std::string& key) const;
-    void set(const std::string& key, std::string value);  // written at once, through a temp file and rename
+    // Kept in memory and written at once, through a temp file and rename; false when the file
+    // couldn't be written (the value still holds in memory). Safe from any thread.
+    bool set(const std::string& key, std::string value);
+    bool flush();  // writes the file again (true when it is on disk as in memory)
 
 private:
+    bool writeLocked();
     std::string file_;
+    mutable std::mutex mutex_;
     std::map<std::string, std::string> values_;
 };
 

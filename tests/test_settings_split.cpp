@@ -4,7 +4,11 @@
 #include "app/settings_store.h"
 #include "store/db.h"
 #include "store/library.h"
+#include "fake_http.h"
+#include "fn_http.h"
 #include "test_paths.h"
+#include "update/update_notice.h"
+#include "update/updater.h"
 
 #include <filesystem>
 #include <fstream>
@@ -110,14 +114,45 @@ TEST_CASE("settings split: moveDeviceKeys keeps the value already on the device"
     CHECK(lib.metaValue("settings").find("flashEvery") == std::string::npos);
 }
 
-TEST_CASE("settings split: the update notice's state is on the device, so it survives a library swap") {
+TEST_CASE("settings split: moveDeviceKeys leaves the database alone when device.json can't be written") {
     Dir d;
-    DeviceSettings dev(d.file());
-    dev.set("update:available", "0.3.0");
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    lib.setMetaValue("settings", R"({"flashEvery":4,"homeScreen":"desk/home"})");
+    lib.setMetaValue("update:checkedMs", "12345");
+    std::ofstream(d.path / "blocker") << "x";  // a file where the directory should be
+    DeviceSettings dev((d.path / "blocker" / "device.json").string());
+    moveDeviceKeys(lib, dev);
+    CHECK(lib.metaValue("settings").find("flashEvery") != std::string::npos);
+    CHECK(lib.metaValue("update:checkedMs") == "12345");
+}
+
+TEST_CASE("settings split: the update notice's state survives a library swap") {
+    Dir d;
+    UpdaterConfig c;
+    c.current = {0, 2, 0};
+    c.probe = [] { return NetState{}; };
+    c.makeHttp = [] {
+        return std::make_unique<test::FnHttp>(
+            [](const HttpRequest&) { return test::FakeHttp::ok(R"({"tag_name":"v0.3.0","body":"Notes","assets":[]})"); });
+    };
+    Updater updater(c);
+    int64_t now = 1'762'500'000'000;
     Db dbA{Db::open(":memory:")}, dbB{Db::open(":memory:")};
     Library a{dbA}, b{dbB};
     (void)a;
-    (void)b;
-    CHECK(DeviceSettings(d.file()).get("update:available") == "0.3.0");
+    (void)b;  // the notice never sees a library: swapping one can't touch it
+    {
+        DeviceSettings dev(d.file());
+        UpdateNotice notice(updater, [&] { return now; });
+        notice.onSyncFinished(dev, true);
+        updater.wait();
+        notice.poll(dev);
+        REQUIRE(notice.available(dev));
+    }
+    DeviceSettings dev(d.file());  // after "switching" to library B
+    UpdateNotice notice(updater, [&] { return now; });
+    REQUIRE(notice.available(dev));
+    CHECK(notice.available(dev)->str() == "0.3.0");
     CHECK(b.metaValue("update:available").empty());
 }
