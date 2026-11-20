@@ -1,5 +1,11 @@
 #include "app/home_tree.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -29,16 +35,16 @@ void HomeTreeStore::save(const std::string& pluginId, const std::string& screenI
     const std::string tmp = file_ + ".tmp";
     std::error_code ec;
     if (const fs::path dir = fs::path(file_).parent_path(); !dir.empty()) fs::create_directories(dir, ec);
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        out << json{{"pluginId", pluginId}, {"screenId", screenId}, {"tree", tree}}.dump(-1, ' ', false,
-                                                                                          json::error_handler_t::replace);
-        out.flush();
-        if (!out) {
-            log(LogLevel::Warn, "home: can't write %s", tmp.c_str());
-            fs::remove(tmp, ec);
-            return;
-        }
+    const std::string text =
+        json{{"pluginId", pluginId}, {"screenId", screenId}, {"tree", tree}}.dump(-1, ' ', false, json::error_handler_t::replace);
+    // Synced before the rename: a power cut right after must not leave an empty file in its place.
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    const bool ok = fd >= 0 && ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size()) && ::fsync(fd) == 0;
+    if (fd >= 0) ::close(fd);
+    if (!ok) {
+        log(LogLevel::Warn, "home: can't write %s: %s", tmp.c_str(), std::strerror(errno));
+        fs::remove(tmp, ec);
+        return;
     }
     fs::rename(tmp, file_, ec);
     if (ec) {
@@ -47,11 +53,30 @@ void HomeTreeStore::save(const std::string& pluginId, const std::string& screenI
     }
 }
 
-PluginHome::PluginHome(PluginEvents& events, HomeTreeStore& store, std::function<std::string()> choice, ItemSource* items,
-                       ItemTap tap)
-    : events_(events), store_(store), choice_(std::move(choice)), items_(items), tap_(std::move(tap)) {}
+void HomeTreeStore::forget() const {
+    std::error_code ec;
+    fs::remove(file_, ec);
+}
 
-PluginHome::~PluginHome() = default;
+PluginHome::PluginHome(PluginEvents& events, HomeTreeStore& store, std::function<std::string()> choice, ItemSource* items,
+                       ItemTap tap, std::function<int64_t()> clock)
+    : events_(events), store_(store), choice_(std::move(choice)), items_(items), tap_(std::move(tap)), clock_(std::move(clock)) {
+    if (!clock_)
+        clock_ = [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        };
+}
+
+PluginHome::~PluginHome() { keep(true); }
+
+void PluginHome::keep(bool now) {
+    if (waiting_.is_null()) return;
+    const int64_t t = clock_();
+    if (!now && writtenMs_ && t - *writtenMs_ < kKeepEveryMs) return;
+    store_.save(pluginId_, screenId_, waiting_);
+    waiting_ = nullptr;
+    writtenMs_ = t;
+}
 
 void PluginHome::shown(Nav& nav, std::function<Rect(Nav&)> area, std::function<Rect()> window) {
     area_ = std::move(area);
@@ -71,6 +96,7 @@ void PluginHome::shown(Nav& nav, std::function<Rect(Nav&)> area, std::function<R
     pluginId_ = pluginId;
     screenId_ = screenId;
     saved_ = nullptr;
+    waiting_ = nullptr;
     kept_.reset();
     if (auto j = store_.load(pluginId, screenId)) {
         std::string why;
@@ -96,6 +122,7 @@ void PluginHome::synced() {
 
 void PluginHome::drop(Nav& nav) {
     if (!body_) return;
+    keep(true);  // still this body's ids
     body_->onClose(nav);  // the host hears `left` (not when the plugin closed it itself)
     body_.reset();
     kept_.reset();
@@ -114,12 +141,18 @@ bool PluginHome::take(uint64_t instance, PluginHostEvent& out) {
         return true;
     }
     if (!events_.take(instance, out)) return false;
-    if (out.kind == PluginHostEvent::Kind::ScreenTree && !out.value.is_null() && body_ && instance == body_->instance()) {
+    const bool mine = body_ && instance == body_->instance();
+    if (out.kind == PluginHostEvent::Kind::ScreenTree && !out.value.is_null() && mine) {
         if (out.value != saved_) {  // a new tree: kept for the next start
-            store_.save(pluginId_, screenId_, out.value);
             saved_ = out.value;
+            waiting_ = out.value;
+            keep(false);
         }
         out.value = nullptr;
+    } else if (out.kind == PluginHostEvent::Kind::ScreenError && mine && out.value.is_object() && out.value.value("missing", false)) {
+        log(LogLevel::Info, "home: %s/%s is gone from its plugin: its kept tree goes", pluginId_.c_str(), screenId_.c_str());
+        waiting_ = nullptr;
+        store_.forget();  // no stale tree drawn in the next start's first frame
     }
     return true;
 }

@@ -27,15 +27,16 @@ using json = nlohmann::json;
 namespace {
 
 const char* kDesk = R"JS(
-let mode = "fresh";
+let mode = "fresh", n = 0;
 zk.screen("desk", {
   title: "Desk", home: true,
   render: () => {
     if (mode === "throw") throw new Error("broken");
     if (mode === "search") return zk.ui.column([zk.ui.search({ id: "s" })]);
-    return zk.ui.column([zk.ui.text(mode), zk.ui.button({ id: "throw", title: "Break" }), zk.ui.button({ id: "search", title: "Search" })]);
+    return zk.ui.column([zk.ui.text(mode), zk.ui.button({ id: "throw", title: "Break" }), zk.ui.button({ id: "search", title: "Search" }),
+                         zk.ui.button({ id: "again", title: "Again" })]);
   },
-  onEvent(e) { if (e.kind === "tap") mode = e.id; },
+  onEvent(e) { if (e.kind === "tap") mode = e.id === "again" ? `again${++n}` : e.id; },
 });
 )JS";
 
@@ -75,7 +76,7 @@ struct HomeRig {
         host = std::make_unique<PluginHost>(d);
         host->setEnabled("desk", true);
         events = std::make_unique<PluginEvents>(host.get());
-        link = std::make_unique<PluginHome>(*events, store, [this] { return choice; }, &items, ItemTap{});
+        link = std::make_unique<PluginHome>(*events, store, [this] { return choice; }, &items, ItemTap{}, [this] { return now; });
         app.setPollHook([this] { events->poll(app); });
         HomeActions a;
         a.body = [this]() -> HomeBodyLink* { return link.get(); };
@@ -256,4 +257,36 @@ TEST_CASE("home tree: a hidden body keeps only its newest tree waiting; errors a
     CHECK(kinds[0] == PluginHostEvent::Kind::ScreenTree);
     CHECK(kinds[1] == PluginHostEvent::Kind::ScreenError);
     r.events->left(o.instance);
+}
+
+TEST_CASE("home tree: the kept tree is written at most every 30 s, and when Home hides") {
+    HomeRig r;
+    r.start();
+    REQUIRE(r.until([&] { return r.shownText() == "fresh"; }));
+    auto kept = [&] { return (*r.store.load("desk", "desk"))["children"][0]["text"].get<std::string>(); };
+    CHECK(kept() == "fresh");  // the first one at once
+    r.tap("again");
+    REQUIRE(r.until([&] { return r.shownText() == "again1"; }));
+    CHECK(kept() == "fresh");  // within 30 s of the last write: waits
+    r.app.switchTab(1);        // Home hides: what waits is written
+    r.app.step(0);
+    CHECK(kept() == "again1");
+    r.app.switchTab(0);
+    r.app.step(0);
+    r.now += PluginHome::kKeepEveryMs;
+    r.tap("again");
+    REQUIRE(r.until([&] { return r.shownText() == "again2"; }));
+    CHECK(kept() == "again2");  // 30 s on: at once
+}
+
+TEST_CASE("home tree: the chosen screen gone from its plugin: the kept tree goes too") {
+    HomeRig r(textTree("kept"));
+    r.store.save("desk", "gone", textTree("stale"));
+    r.choice = "desk/gone";
+    r.app.start();
+    CHECK(r.shownText() == "stale");  // drawn before plugins load
+    r.host->start();
+    REQUIRE(r.until([&] { return !r.home().pluginBody(); }));
+    CHECK_FALSE(r.store.load("desk", "gone"));
+    CHECK_FALSE(r.fp.exists("state/home-tree.json"));
 }

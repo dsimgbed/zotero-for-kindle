@@ -37,6 +37,8 @@ public:
     // Home gives up on the body (it failed, the plugin closed it, no tree in time): it goes, and
     // Home shows its built-in body until the next shown().
     virtual void drop(Nav&) = 0;
+    // Home is no longer the visible screen (the body stays: it may show again).
+    virtual void hidden() {}
 };
 
 struct HomeActions {
@@ -65,6 +67,9 @@ public:
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
+    void onHide(Nav&) override {
+        if (link_) link_->hidden();
+    }
     void onTick(Nav&) override;
 
     // With no kept tree, how long the plugin's body may take to its first tree before Home gives up on it.

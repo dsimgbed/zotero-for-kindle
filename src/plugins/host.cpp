@@ -1179,6 +1179,8 @@ struct PluginHost::Impl {
             const std::string name = nameOf(pluginId);
             PluginHostEvent ev{PluginHostEvent::Kind::ScreenError, pluginId, name, name + " can't show this screen right now", {}, 0, ""};
             ev.instance = instance;
+            // Loaded and running, without that screen: gone for good (not just off for now).
+            if (it != loaded.end() && !turnOffs.count(pluginId) && !restarts.count(pluginId)) ev.value = {{"missing", true}};
             postEvent(std::move(ev));
             return;
         }
