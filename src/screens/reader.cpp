@@ -452,7 +452,13 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 placeId_ = 0;
                 const bool again = std::exchange(placingAgain_, false);  // after a re-layout: nothing to compare
                 if (e.page < 0) {  // can't be placed here: nothing is sent until the reader reads on
-                    if (!again) unplaced_ = true;
+                    if (!again) {
+                        unplaced_ = true;
+                    } else if (question_) {  // not in the new pages: no Go, the banner's place is gone with it
+                        question_.reset();
+                        unplaced_ = true;
+                        if (visible && !menus_) nav.damage(positionBannerRect(), Waveform::Quality);
+                    }
                     break;
                 }
                 remotePage_ = e.page / std::max(1, e.viewsPerPage);  // a PDF page, whatever the View

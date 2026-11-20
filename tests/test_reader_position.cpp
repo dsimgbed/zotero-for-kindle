@@ -24,6 +24,13 @@ struct FlowingEngine : FakeEngine {
     int pageOfZoteroPosition(const std::string& v) override { return pageOfPlaced({"pos:" + v}); }
 };
 
+// One whose Zotero positions can be placed only at the 9 pt it opens with.
+struct NineOnlyEngine : FlowingEngine {
+    int pageOfZoteroPosition(const std::string& v) override {
+        return layout.sizePt == 9 ? FlowingEngine::pageOfZoteroPosition(v) : -1;
+    }
+};
+
 struct Rig {
     Db db{Db::open(":memory:")};
     Library lib{db};
@@ -33,10 +40,13 @@ struct Rig {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");  // attachment EP000003
     }
-    std::unique_ptr<ReaderScreen> reader(DocType type = DocType::Epub, bool flowing = false) {
-        auto r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [flowing] {
-            return std::make_unique<RenderWorker>([flowing](DocType) {
-                return std::unique_ptr<DocumentEngine>(flowing ? new FlowingEngine() : new FakeEngine());
+    enum class Zotero { Pages, Flowing, NineOnly };  // which fake: FakeEngine, FlowingEngine, NineOnlyEngine
+    std::unique_ptr<ReaderScreen> reader(DocType type = DocType::Epub, Zotero z = Zotero::Pages) {
+        auto r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [z] {
+            return std::make_unique<RenderWorker>([z](DocType) {
+                return std::unique_ptr<DocumentEngine>(z == Zotero::Flowing    ? new FlowingEngine()
+                                                       : z == Zotero::NineOnly ? new NineOnlyEngine()
+                                                                               : new FakeEngine());
             });
         }, 6);
         nav.visible = r.get();
@@ -260,7 +270,7 @@ TEST_CASE("reader position fix: Go after a font change goes to the computer's pl
     rig.lib.setLocalPosition("EP000003", "1080");
     rig.lib.markPositionSent("EP000003", "1080", 5);
     rig.lib.applyRemotePosition("EP000003", "5410", 9);  // in page 61 at 9 pt, page 46 at 12 pt
-    auto r = rig.reader(DocType::Epub, true);
+    auto r = rig.reader(DocType::Epub, Rig::Zotero::Flowing);
     r->onShow(rig.nav);
     REQUIRE(rig.waitPage(*r, 12));
     REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
@@ -282,7 +292,7 @@ TEST_CASE("reader position fix: a font change on the computer's page keeps the c
     rig.lib.setLocalPosition("EP000003", "1080");
     rig.lib.markPositionSent("EP000003", "1080", 5);
     rig.lib.applyRemotePosition("EP000003", "5410", 9);
-    auto r = rig.reader(DocType::Epub, true);
+    auto r = rig.reader(DocType::Epub, Rig::Zotero::Flowing);
     r->onShow(rig.nav);
     REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
     r->onGesture(tapAt(ReaderScreen::positionGoRect().center()), rig.nav);
@@ -338,4 +348,26 @@ TEST_CASE("reader position fix: Stay repaints the page under the banner without 
     r->onGesture(tapAt(ReaderScreen::positionStayRect().center()), rig.nav);
     REQUIRE_FALSE(rig.nav.damages.empty());
     for (const auto& d : rig.nav.damages) CHECK(d.waveform == Waveform::Quality);
+}
+
+TEST_CASE("reader position fix: a font change after which the computer's place can't be placed drops the question") {
+    // Audit B fix round 1: the banner kept the old pages' percentage and chapter, and Go stayed put.
+    Rig rig;
+    rig.lib.saveReading(rig.row.key, "pos:1080", 0.1);
+    rig.lib.setLocalPosition("EP000003", "1080");
+    rig.lib.markPositionSent("EP000003", "1080", 5);
+    rig.lib.applyRemotePosition("EP000003", "5410", 9);
+    auto r = rig.reader(DocType::Epub, Rig::Zotero::NineOnly);
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    Layout bigger = r->layout();
+    bigger.sizePt = 12;
+    r->applyLayout(bigger, rig.nav);
+    CHECK(rig.until(*r, [&] { return r->ready() && !r->turning() && r->pageCount() == 75 && !r->positionQuestion(); }));
+    CHECK(rig.lib.readingPosition("EP000003")->remoteNew);  // not answered: reading on decides, as when it can't be placed at all
+    r->onGesture(tapAt({1100, 700}), rig.nav);
+    REQUIRE(rig.waitPage(*r, 10));
+    auto p = rig.lib.readingPosition("EP000003");
+    CHECK_FALSE(p->remoteNew);
+    CHECK(p->dirty);
 }
