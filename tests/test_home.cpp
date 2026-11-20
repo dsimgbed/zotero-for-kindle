@@ -765,3 +765,66 @@ TEST_CASE("home plugin: the body fits above the tab bar on KT4 and Scribe") {
         rig.home->draw(rig.canvas);
     }
 }
+
+namespace {
+
+// The pixels in `r` (toGray writes at window coordinates: the rest stays 0).
+std::vector<uint8_t> grayOf(const Canvas& c, Rect r) {
+    std::vector<uint8_t> px(static_cast<size_t>(c.width()) * static_cast<size_t>(c.height()));
+    c.toGray(px.data(), c.width(), r);
+    return px;
+}
+
+}  // namespace
+
+TEST_CASE("home fix: the card repaints for its download's progress and its end, failed or not") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    fillFixtureLibrary(lib, 40);
+    lib.markOpened("IT000006", "EP000006", kNowWall - 3600 * 1000LL);
+    SyncStatus status;
+    HomeScreen home(status, HomeActions{}, [] { return kNowWall; });
+    home.onShow(nav);
+    auto damaged = [&] {
+        for (const auto& d : nav.damages)
+            if (d.rect.contains(HomeScreen::cardRect().center())) return true;
+        return false;
+    };
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::DownloadProgress;
+    e.itemKey = "IT000006";
+    e.attachmentKey = "EP000006";
+    e.done = 42;
+    e.total = 100;
+    nav.damages.clear();
+    home.onSyncEvent(e, nav);
+    CHECK(damaged());
+    e.kind = SyncEvent::Kind::DownloadFinished;
+    e.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", ""};
+    nav.damages.clear();
+    home.onSyncEvent(e, nav);
+    CHECK(damaged());  // its error now shows on the card
+}
+
+TEST_CASE("home fix: the card shows its download's status in place of its meta line") {
+    if (!fonts()) return;
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    fillFixtureLibrary(lib, 40);
+    lib.markOpened("IT000006", "EP000006", kNowWall - 3600 * 1000LL);
+    SyncStatus status;
+    std::string shown;
+    HomeActions actions;
+    actions.status = [&](const std::string& k) { return k == "EP000006" ? shown : std::string{}; };
+    HomeScreen home(status, actions, [] { return kNowWall; });
+    home.onShow(nav);
+    Canvas c(1236, 1547);
+    home.draw(c);
+    const auto plain = grayOf(c, HomeScreen::cardRect());
+    shown = "Downloading 42%";
+    home.draw(c);
+    const bool same = grayOf(c, HomeScreen::cardRect()) == plain;
+    CHECK_FALSE(same);
+}

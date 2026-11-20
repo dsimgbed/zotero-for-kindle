@@ -243,7 +243,8 @@ void HomeScreen::draw(Canvas& canvas) {
         drawText(cr, msg, {kSerif, 11, 400, false, kSecondary}, {kMargin + 40, 560, contentW - 80, 200}, 3, Align::Center);
     } else if (card_) {
         // Continue reading (or, before anything was opened, the newest readable item).
-        drawItemCard(cr, cardRect(), *card_, cardOpened_ ? "CONTINUE READING" : "START READING", cardMeta());
+        drawItemCard(cr, cardRect(), *card_, cardOpened_ ? "CONTINUE READING" : "START READING", cardMeta(),
+                     actions_.status ? actions_.status(card_->attachmentKey) : "");
     }
     if (total_ > 0 && !plugin) {
         hRule(cr, kCardY + kCoverH + 44, 0, W());
@@ -385,6 +386,18 @@ HomeScreen::Content HomeScreen::content() const {
     return c;
 }
 
+std::vector<Rect> HomeScreen::downloadRects(const SyncEvent& e) const {
+    std::vector<Rect> out;
+    auto shows = [&](const ItemRow& r) {
+        return (!e.attachmentKey.empty() && r.attachmentKey == e.attachmentKey) || (!e.itemKey.empty() && r.key == e.itemKey);
+    };
+    if (card_ && total_ > 0 && shows(*card_)) out.push_back(cardRect());
+    auto rects = recentRowRects();
+    for (size_t i = 0; i < rects.size(); ++i)
+        if (shows(recent_[i])) out.push_back(rects[i]);
+    return out;
+}
+
 void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     const Header shownHeader = header();  // as drawn (with the time it was drawn at)
     const Content shownContent = content();
@@ -411,17 +424,17 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
             reload(nav.library());
             if (content() != shownContent) nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
             break;
-        case SyncEvent::Kind::DownloadProgress: {
-            auto rects = recentRowRects();
-            for (size_t i = 0; i < rects.size(); ++i)
-                if (recent_[i].attachmentKey == e.attachmentKey || recent_[i].key == e.itemKey) nav.damage(rects[i], Waveform::Ui);
+        case SyncEvent::Kind::DownloadProgress:
+            for (const Rect& r : downloadRects(e)) nav.damage(r, Waveform::Ui);
             break;
-        }
         case SyncEvent::Kind::DownloadFinished:
             // Kept collections download in the background, one file after another: repaint only
-            // when one of them is on this screen.
+            // when one of them is on this screen. A failed one changes no item, only its status
+            // (the error now shown on its card or row).
             reload(nav.library());
             if (content() != shownContent) nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
+            else
+                for (const Rect& r : downloadRects(e)) nav.damage(r, Waveform::Quality);
             break;
         case SyncEvent::Kind::AnnotationsReady:
             reload(nav.library());

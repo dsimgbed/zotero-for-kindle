@@ -565,3 +565,25 @@ TEST_CASE("plugin blocks: screens without a deck are laid out as before") {
     CHECK(l.children[0].rect.h < blocksArea().h / 3);  // a card takes its own height
     CHECK(bottomOf(l.children[1]) < blocksArea().y + blocksArea().h / 2);
 }
+
+TEST_CASE("plugin items fix: a card shows its download's status, as a row does") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    FakeItems items;
+    fillItems(items);
+    const Block t = tree(itemsScreen());
+    const auto shot = [&] {
+        fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+        const Laid l = layoutTree(t, blocksArea(), 0, &items);
+        drawTree(c.cr(), l, {}, &items);
+        const Rect card = l.children[1].parts.at(0).rect;
+        std::vector<uint8_t> px(static_cast<size_t>(c.width()) * static_cast<size_t>(c.height()));
+        c.toGray(px.data(), c.width(), card);
+        return px;
+    };
+    const auto plain = shot();
+    items.download["AB1"] = "Downloading 42%";
+    const bool same = shot() == plain;
+    CHECK_FALSE(same);
+}

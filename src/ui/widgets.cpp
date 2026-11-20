@@ -72,7 +72,8 @@ std::string itemCardMeta(Library& lib, const ItemRow& row, int64_t nowMs) {
     return cardMetaText(row, static_cast<int>(highlights), opened, nowMs);
 }
 
-void drawItemCard(cairo_t* cr, Rect r, const ItemRow& item, const std::string& label, const std::string& meta) {
+void drawItemCard(cairo_t* cr, Rect r, const ItemRow& item, const std::string& label, const std::string& meta,
+                  const std::string& status) {
     const std::string title = item.title.empty() ? "Untitled" : item.title;
     const Rect cover{r.x, r.y, 290, r.h};
     generatedCover(cr, cover, title, authorsOf(item.byline), true);
@@ -89,7 +90,8 @@ void drawItemCard(cairo_t* cr, Rect r, const ItemRow& item, const std::string& l
     drawText(cr, title, {kSerif, 13, 700}, {colX, top, colW, bylineY - 16 - top}, 3);
     drawText(cr, item.byline, bylineStyle, {colX, bylineY, colW, bylineH + 4}, 1);
     progressBar(cr, bar, item.progress > 0 ? item.progress : 0);
-    drawText(cr, meta, {kSans, 7, 400, false, kSecondary}, {colX, r.y + r.h - 64, colW, 70}, 2);
+    if (status.empty()) drawText(cr, meta, {kSans, 7, 400, false, kSecondary}, {colX, r.y + r.h - 64, colW, 70}, 2);
+    else drawText(cr, status, {kSans, 7, 500, false, kInk}, {colX, r.y + r.h - 64, colW, 70}, 2);
 }
 
 std::string itemRowMeta(const ItemRow& item) {

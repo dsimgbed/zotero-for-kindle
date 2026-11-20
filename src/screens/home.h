@@ -43,7 +43,7 @@ struct HomeActions {
     std::function<void()> openSearch;
     std::function<void()> openSettings;
     std::function<void(const ItemRow&)> openItem;
-    StatusFn status;  // download progress/errors for the Recent rows
+    StatusFn status;  // download progress/errors for the card and the Recent rows
     // "Version X is available" (UpdateNotice): the version, asked on show and every tick (so it
     // must be cheap: UpdateNotice reads the library only when the updater has news).
     std::function<std::optional<std::string>()> updateNotice;
@@ -119,6 +119,7 @@ private:
     Content content() const;
     void pluginSyncEvent(const SyncEvent&, PluginBody&, bool headerChanged, const Content& shown, Nav&);
     Rect bannerRect() const;
+    std::vector<Rect> downloadRects(const SyncEvent&) const;  // the card and rows showing that download's item
     bool bannerShown() const {
         return status_.hasError() || safeModeBannerText().has_value() || updateBannerText().has_value();
     }
