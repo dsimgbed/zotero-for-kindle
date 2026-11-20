@@ -171,7 +171,9 @@ bool ItemList::onGesture(const Gesture& g, Rect area, Nav& nav, const std::funct
                 break;
             }
             case ItemSheet::Action::Changed:
-                load(nav.library());  // the row changed: in Zotero now, or read
+                // The row changed (in Zotero now, or read) and may have left the list (Downloaded,
+                // Unread): the count, the headings and the page (clamped if it emptied) change too.
+                refresh(nav.library());
                 nav.damage(area, Waveform::Ui);
                 break;
             case ItemSheet::Action::More: {

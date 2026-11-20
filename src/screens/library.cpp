@@ -209,7 +209,9 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
     if (sort_) return onSortGesture(g, nav);
     if (jump_) return onJumpGesture(g, nav);
     if (list_.sheet()) {  // an item's sheet: the list takes everything until it closes
+        const int64_t total = list_.pager().total();
         list_.onGesture(g, listArea(), nav, openItem_);
+        if (list_.pager().total() != total) nav.damage(filterLineRect(), Waveform::Ui);  // its "N items"
         return;
     }
     if (g.type == GestureType::Tap) {
