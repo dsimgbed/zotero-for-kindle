@@ -489,6 +489,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
+                const bool relaid = layoutPending_;
                 if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_ || note_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
@@ -545,6 +546,16 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     placeId_ = worker_->placeZotero(std::move(placeAfterFirstPage_));
                     placeAfterFirstPage_.clear();
                 }
+                if (relaid && pendingGo_) {  // Go to page or the slider, asked while the pages were counted again
+                    const PendingGo go = *pendingGo_;
+                    pendingGo_.reset();
+                    // A PDF page stays that page (in its views now); a book's page, the same place in it.
+                    const int to = type_ == DocType::Pdf ? go.page / go.views * views_
+                                   : go.count > 1     ? static_cast<int>(std::lround(static_cast<double>(go.page) *
+                                                                                      std::max(0, pageCount_ - 1) / (go.count - 1)))
+                                                      : 0;
+                    turnTo(std::clamp(to, 0, std::max(0, pageCount_ - 1)));
+                }
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
                 if (turned && (++turns_ % flashEvery_ == 0 || chapterChanged)) w = Waveform::Full;
@@ -596,7 +607,11 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 
 void ReaderScreen::turnTo(int page) {
     dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
-    if (!worker_ || layoutPending_) return;
+    if (!worker_) return;
+    if (layoutPending_) {  // counted in pages about to change: gone to once the new ones are counted
+        pendingGo_ = PendingGo{page, pageCount_, views_};
+        return;
+    }
     linkId_ = 0;
     markJumpOrigin();
     commitInk();
@@ -1280,6 +1295,7 @@ void ReaderScreen::draw(Canvas& canvas) {
 // --- Getting around: Back, bookmarks, Go to ---------------------------------------------------
 
 void ReaderScreen::markJumpOrigin() {
+    pendingGo_.reset();  // this jump instead
     turnTarget_ = -1;  // a jump: where it lands is the worker's to say
     turnsSinceJump_ = 0;
     if (page_ < 0 || position_.value.empty() || layoutPending_) return;

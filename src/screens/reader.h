@@ -278,6 +278,10 @@ private:
     int turnTarget_ = -1;  // the page a turn (not a jump) is on its way to
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
+    struct PendingGo {
+        int page = 0, count = 0, views = 1;  // asked for, in the pages counted then
+    };
+    std::optional<PendingGo> pendingGo_;  // turnTo while re-paginating
     // Selection mode.
     bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
     Point selAnchor_;

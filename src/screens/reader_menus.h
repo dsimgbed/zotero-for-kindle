@@ -84,6 +84,7 @@ public:
     bool sliderDragged() const { return dragPage_.has_value(); }
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }
     bool lightOpen() const { return lightOpen_; }
+    bool syncing() const { return syncing_; }  // Sync tapped: "Syncing…" until the book's sync ends
 
 private:
     void openContents(Nav&);

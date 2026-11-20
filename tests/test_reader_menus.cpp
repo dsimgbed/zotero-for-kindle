@@ -146,3 +146,59 @@ TEST_CASE("reader menus match the reviewed golden") {
     rig.reader->draw(c);
     test::checkGolden(c, "tests/golden/reader-menus.png");
 }
+
+TEST_CASE("reader menus fix: Go to page and the slider while the book re-paginates go there once it has") {
+    // Audit B8: both did nothing while the pages were being counted again.
+    Rig rig;
+    Layout bigger = rig.reader->layout();
+    bigger.sizePt = 12;  // 100 pages → 75
+    rig.reader->applyLayout(bigger, rig.nav);
+    rig.reader->goToPage(50);  // page 51 of 100: the same place in 75 pages is page 38
+    CHECK(rig.waitPage(37));
+    for (int i = 0; i < 20; ++i) rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->page() == 37);
+    CHECK(rig.reader->backLabel());  // a jump like any other: Back returns
+
+    Layout smaller = rig.reader->layout();
+    smaller.sizePt = 9;  // 75 → 100
+    rig.reader->applyLayout(smaller, rig.nav);
+    rig.openMenus();
+    const Rect s = ReaderMenus::sliderRect();
+    rig.reader->onGesture(rig.drag(GestureType::DragStart, {s.x + 10, s.y + s.h / 2}), rig.nav);
+    rig.reader->onGesture(rig.drag(GestureType::DragEnd, {s.x + s.w / 2, s.y + s.h / 2}), rig.nav);  // page 38 of 75
+    CHECK(rig.waitPage(50));
+}
+
+TEST_CASE("reader menus fix: Sync's \"Syncing…\" ends when the book's sync fails, and says why") {
+    // Audit B8: only AnnotationsReady ended it, and a failed download never sends one.
+    Rig rig;
+    rig.openMenus();
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);  // Sync
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent failed;
+    failed.kind = SyncEvent::Kind::DownloadFinished;
+    failed.itemKey = "IT000003";
+    failed.attachmentKey = "EP000003";
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi.", "test"};
+    rig.reader->onSyncEvent(failed, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    REQUIRE_FALSE(rig.nav.toasts.empty());
+    CHECK(rig.nav.toasts.back() == "No Wi-Fi.");
+
+    // The annotations' pull failing: also said.
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);
+    REQUIRE(rig.reader->menus()->syncing());
+    SyncEvent ready;
+    ready.kind = SyncEvent::Kind::AnnotationsReady;
+    ready.attachmentKey = "EP000003";
+    ready.error = UserError{ErrorKind::NoWifi, "Zotero can't be reached.", "test"};
+    rig.reader->onSyncEvent(ready, rig.nav);
+    CHECK_FALSE(rig.reader->menus()->syncing());
+    CHECK(rig.nav.toasts.back() == "Zotero can't be reached.");
+
+    // Another book's answer leaves it.
+    rig.reader->onGesture(tapAt(ReaderMenus::buttonRect(4).center()), rig.nav);
+    failed.attachmentKey = "EP000004";
+    rig.reader->onSyncEvent(failed, rig.nav);
+    CHECK(rig.reader->menus()->syncing());
+}

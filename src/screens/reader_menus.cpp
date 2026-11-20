@@ -398,7 +398,11 @@ void ReaderMenus::onPage(Nav& nav) {
 }
 
 void ReaderMenus::onSyncEvent(const SyncEvent& e, Nav& nav) {
-    if (e.kind != SyncEvent::Kind::AnnotationsReady || e.attachmentKey != reader_.row().attachmentKey) return;
+    if (e.attachmentKey != reader_.row().attachmentKey) return;
+    // The book's sync ends with its annotations, or, failing to get the file, with the download.
+    const bool failed = e.kind == SyncEvent::Kind::DownloadFinished && e.error;
+    if (e.kind != SyncEvent::Kind::AnnotationsReady && !failed) return;
+    if (syncing_ && e.error) nav.toast(e.error->message);  // asked for: said why it didn't happen
     syncing_ = false;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(panelRect(), Waveform::Ui);
