@@ -7,6 +7,7 @@
 #include "golden.h"
 #include "screens/collections.h"
 #include "screens/goto_page.h"
+#include "screens/item_details.h"
 #include "screens/notes.h"
 #include "store/db.h"
 #include "ui/text.h"
@@ -172,4 +173,32 @@ TEST_CASE("collection fix: every subcollection and item is on exactly one page")
     CHECK(pages == screen.pager().pages());
     CHECK(static_cast<int64_t>(seen.size()) == screen.total());
     for (const auto& [key, n] : seen) CHECK_MESSAGE(n == 1, key);
+}
+
+TEST_CASE("collection fix: a long press on an item opens its sheet, as in the Library") {
+    Rig rig;
+    CollectionEntry economics;
+    for (const auto& e : rig.lib.collectionsTab())
+        if (e.collection.key == "COLLAAAA") economics = e;
+    std::vector<std::string> opened;
+    CollectionScreen screen(economics, [&](const ItemRow& r) { opened.push_back(r.key); });
+    screen.onShow(rig.nav);
+    size_t at = 0;
+    while (at < screen.page().size() && screen.page()[at].isCollection) ++at;
+    REQUIRE(at < screen.page().size());
+    const ItemRow item = screen.page()[at].item;
+    const Point p = screen.lineRect(at).center();
+    screen.onGesture(Gesture{GestureType::LongPress, p, p}, rig.nav);
+    REQUIRE(screen.itemSheet());
+    CHECK(screen.itemSheet()->row().key == item.key);
+    const Rect area = CollectionScreen::sheetArea();
+    screen.onGesture(tapAt(screen.itemSheet()->moreRect(area).center()), rig.nav);  // More…: the details page
+    CHECK_FALSE(screen.itemSheet());
+    REQUIRE(rig.nav.pushed.size() == 1);
+    CHECK(dynamic_cast<ItemDetailsScreen*>(rig.nav.pushed[0].get()));
+    screen.onGesture(Gesture{GestureType::LongPress, p, p}, rig.nav);
+    REQUIRE(screen.itemSheet());
+    screen.onGesture(tapAt({area.w / 2, area.y + 10}), rig.nav);  // above the sheet: closes it, opens nothing
+    CHECK_FALSE(screen.itemSheet());
+    CHECK(opened.empty());
 }

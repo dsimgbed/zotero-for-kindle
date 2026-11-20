@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "screens/collection_search.h"
+#include "screens/item_details.h"
 #include "screens/search.h"
 
 #include "ui/metrics.h"
@@ -336,6 +337,7 @@ void CollectionScreen::load(Library& lib) {
 
 void CollectionScreen::onShow(Nav& nav) {
     sheet_.reset();
+    itemSheet_.reset();
     jump_.reset();
     load(nav.library());
     loadKept(nav);
@@ -374,6 +376,7 @@ void CollectionScreen::draw(Canvas& canvas) {
                  1, Align::Center);
     drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());
     if (sheet_) sheet_->draw(cr);
+    if (itemSheet_) itemSheet_->draw(cr, sheetArea());
     if (jump_) jump_->draw(cr, sheetArea());
 }
 
@@ -409,15 +412,21 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.damage(contentArea(), Waveform::Quality);
         return;
     }
+    if (itemSheet_) return itemSheetGesture(g, nav);
     if (g.type == GestureType::LongPress) {
         auto rects = lineRects();
-        for (size_t i = 0; i < rects.size(); ++i)
-            if (rects[i].contains(g.pos) && page_[i].isCollection) {
+        for (size_t i = 0; i < rects.size(); ++i) {
+            if (!rects[i].contains(g.pos)) continue;
+            if (page_[i].isCollection) {
                 const auto pins = nav.library().pinnedCollections();
                 const bool pinned = std::find(pins.begin(), pins.end(), page_[i].collection.collection.key) != pins.end();
                 sheet_.emplace(page_[i].collection, pinned);
                 nav.damage(PinSheet::rect(), Waveform::Ui);
+            } else if (auto d = nav.library().details(page_[i].item.key)) {  // an item: its sheet, as in the Library
+                itemSheet_.emplace(page_[i].item, std::move(*d));
+                nav.damage(sheetArea(), Waveform::Ui);
             }
+        }
         return;
     }
     if (g.type == GestureType::Tap && backRect().contains(g.pos)) {
@@ -446,6 +455,35 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         if (!rects[i].contains(g.pos)) continue;
         if (page_[i].isCollection) nav.push(std::make_unique<CollectionScreen>(page_[i].collection, openItem_, status_));
         else if (openItem_) openItem_(page_[i].item);
+    }
+}
+
+void CollectionScreen::itemSheetGesture(const Gesture& g, Nav& nav) {
+    const Rect area = sheetArea();
+    switch (itemSheet_->onGesture(g, area, nav)) {
+        case ItemSheet::Action::Close:
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::Open: {
+            const ItemRow row = itemSheet_->row();
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            if (openItem_) openItem_(row);
+            break;
+        }
+        case ItemSheet::Action::Changed:
+            load(nav.library());  // the row changed: in Zotero now, or read
+            nav.damage(area, Waveform::Ui);
+            break;
+        case ItemSheet::Action::More: {
+            const ItemRow row = itemSheet_->row();
+            itemSheet_.reset();
+            nav.damage(area, Waveform::Ui);
+            nav.push(std::make_unique<ItemDetailsScreen>(row, openItem_));
+            break;
+        }
+        case ItemSheet::Action::None: break;
     }
 }
 

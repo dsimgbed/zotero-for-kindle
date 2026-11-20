@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "screens/item_sheet.h"
 #include "screens/library_sheets.h"
 #include "screens/screen.h"
 #include "ui/pager.h"
@@ -114,13 +115,16 @@ public:
     std::optional<std::string> keepSheetLabel() const { return sheet_ ? std::optional(sheet_->keepLabel()) : std::nullopt; }
     static Rect pinButtonRect() { return PinSheet::buttonRect(); }
     static Rect keepButtonRect() { return PinSheet::keepButtonRect(); }
+    const ItemSheet* itemSheet() const { return itemSheet_ ? &*itemSheet_ : nullptr; }  // a long press on an item
 
 private:
     void load(Library&);
     void loadKept(Nav&);
+    void itemSheetGesture(const Gesture&, Nav&);
     std::vector<Rect> lineRects() const;
     std::vector<JumpGroup> jumpIndex() const;
     std::optional<PinSheet> sheet_;
+    std::optional<ItemSheet> itemSheet_;
     std::optional<JumpSheet> jump_;
     std::vector<ListSection> subSections_, itemSections_;
     std::vector<int64_t> starts_;  // each section's first line: the subcollections', then the items'
