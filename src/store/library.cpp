@@ -2255,11 +2255,22 @@ void Library::refetchDone(const std::vector<std::string>& annotationKeys) {
     if (erased) setMetaValue(kRefetchMeta, j.dump());
 }
 
+void Library::pruneRefetch() {
+    auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
+    if (!j.is_object()) return;
+    size_t before = j.size();
+    for (auto it = j.begin(); it != j.end();)
+        it = it->is_number_integer() && libraryShown(it->get<int64_t>()) ? std::next(it) : j.erase(it);
+    if (j.size() != before) setMetaValue(kRefetchMeta, j.dump());
+}
+
 bool Library::awaitingZoteroCopy(const std::string& conflictKey) {
     auto copy = annotation(conflictKey);
     if (!copy || !copy->conflict || copy->conflictOf.empty() || annotation(copy->conflictOf)) return false;
     const auto j = json::parse(metaValue(kRefetchMeta), nullptr, false);
-    return j.is_object() && j.contains(copy->conflictOf);
+    if (!j.is_object() || !j.contains(copy->conflictOf)) return false;
+    const auto& lib = j[copy->conflictOf];
+    return lib.is_number_integer() && libraryShown(lib.get<int64_t>());  // else no pull will bring it
 }
 
 // ---- Libraries -----------------------------------------------------------------------------

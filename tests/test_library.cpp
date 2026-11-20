@@ -429,3 +429,29 @@ TEST_CASE("library: highlights and Continue reading leave out items trashed in Z
     REQUIRE(rig.lib.lastOpened());
     CHECK(rig.lib.lastOpened()->itemKey == "ITEM0001");  // the next most recent still there
 }
+
+TEST_CASE("library: Zotero's copies to fetch again are dropped with their library switched off or gone") {
+    Rig rig;
+    Library::GroupMeta g;
+    g.id = 31;
+    g.version = 1;
+    g.name = "Lab";
+    g.libraryEditing = g.fileEditing = "members";
+    rig.lib.upsertGroup(g);
+    rig.lib.setGroupAccess(31, true, true);
+    AnnotationRecord c;
+    c.key = "CONFLIC1";
+    c.lib = 31;
+    c.conflict = true;
+    c.createdHere = true;
+    c.conflictOf = "ANNO0031";
+    rig.lib.upsertAnnotation(c);
+    rig.lib.queueRefetch("ANNO0031", 31);
+    rig.lib.queueRefetch("ANNO0000", kMyLibrary);
+    CHECK(rig.lib.awaitingZoteroCopy("CONFLIC1"));
+    rig.lib.setLibraryEnabled(31, false);  // no pull of it will bring the copy
+    CHECK_FALSE(rig.lib.awaitingZoteroCopy("CONFLIC1"));
+    rig.lib.pruneRefetch();
+    CHECK(rig.lib.refetchQueue(31).empty());
+    CHECK(rig.lib.refetchQueue(kMyLibrary) == std::vector<std::string>{"ANNO0000"});
+}

@@ -348,6 +348,7 @@ public:
     void queueRefetch(const std::string& annotationKey, int64_t lib);
     std::vector<std::string> refetchQueue(int64_t lib);
     void refetchDone(const std::vector<std::string>& annotationKeys);
+    void pruneRefetch();  // drops those of libraries switched off or gone (no pull will bring them)
     // The conflict copy's original is still to come back from Zotero: re-applying it now would
     // make a second highlight.
     bool awaitingZoteroCopy(const std::string& conflictKey);

@@ -950,3 +950,21 @@ TEST_CASE("kept: files from Zotero storage aren't asked for while Zotero asked f
     rig.service->downloadKept();
     CHECK(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
 }
+
+TEST_CASE("kept: a stalled file no longer kept, or gone, is off the stalled list") {
+    KeptRig rig;
+    rig.startOnZotero();
+    rig.syncAndWait();
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.setMetaValue("keptStalled", R"({"GONE0001": 1, "ATTC0001": 1})");  // gone; not in a kept collection
+    }
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
+    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.metaValue("keptStalled") == "{}");
+}

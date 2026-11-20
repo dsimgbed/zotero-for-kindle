@@ -351,6 +351,7 @@ void SyncService::run() {
                         std::lock_guard<std::mutex> lock(mutex_);
                         pushDue_.reset();  // this sync sends them
                     }
+                    w.lib->pruneRefetch();  // a group switched off or gone meanwhile
                     SyncEvent start;
                     start.kind = SyncEvent::Kind::SyncStarted;
                     start.request = cmd.request;
@@ -623,9 +624,16 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
                 ++w.keptTotal[key];
             }
         w.keptStalledNow.clear();
-        const auto stalled = keptStalled(*w.lib);
+        auto stalled = keptStalled(*w.lib);
         std::stable_partition(w.keptQueue.begin(), w.keptQueue.end(),
                               [&](const Worker::KeptFile& f) { return !stalled.contains(f.att.key); });
+        // Only files still wanted stay on the list (not one deleted, or no longer in a kept collection).
+        const size_t listed = stalled.size();
+        for (auto it = stalled.begin(); it != stalled.end();)
+            it = std::any_of(w.keptQueue.begin(), w.keptQueue.end(), [&](const Worker::KeptFile& f) { return f.att.key == it.key(); })
+                     ? std::next(it)
+                     : stalled.erase(it);
+        if (stalled.size() != listed) w.lib->setMetaValue("keptStalled", stalled.dump());
     } else {  // keeping turned off meanwhile, or its group hidden: those collections' files are no longer wanted
         std::set<std::string> keptSet;
         for (const auto& key : kept)
