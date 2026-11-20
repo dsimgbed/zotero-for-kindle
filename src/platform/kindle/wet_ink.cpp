@@ -220,13 +220,13 @@ void WetInk::disconnect() {
 
 // The handler waits for each stroke (and stroke context) to be taken before it moves on; we don't
 // need its copy (the app reads the pen itself), so every one is acknowledged at once.
-// The handler posts its news (sem 1) after what it posted (seen at connect: sem 8, then sem 1), so
-// the thread sleeps on it; disconnect() posts one to stop it. It used to wake every 200 ms to look
-// for a stop, 5 times a second for the whole session, the background included. The long timeout
-// is only a safety net: should a stroke ever come without news, it is acknowledged within kAckMaxMs
-// (and logged once) rather than left to hang the handler.
+// The thread sleeps on the handler's news (sem 1); disconnect() posts one to stop it. It used to
+// wake every 200 ms, 5 times a second for the whole session, the background included. News is
+// recorded only at connect (sem 8, then sem 1: docs/scribe-pen.md); whether each stroke brings one
+// is unchecked, so the wait is at most kAckMaxMs: a stroke without news waits that long for its
+// ack (the handler's line pauses), and the first such is logged, to tell on a Scribe.
 void WetInk::ackLoop() {
-    constexpr int kAckMaxMs = 5000;
+    constexpr int kAckMaxMs = 1000;
     struct {
         long type;
         unsigned char data[512];
