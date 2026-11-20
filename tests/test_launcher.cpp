@@ -75,6 +75,7 @@ struct Kindle {
         writeFile(root / "documents/Zotero.sh", "launcher 0.3.0");
         writeFile(home / "update/state", word + " 0.2.0 0.3.0\n");
     }
+    std::string script = "Zotero.sh.src";  // the launcher's file name, as the scriptlet runner starts it
     int launch() {
         // A `sync` on PATH that records what update/state held when it ran.
         writeFile(root / "fakebin/sync", "#!/bin/sh\necho \"sync $(cat '" + (home / "update/state").string() +
@@ -83,8 +84,8 @@ struct Kindle {
                                 ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
                                 (root / "var/config.json").string() + "' ZK_DISPLAY=none ZK_INK_MARK='" +
-                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' ZK_LOCK='" + lock().string() + "' sh '" +
-                                (root / "documents/Zotero.sh.src").string() + "'";
+                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' ZK_LOCK='" + lock().string() + "' ZK_PROC='" + (root / "proc").string() + "' sh '" +
+                                (root / "documents" / script).string() + "'";
         return std::system(cmd.c_str());
     }
     fs::path pidfile() const { return root / "run/zotero.pid"; }
@@ -163,6 +164,32 @@ TEST_CASE("launcher: a second start while the first is between runs of the app s
     CHECK(k.runs() == "0.2.0 0\n");
     CHECK(readFile(k.home / "log/zotero.log").find("another launcher") != std::string::npos);
     CHECK_FALSE(fs::exists(k.lock()));  // released at the end
+}
+
+TEST_CASE("launcher: a launcher started under another name still holds its lock") {
+    Kindle k;
+    k.script = "zk-start.sh";  // a runner that copies or renames the scriptlet
+    fs::copy_file(k.root / "documents/Zotero.sh.src", k.root / "documents/zk-start.sh");
+    // A first launcher, busy between two runs of the app: alive, its command line naming its file.
+    const std::string holder = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    writeFile(k.root / "proc" / holder / "cmdline", std::string("sh\0/mnt/us/documents/zk-start.sh\0", 33));
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(holder + " zk-start.sh", k.lock());
+    CHECK(k.launch() == 0);
+    CHECK_FALSE(fs::exists(k.home / "runs"));
+    CHECK(readFile(k.home / "log/zotero.log").find("another launcher") != std::string::npos);
+    shell("kill " + holder);
+}
+
+TEST_CASE("launcher: a lock whose pid now belongs to another program is taken over") {
+    Kindle k;
+    const std::string other = shell("sh -c 'sleep 3 >/dev/null 2>&1 & echo $!'");
+    writeFile(k.root / "proc" / other / "cmdline", std::string("sleep\0" "3\0", 8));
+    fs::create_directories(k.lock().parent_path());
+    fs::create_symlink(other + " Zotero.sh.src", k.lock());
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    shell("kill " + other);
 }
 
 TEST_CASE("launcher: a lock left by a launcher that is gone does not stop a start") {
