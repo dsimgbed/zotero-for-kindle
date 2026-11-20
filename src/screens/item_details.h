@@ -2,7 +2,8 @@
 // About this item (More… on the item sheet): every author and editor, type, date, publication,
 // collections, tags, each file with its own Remove from Kindle (and Open, when there are two or
 // more EPUBs and PDFs), the plugins' item actions (a Plugins section: title and plugin name;
-// "Working…" while one runs, then its result pop-up), and the abstract, on as many pages as it takes.
+// "Working…" while one runs, then its result pop-up), and the abstract. It takes as many pages as
+// the files and plugin rows need; the abstract fills the rest of the last page (cut there).
 
 #include <functional>
 #include <memory>

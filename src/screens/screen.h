@@ -72,6 +72,9 @@ using StatusFn = std::function<std::string(const std::string& attachmentKey)>;
 
 class Screen {
 public:
+    Screen() = default;
+    Screen(const Screen&) = delete;  // a copy would share the serial
+    Screen& operator=(const Screen&) = delete;
     virtual ~Screen() = default;
     virtual void draw(Canvas&) = 0;
     virtual void onGesture(const Gesture&, Nav&) = 0;
