@@ -183,12 +183,12 @@ TEST_CASE("ui tree: blocks nest at most 16 deep; a 2,000-deep chain is refused a
     CHECK(whyNot(chain(2000)).find("nested more than 16 deep") != std::string::npos);
 }
 
-TEST_CASE("ui tree: a row holds at most 6 blocks") {
+TEST_CASE("ui tree: a row holds at most 12 blocks") {
     json kids = json::array();
-    for (int i = 0; i < 6; ++i) kids.push_back({{"kind", "text"}, {"text", "t"}});
+    for (int i = 0; i < 12; ++i) kids.push_back({{"kind", "text"}, {"text", "t"}});
     ok(json{{"kind", "row"}, {"children", kids}});
     kids.push_back({{"kind", "text"}, {"text", "t"}});
-    CHECK(whyNot(json{{"kind", "row"}, {"children", kids}}) == "row: a row holds at most 6 blocks");
+    CHECK(whyNot(json{{"kind", "row"}, {"children", kids}}) == "row: a row holds at most 12 blocks");
 }
 
 TEST_CASE("ui tree: an items block takes keys, refs with a library and a label; each ref counts one block") {
@@ -283,4 +283,231 @@ TEST_CASE("ui tree: a quote without text, with an unknown field or a duplicate i
     CHECK(whyNot(json::parse(R"({"kind":"quote","text":7})")) == "quote: \"text\" must be a string");
     CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"button","id":"q","title":"B"},{"kind":"quote","id":"q","text":"t"}]})")) ==
           "column[1].quote: another block already has the id \"q\"");
+}
+
+// ── 0.12: layout primitives ──
+
+namespace {
+Block okHome(const json& j) {
+    std::string why;
+    auto t = parseTree(j, &why, TreeUse::HomeBody);
+    INFO(why);
+    REQUIRE(t);
+    return *t;
+}
+std::string whyNotHome(const json& j) {
+    std::string why;
+    CHECK_FALSE(parseTree(j, &why, TreeUse::HomeBody));
+    return why;
+}
+json col(json kid) { return {{"kind", "column"}, {"children", json::array({std::move(kid)})}}; }
+}  // namespace
+
+TEST_CASE("ui tree 0.12: widths, row alignment, the xsmall gap") {
+    const Block t = ok(json::parse(R"({"kind":"row","align":"stretch","gap":"xsmall","children":[
+      {"kind":"text","text":"a","width":"fill"},{"kind":"text","text":"b","width":"auto"},
+      {"kind":"text","text":"c","width":"35%"},{"kind":"button","id":"x","title":"X","width":"100%"},{"kind":"text","text":"d"}]})"));
+    CHECK(t.align == Block::Align::Stretch);
+    CHECK(t.gap == Block::Gap::XSmall);
+    CHECK(t.children[0].width == Block::Width::Fill);
+    CHECK(t.children[1].width == Block::Width::Auto);
+    CHECK(t.children[2].width == Block::Width::Percent);
+    CHECK(t.children[2].widthPct == 35);
+    CHECK(t.children[3].widthPct == 100);
+    CHECK(t.children[4].width == Block::Width::Default);
+    CHECK(ok(json::parse(R"({"kind":"row","children":[]})")).align == Block::Align::Top);
+    for (const char* a : {"top", "center", "bottom"}) ok(json{{"kind", "row"}, {"align", a}, {"children", json::array()}});
+    CHECK(whyNot(json::parse(R"({"kind":"row","align":"middle","children":[]})")) ==
+          "row: \"align\" must be one of \"top\", \"center\", \"bottom\", \"stretch\"");
+}
+
+TEST_CASE("ui tree 0.12: a width that is not fill, auto or 1-100% is refused") {
+    for (const char* w : {"0%", "101%", "-5%", "x%", "%", "50", "wide", "5 %", "1000%"})
+        CHECK(whyNot(json{{"kind", "text"}, {"text", "t"}, {"width", w}}) ==
+              "text: \"width\" must be \"fill\", \"auto\" or a percentage from 1% to 100%");
+    CHECK_FALSE(whyNot(json{{"kind", "text"}, {"text", "t"}, {"width", 40}}).empty());
+    // a width is only taken where a block can carry one: a deck's card can't
+    CHECK(whyNot(json::parse(R"({"kind":"deck","id":"d","card":{"kind":"card","title":"t","width":"fill"}})")).find("width") != std::string::npos);
+}
+
+TEST_CASE("ui tree 0.12: fit only on a Home body's root column") {
+    const json trim = {{"kind", "column"}, {"fit", "trim"}, {"children", json::array()}};
+    CHECK(okHome(trim).fit == Block::Fit::Trim);
+    CHECK(okHome(json{{"kind", "column"}, {"fit", "page"}, {"children", json::array()}}).fit == Block::Fit::Page);
+    CHECK(okHome(json{{"kind", "column"}, {"children", json::array()}}).fit == Block::Fit::Page);
+    CHECK(whyNot(trim) == "column.fit: only on a Home body's root");
+    CHECK(whyNotHome(col(trim)) == "column[0].column.fit: only on a Home body's root");
+    CHECK(whyNotHome(json{{"kind", "column"}, {"fit", "scroll"}, {"children", json::array()}}) ==
+          "column: \"fit\" must be one of \"page\", \"trim\"");
+    CHECK(whyNotHome(json{{"kind", "row"}, {"fit", "trim"}, {"children", json::array()}}) == "row: unknown field \"fit\"");
+}
+
+TEST_CASE("ui tree 0.12: spacer, box, text options") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"spacer"},
+      {"kind":"box","id":"go","pad":"xsmall","border":"thick","fill":"ink","radius":"round","child":{"kind":"text","text":"Go","tone":"inverse"}},
+      {"kind":"box","child":{"kind":"spacer"}},
+      {"kind":"text","text":"Mon","id":"day","font":"sans","size":"xsmall","weight":"medium","tone":"secondary","italic":true,"caps":true,"align":"end","lines":1},
+      {"kind":"text","text":"plain"}]})"));
+    CHECK(t.children[0].kind == K::Spacer);
+    const Block& box = t.children[1];
+    CHECK(box.kind == K::Box);
+    CHECK(box.id == "go");
+    CHECK(box.pad == Block::Gap::XSmall);
+    CHECK(box.border == Block::Border::Thick);
+    CHECK(box.fill == Block::Fill::Ink);
+    CHECK(box.radius == Block::Radius::Round);
+    REQUIRE(box.children.size() == 1);
+    CHECK(box.children[0].tone == Block::Tone::Inverse);
+    const Block& bare = t.children[2];
+    CHECK(bare.pad == Block::Gap::None);
+    CHECK(bare.border == Block::Border::None);
+    CHECK(bare.fill == Block::Fill::None);
+    CHECK(bare.radius == Block::Radius::None);
+    CHECK(bare.id.empty());
+    const Block& tx = t.children[3];
+    CHECK(tx.id == "day");
+    CHECK(tx.font == Block::Font::Sans);
+    CHECK(tx.size == Block::Size::XSmall);
+    CHECK(tx.weight == Block::Weight::Medium);
+    CHECK(tx.tone == Block::Tone::Secondary);
+    CHECK(tx.textAlign == Block::TextAlign::End);
+    CHECK(tx.italic);
+    CHECK(tx.caps);
+    const Block& pl = t.children[4];
+    CHECK_FALSE(pl.font);
+    CHECK_FALSE(pl.size);
+    CHECK_FALSE(pl.weight);
+    CHECK_FALSE(pl.tone);  // unset stays unset: the drawing decides
+    CHECK_FALSE(pl.textAlign);
+    CHECK_FALSE(pl.italic);
+    CHECK_FALSE(pl.caps);
+    CHECK(whyNot(json::parse(R"({"kind":"box"})")) == "box: \"child\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":null})")) == "box: \"child\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":{"kind":"text","text":"t"},"fill":"dark"})")) ==
+          "box: \"fill\" must be one of \"none\", \"light\", \"ink\"");
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":{"kind":"text","text":"t"},"border":"x"})")).find("\"border\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":{"kind":"text","text":"t"},"radius":"x"})")).find("\"radius\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":{"kind":"text","text":"t"},"pad":"huge"})")).find("\"pad\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"text","text":"t","font":"mono"})")) == "text: \"font\" must be one of \"serif\", \"sans\"");
+    CHECK(whyNot(json::parse(R"({"kind":"text","text":"t","size":"huge"})")).find("\"size\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"text","text":"t","weight":"heavy"})")).find("\"weight\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"text","text":"t","tone":"auto"})")).find("\"tone\" must be one of") != std::string::npos);
+    CHECK(whyNot(json::parse(R"({"kind":"text","text":"t","align":"left"})")).find("\"align\" must be one of") != std::string::npos);
+    // ids are unique across boxes and texts
+    CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"text","text":"a","id":"x"},{"kind":"box","id":"x","child":{"kind":"spacer"}}]})"))
+              .find("another block already has the id") != std::string::npos);
+    // a box's child is named by its path
+    CHECK(whyNot(json::parse(R"({"kind":"box","child":{"kind":"quote"}})")) == "box.quote: \"text\" is missing");
+}
+
+TEST_CASE("ui tree 0.12: cover, progress, item") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"cover","item":"ABCD1234","width":"30%"},
+      {"kind":"cover","item":{"key":"K2","library":5,"label":"x"}},
+      {"kind":"progress","value":0.4,"width":"fill"},{"kind":"progress","value":0},{"kind":"progress","value":1},
+      {"kind":"item","item":"ITEM","child":{"kind":"row","children":[{"kind":"cover","item":"ITEM"},{"kind":"text","text":"t"}]}}]})"));
+    const Block& cover = t.children[0];
+    CHECK(cover.kind == K::Cover);
+    REQUIRE(cover.items.size() == 1);
+    CHECK(cover.items[0].key == "ABCD1234");
+    CHECK(cover.width == Block::Width::Percent);
+    CHECK(cover.widthPct == 30);
+    CHECK(t.children[1].items[0].library == 5);
+    CHECK(t.children[2].kind == K::Progress);
+    CHECK(t.children[2].fraction == doctest::Approx(0.4));
+    CHECK(t.children[2].width == Block::Width::Fill);
+    CHECK(t.children[4].fraction == 1);
+    const Block& item = t.children[5];
+    CHECK(item.kind == K::Item);
+    REQUIRE(item.items.size() == 1);
+    CHECK(item.items[0].key == "ITEM");
+    REQUIRE(item.children.size() == 1);
+    CHECK(item.children[0].kind == K::Row);
+    CHECK(whyNot(json::parse(R"({"kind":"cover"})")) == "cover: \"item\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"cover","item":""})")) == "cover.item: an item needs a key");
+    CHECK(whyNot(json::parse(R"({"kind":"cover","item":3})")) == "cover.item: an item must be a key or { key, library?, label? }");
+    CHECK(whyNot(json::parse(R"({"kind":"progress"})")) == "progress: \"value\" is missing");
+    for (const char* v : {"-0.1", "1.01", "2", "\"0.5\"", "true"})
+        CHECK(whyNot(json::parse(std::string(R"({"kind":"progress","value":)") + v + "}")) == "progress: \"value\" must be a number from 0 to 1");
+    CHECK(whyNot(json::parse(R"({"kind":"item","item":"K"})")) == "item: \"child\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"item","child":{"kind":"spacer"}})")) == "item: \"item\" is missing");
+}
+
+TEST_CASE("ui tree 0.12: grid and image") {
+    const Block g = ok(json::parse(R"({"kind":"grid","columns":"auto","minWidth":"20%","gap":"xsmall","rows":2,
+      "children":[{"kind":"cover","item":"A"},null,{"kind":"cover","item":"B"}]})"));
+    CHECK(g.kind == K::Grid);
+    CHECK(g.columns == 0);
+    CHECK(g.minWidthPct == 20);
+    CHECK(g.gap == Block::Gap::XSmall);
+    CHECK(g.maxRows == 2);
+    CHECK(g.children.size() == 2);
+    const Block d = ok(json::parse(R"({"kind":"grid","children":[]})"));
+    CHECK(d.columns == 0);
+    CHECK(d.minWidthPct == 25);
+    CHECK(d.maxRows == 0);
+    CHECK(d.gap == Block::Gap::Small);
+    CHECK(ok(json::parse(R"({"kind":"grid","columns":12,"minWidth":"5%","rows":20,"children":[]})")).columns == 12);
+    CHECK(ok(json::parse(R"({"kind":"grid","minWidth":"100%","rows":1,"children":[]})")).minWidthPct == 100);
+    for (const char* c : {"0", "13", "\"many\"", "2.5"})
+        CHECK(whyNot(json::parse(std::string(R"({"kind":"grid","children":[],"columns":)") + c + "}")) ==
+              "grid: \"columns\" must be \"auto\" or a whole number from 1 to 12");
+    for (const char* r : {"0", "21", "\"2\""})
+        CHECK(whyNot(json::parse(std::string(R"({"kind":"grid","children":[],"rows":)") + r + "}")) ==
+              "grid: \"rows\" must be a whole number from 1 to 20");
+    for (const char* m : {"\"4%\"", "\"101%\"", "30", "\"x\""})
+        CHECK(whyNot(json::parse(std::string(R"({"kind":"grid","children":[],"minWidth":)") + m + "}")) ==
+              "grid: \"minWidth\" must be a percentage from 5% to 100%");
+    CHECK(whyNot(json::parse(R"({"kind":"grid"})")) == "grid: \"children\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"grid","children":[{"kind":"quote"}]})")) == "grid[0].quote: \"text\" is missing");
+
+    const Block im = ok(json::parse(R"({"kind":"image","src":"img/logo.png","width":"50%","id":"logo"})"));
+    CHECK(im.kind == K::Image);
+    CHECK(im.src == "img/logo.png");
+    CHECK(im.widthPct == 50);
+    CHECK(im.id == "logo");
+    CHECK(ok(json::parse(R"({"kind":"image","src":"a..b/c.png"})")).src == "a..b/c.png");
+    for (const char* src : {"/etc/x.png", "\\\\x.png", "C:/x.png", "../x.png", "a/../x.png", "a\\..\\x.png", "a/.."})
+        CHECK_FALSE(whyNot(json{{"kind", "image"}, {"src", src}}).empty());
+    CHECK(whyNot(json::parse(R"({"kind":"image","src":"/x.png"})")) == "image: \"src\" must be a path inside the plugin, not an absolute one");
+    CHECK(whyNot(json::parse(R"({"kind":"image","src":"../x.png"})")) == "image: \"src\" must not contain \"..\"");
+    CHECK(whyNot(json::parse(R"({"kind":"image","src":""})")) == "image: \"src\" must not be empty");
+    CHECK(whyNot(json::parse(R"({"kind":"image"})")) == "image: \"src\" is missing");
+}
+
+TEST_CASE("ui tree 0.12: box, item and grid count as one block plus their children; a cover's ref is not extra") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"box","child":{"kind":"text","text":"a"}},
+      {"kind":"item","item":"K","child":{"kind":"cover","item":"K"}},
+      {"kind":"grid","children":[{"kind":"cover","item":"A"},{"kind":"cover","item":"B"},{"kind":"spacer"}]},
+      {"kind":"progress","value":0.5},{"kind":"image","src":"a.png"}]})"));
+    // column 1 + box 2 + item 2 + grid 4 + progress 1 + image 1
+    CHECK(blockCount(t) == 11);
+}
+
+TEST_CASE("ui tree 0.12: a tree of primitives is capped like any other") {
+    json kids = json::array();
+    for (int i = 0; i < 2000; ++i) kids.push_back({{"kind", "spacer"}});
+    CHECK(whyNot(json{{"kind", "grid"}, {"children", kids}}).find("more than 2,000 blocks") != std::string::npos);
+}
+
+TEST_CASE("ui tree 0.12: a 0.11 tree parses to the same blocks it always did") {
+    const json j = json::parse(R"({"kind":"column","gap":"large","children":[
+      {"kind":"row","children":[{"kind":"text","text":"a","style":"label"},{"kind":"button","id":"b","title":"B"}]},
+      {"kind":"items","id":"i","style":"shelf","items":["K1",{"key":"K2","library":3}]},
+      {"kind":"quote","id":"q","text":"Q","source":"S"},{"kind":"space","size":"small"},{"kind":"notice","text":"n"}]})");
+    const Block a = ok(j), b = ok(j);
+    CHECK(sameBlock(a, b));
+    CHECK(a.width == Block::Width::Default);
+    CHECK(a.align == Block::Align::Top);
+    CHECK(a.fit == Block::Fit::Page);
+    CHECK(a.children[0].children[0].width == Block::Width::Default);
+    CHECK_FALSE(a.children[0].children[0].tone);
+    CHECK(a.children[0].children[1].widthPct == 0);
+    CHECK(blockCount(a) == 1 + 3 + 3 + 1 + 1 + 1);  // column, row+text+button, items+2 refs, quote, space, notice
+    // a primitive that differs is a different block (the diff)
+    json other = j;
+    other["children"][0]["children"][0]["tone"] = "secondary";
+    CHECK_FALSE(sameBlock(a, ok(other)));
 }

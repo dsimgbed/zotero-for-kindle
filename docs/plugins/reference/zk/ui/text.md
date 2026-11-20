@@ -14,9 +14,7 @@ Text in one of four styles; `"\n"` breaks a line. `spans` mark bold and italic s
 | Parameter | Type |
 | ------ | ------ |
 | `text` | `string` \| [`Span`](Span.md)[] |
-| `opts?` | \{ `lines?`: `number`; `style?`: [`TextStyle`](TextStyle.md); \} |
-| `opts.lines?` | `number` |
-| `opts.style?` | [`TextStyle`](TextStyle.md) |
+| `opts?` | [`TextOptions`](TextOptions.md) |
 
 ## Returns
 

@@ -42,6 +42,7 @@ constexpr int kQuoteRuleW = 6, kQuoteIndent = kQuoteRuleW + 30, kQuoteLines = 5,
 int gapPx(Block::Gap g) {
     switch (g) {
         case Block::Gap::None: return 0;
+        case Block::Gap::XSmall: return 6;
         case Block::Gap::Small: return 18;
         case Block::Gap::Medium: return 36;
         case Block::Gap::Large: return 60;
@@ -585,7 +586,13 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             if (!b.meta.empty())
                 drawText(cr, b.meta, kQuoteSource, {x, r.y + kQuotePadY + th + kQuoteSourceGap, w, r.h}, 1);
             break;
-        }
+        }        case K::Spacer:  // 0.12 primitives: drawn by the layout tasks
+        case K::Box:
+        case K::Cover:
+        case K::Progress:
+        case K::Item:
+        case K::Grid:
+        case K::Image: break;
     }
     cairo_restore(cr);
 }

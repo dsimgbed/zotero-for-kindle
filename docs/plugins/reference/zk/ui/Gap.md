@@ -3,7 +3,7 @@
 # Type Alias: Gap
 
 ```ts
-type Gap = "none" | "small" | "medium" | "large";
+type Gap = "none" | "xsmall" | "small" | "medium" | "large";
 ```
 
 Spacing between children.

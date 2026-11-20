@@ -100,6 +100,13 @@ zk.ui = Object.freeze({
   space: (size) => (size === undefined ? { kind: "space" } : { kind: "space", size }),
   notice: (text, opts) => ({ kind: "notice", text, ...opts }),
   quote: (quote) => ({ kind: "quote", ...quote }),
+  spacer: () => ({ kind: "spacer" }),
+  box: (child, opts) => ({ kind: "box", child, ...opts }),
+  cover: (item, opts) => ({ kind: "cover", item, ...opts }),
+  progress: (value, opts) => ({ kind: "progress", value, ...opts }),
+  item: (item, child) => ({ kind: "item", item, child }),
+  grid: (children, opts) => ({ kind: "grid", children, ...opts }),
+  image: (image) => ({ kind: "image", ...image }),
   open(screenId, params) {
     if (typeof screenId !== "string") throw new TypeError("zk.ui.open: the screen id must be a string");
     n.open(screenId, json(params, "zk.ui.open: params"));

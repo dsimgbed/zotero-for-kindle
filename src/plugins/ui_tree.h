@@ -16,7 +16,7 @@ namespace zk {
 constexpr size_t kMaxTreeBlocks = 2000;         // a list row, a chip or a button counts as one
 constexpr size_t kMaxTreeText = 256 * 1024;     // bytes of text (every string in the tree)
 constexpr int kMaxTreeDepth = 16;               // the root is at depth 1
-constexpr size_t kMaxRowBlocks = 6;
+constexpr size_t kMaxRowBlocks = 12;   // 0.12 (6 before)
 
 struct Span {
     std::string text;
@@ -44,11 +44,24 @@ struct ItemRef {
 };
 
 struct Block {
-    enum class Kind { Column, Row, Text, Card, Deck, Items, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice, Quote };
-    enum class Gap { None, Small, Medium, Large };  // also a space's size
+    enum class Kind { Column, Row, Text, Card, Deck, Items, List, Search, Field, Chips, Button, Buttons, Divider, Space, Notice, Quote,
+                      Spacer, Box, Cover, Progress, Item, Grid, Image };  // the last seven: 0.12
+    enum class Gap { None, XSmall, Small, Medium, Large };  // also a space's size (XSmall, 6 px: 0.12, not a space's)
     enum class Style { Title, Body, Meta, Label };
     enum class Select { None, One, Many };
     enum class ItemStyle { Card, Row, Shelf };  // Shelf (0.11): cover tiles in rows; a ref's label isn't drawn
+    // 0.12: the layout primitives. A text's options are unset (nullopt) unless given; `style` is the preset they override.
+    enum class Width { Default, Fill, Auto, Percent };
+    enum class Align { Top, Center, Bottom, Stretch };
+    enum class Fit { Page, Trim };
+    enum class Border { None, Thin, Thick };
+    enum class Fill { None, Light, Ink };
+    enum class Radius { None, Small, Round };
+    enum class Font { Serif, Sans };
+    enum class Size { XSmall, Small, Body, Large, Title };
+    enum class Weight { Regular, Medium, Bold };
+    enum class Tone { Ink, Secondary, Inverse, Auto };  // Auto is for the drawing; the parser never sets it
+    enum class TextAlign { Start, Center, End };
 
     Kind kind = Kind::Column;
     std::string id;                // deck, list, search, field, chips, button; a notice's and a quote's (optional)
@@ -61,7 +74,7 @@ struct Block {
     std::string text;              // notice, quote (its line breaks kept)
     std::string empty;             // deck, list, items
     std::vector<ListRow> rows;     // list
-    std::vector<ItemRef> items;    // items
+    std::vector<ItemRef> items;    // items; cover, item: the one ref
     ItemStyle itemStyle = ItemStyle::Row;  // items; `empty` is shown when none can be read
     std::string label, placeholder;  // field, search
     std::optional<std::string> value;  // search, field
@@ -69,6 +82,26 @@ struct Block {
     std::vector<Chip> chips;       // chips
     std::vector<std::string> selected;
     Select select = Select::Many;
+
+    Width width = Width::Default;  // any block; meaningful in a row (and a cover's, a progress's, an image's own)
+    int widthPct = 0;              // width == Percent: 1..100
+    Align align = Align::Top;      // row
+    Fit fit = Fit::Page;           // column, on a Home body's root only
+    Gap pad = Gap::None;           // box (its child is children[0]); an item's child is children[0] too
+    Border border = Border::None;  // box
+    Fill fill = Fill::None;        // box
+    Radius radius = Radius::None;  // box
+    std::optional<Font> font;      // text (id: tappable, as a box's)
+    std::optional<Size> size;
+    std::optional<Weight> weight;
+    std::optional<Tone> tone;
+    std::optional<TextAlign> textAlign;
+    bool italic = false, caps = false;
+    double fraction = 0;           // progress: 0..1
+    int columns = 0;               // grid: 0 = auto
+    int minWidthPct = 25;          // grid: the narrowest a cell gets when columns is auto
+    int maxRows = 0;               // grid: 0 = all (paged)
+    std::string src;               // image: a path inside the plugin's package, never absolute or with ".."
 
     bool operator==(const Block&) const = default;
 };
