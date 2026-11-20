@@ -673,6 +673,8 @@ FakeItems shelfItems(int n) {
         ItemRow& r = f.add(k, titles[t], t == 0 ? 0.13 : t == 1 ? 0.62 : t == 2 ? 0.05 : -1, t == 3 ? "PDF" : t == 6 ? "WEB" : "EPUB");
         r.byline = t == 0 ? "Jane Austen · 1813" : t == 1 ? "Herman Melville · 1851" : "Adler · 2024";
         if (t == 4) r.read = true, r.progress = 1.0;
+        if (t == 3) r.itemType = "journalArticle", r.publication = "Probab. Theory Relat. Fields", r.year = 2024;  // a paper
+        if (t == 6) r.itemType = "webpage";  // a paper without a venue: its type's name
     }
     return f;
 }

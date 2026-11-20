@@ -4,8 +4,11 @@
 #include "ui/metrics.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
+
+#include <glib.h>
 
 #include <nlohmann/json.hpp>
 
@@ -72,29 +75,76 @@ std::string itemCardMeta(Library& lib, const ItemRow& row, int64_t nowMs) {
     return cardMetaText(row, static_cast<int>(highlights), opened, nowMs);
 }
 
+std::string itemTypeLabel(const std::string& itemType) {
+    if (itemType.empty() || itemType == "attachment") return "File";
+    std::string s;
+    for (char c : itemType) {
+        if (std::isupper(static_cast<unsigned char>(c))) {
+            s += ' ';
+            s += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        } else {
+            s += c;
+        }
+    }
+    s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    return s;
+}
+
+bool isBookRow(const ItemRow& r) { return r.itemType == "book" || r.itemType == "bookSection" || r.badge == "EPUB"; }
+
+CoverLook coverLook(const ItemRow& r) {
+    if (!isBookRow(r)) return CoverLook::Paper;
+    uint32_t h = 2166136261u;  // FNV-1a: the same look for a key on every Kindle and every run
+    for (unsigned char c : r.key) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    static constexpr CoverLook kLooks[] = {CoverLook::Ink, CoverLook::Grey, CoverLook::Framed};
+    return kLooks[h % 3];
+}
+
 void drawCover(cairo_t* cr, Rect r, const ItemRow& item) {
     // Home's card is 290 wide; a narrower cover (a shelf's tile) has narrower margins and sets its
-    // title smaller in proportion (7 pt at least), and smaller still (to 6 pt) until its longest word fits unbroken.
+    // title smaller in proportion (7 pt at least), and smaller still (to 6 pt) until its longest word
+    // fits unbroken. A paper sets its title at 0.8 of a book's (6 pt at least); a framed book keeps
+    // its text inside the inner frame.
     const std::string title = item.title.empty() ? "Untitled" : item.title;
+    const CoverLook look = coverLook(item);
     double titlePt = 9;
-    const int pad = r.w < 230 ? 16 : r.w < 290 ? 20 : 26;
-    if (r.w < 290) {
-        titlePt = std::max(7.0, std::round(9.0 * r.w / 290 * 2) / 2);
-        std::vector<std::string> words;
-        for (size_t at = 0; at < title.size();) {
-            const size_t end = std::min(title.find(' ', at), title.size());
-            if (end > at) words.push_back(title.substr(at, end - at));
-            at = end + 1;
-        }
-        const int room = r.w - 2 * pad;
-        const auto fits = [&](double pt) {
-            for (const auto& w : words)
-                if (measureText(w, {kSerif, pt, 700}, 10000, 1).width > room) return false;
-            return true;
-        };
-        while (titlePt > 6 && !fits(titlePt)) titlePt -= 0.5;
+    int pad = r.w < 230 ? 16 : r.w < 290 ? 20 : 26;
+    if (r.w < 290) titlePt = std::max(7.0, std::round(9.0 * r.w / 290 * 2) / 2);
+    if (look == CoverLook::Paper) titlePt = std::max(6.0, std::round(titlePt * 0.8 * 2) / 2);
+    if (look == CoverLook::Framed) pad = static_cast<int>(std::lround(r.w * 0.05 + pad * 0.6));
+    std::vector<std::string> words;
+    for (size_t at = 0; at < title.size();) {
+        const size_t end = std::min(title.find(' ', at), title.size());
+        if (end > at) words.push_back(title.substr(at, end - at));
+        at = end + 1;
     }
-    generatedCover(cr, r, title, authorsOf(item.byline), true, titlePt, pad);
+    const int room = r.w - 2 * pad;
+    const auto fits = [&](double pt) {
+        for (const auto& w : words)
+            if (measureText(w, {kSerif, pt, 700}, 10000, 1).width > room) return false;
+        return true;
+    };
+    while (titlePt > 6 && !fits(titlePt)) titlePt -= 0.5;
+    const std::string authors = authorsOf(item.byline);
+    switch (look) {
+        case CoverLook::Ink: bookCover(cr, r, title, authors, 28, 255, 187, 164, false, titlePt, pad); break;
+        case CoverLook::Grey: bookCover(cr, r, title, authors, 214, kInk, 51, 86, false, titlePt, pad); break;
+        case CoverLook::Framed: bookCover(cr, r, title, authors, 255, kInk, kInk, 102, true, titlePt, pad); break;
+        case CoverLook::Paper: {
+            std::string venue = item.publication;
+            if (venue.empty() && !item.itemType.empty() && item.itemType != "attachment") venue = itemTypeLabel(item.itemType);
+            if (!venue.empty()) {
+                gchar* up = g_utf8_strup(venue.c_str(), -1);
+                venue = up;
+                g_free(up);
+            }
+            paperCover(cr, r, venue, item.year > 0 ? std::to_string(item.year) : "", title, authors, titlePt, pad);
+            break;
+        }
+    }
 }
 
 std::string shelfMeta(const ItemRow& item) {
@@ -107,14 +157,6 @@ void drawItemTile(cairo_t* cr, Rect r, const ItemRow& item, const std::string& s
     fillRect(cr, r, 255);
     const Rect cover{r.x, r.y, r.w, r.w * 3 / 2};
     drawCover(cr, cover, item);
-    if (!item.badge.empty() && item.badge != "EPUB") {  // the file's format, in white on the cover's corner
-        // A tab in the very corner, above the title's first line (which starts 32 px down).
-        const TextStyle st{kSans, 5, 700, false, kInk};
-        const int w = measureText(item.badge, st, cover.w, 1).width + 20, h = 30;
-        const Rect mark{cover.x + cover.w - w, cover.y, w, h};
-        fillRect(cr, mark, 255);
-        centredText(cr, item.badge, st, mark);
-    }
     const int barY = cover.y + cover.h + 18;
     if (item.progress >= 0) progressBar(cr, {r.x, barY, r.w, 8}, item.progress);
     const int lineY = barY + 8 + 12;

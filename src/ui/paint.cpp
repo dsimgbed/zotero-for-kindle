@@ -44,19 +44,69 @@ void searchIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_stroke(cr);
 }
 
-void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark, double titlePt, int pad) {
-    fillRect(cr, r, dark ? 42 : 255);
-    if (!dark) {
-        gray(cr, kInk);
-        cairo_set_line_width(cr, 3);
-        cairo_rectangle(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3);
+namespace {
+
+void border(cairo_t* cr, Rect r, double width, double inset) {
+    gray(cr, kInk);
+    cairo_set_line_width(cr, width);
+    cairo_rectangle(cr, r.x + inset + width / 2, r.y + inset + width / 2, r.w - 2 * inset - width, r.h - 2 * inset - width);
+    cairo_stroke(cr);
+}
+
+}  // namespace
+
+void bookCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, uint8_t fill, uint8_t ink,
+               uint8_t soft, uint8_t rule, bool framed, double titlePt, int pad) {
+    fillRect(cr, r, fill);
+    if (framed) {
+        border(cr, r, 2, 0);
+        cairo_set_line_width(cr, 1.5);
+        const double ix = r.w * 0.05, iy = r.h * 0.05;
+        cairo_rectangle(cr, r.x + ix + 0.75, r.y + iy + 0.75, r.w - 2 * ix - 1.5, r.h - 2 * iy - 1.5);
         cairo_stroke(cr);
     }
-    uint8_t ink = dark ? 255 : kInk, soft = dark ? 200 : kSecondary;
-    int ruleY = r.y + r.h - 112, titleY = r.y + pad + 6;
+    const int ruleY = r.y + r.h - 112, titleY = r.y + pad + 6;
     drawText(cr, title, {kSerif, titlePt, 700, false, ink}, {r.x + pad, titleY, r.w - 2 * pad, ruleY - 16 - titleY}, 5);
-    hRule(cr, ruleY, r.x + pad, r.x + pad + 60, soft);
+    hRule(cr, ruleY, r.x + pad, r.x + pad + 60, rule);
     drawText(cr, authors, {kSans, 6.5, 400, false, soft}, {r.x + pad, r.y + r.h - 92, r.w - 2 * pad, 80}, 2);
+}
+
+void paperCover(cairo_t* cr, Rect r, const std::string& venue, const std::string& year, const std::string& title,
+                const std::string& authors, double titlePt, int pad) {
+    fillRect(cr, r, 255);
+    border(cr, r, 2, 0);
+    const int x = r.x + pad, w = r.w - 2 * pad, bottom = r.y + r.h - pad;
+    int y = r.y + pad + 2;
+    if (!venue.empty() || !year.empty()) {
+        const TextStyle st{kSans, 4.5, 700, false, kSecondary, true};
+        const auto tracked = [&](const std::string& s) {
+            return "<span letter_spacing=\"" + std::to_string(static_cast<int>(st.size_pt * 0.14 * 1024)) + "\">" +
+                   markupEscape(s) + "</span>";
+        };
+        // A long venue is cut; the year after it stays.
+        const std::string tail = venue.empty() ? year : year.empty() ? "" : " " + year;
+        const int tailW = tail.empty() ? 0 : measureText(tracked(tail), st, w, 1).width;
+        TextResult v{};
+        if (!venue.empty()) v = drawText(cr, tracked(venue), st, {x, y, w - tailW, bottom - y}, 1);
+        if (!tail.empty()) {
+            const TextResult t = drawText(cr, tracked(tail), st, {x + v.width, y, tailW + 4, bottom - y}, 1);
+            v.height = std::max(v.height, t.height);
+        }
+        y += v.height + static_cast<int>(std::lround(r.w * 0.05));
+    }
+    y += drawText(cr, title, {kSerif, titlePt, 700}, {x, y, w, bottom - y}, 4).height;
+    if (!authors.empty()) {
+        y += static_cast<int>(std::lround(r.w * 0.03));
+        y += drawText(cr, authors, {kSans, 5.5, 400, false, kSecondary}, {x, y, w, bottom - y}, 1).height;
+    }
+    const int thick = r.w >= 250 ? 4 : 3, gap = static_cast<int>(std::lround(r.w * 0.045));
+    y += static_cast<int>(std::lround(r.w * 0.02));
+    for (int i = 0; i < 5; ++i) {
+        y += gap;
+        if (y + thick > bottom) break;
+        fillRect(cr, {x, y, i == 4 ? static_cast<int>(std::lround(r.w * 0.45)) : w, thick}, 207);
+        y += thick;
+    }
 }
 
 void typeBadge(cairo_t* cr, Rect r, const std::string& type) {

@@ -60,9 +60,7 @@ void BookScreen::draw(Canvas& canvas) {
     fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "", true);
     const Rect cover{kMargin, 110, 210, 290};
-    const size_t dot = row_.byline.find(" · ");
-    generatedCover(cr, cover, row_.title.empty() ? "Untitled" : row_.title,
-                   dot == std::string::npos ? row_.byline : row_.byline.substr(0, dot), true);
+    drawCover(cr, cover, row_);
     const int x = cover.x + cover.w + 40, w = W() - kMargin - x;
     TextResult t = drawText(cr, row_.title.empty() ? "Untitled" : row_.title, {kSerif, 12, 700}, {x, 116, w, 150}, 3);
     drawText(cr, row_.byline, {kSans, 8, 400, false, kSecondary}, {x, 116 + t.height + 12, w, 50}, 1);
