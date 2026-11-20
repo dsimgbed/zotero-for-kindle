@@ -185,7 +185,7 @@ TEST_CASE("sticky note: a tap opens the note box; Return with text saves a note 
     CHECK(rig.reader->highlights()[0].rect.x == 420);
 }
 
-TEST_CASE("sticky note: empty text, Escape or a tap elsewhere creates nothing") {
+TEST_CASE("sticky note: empty text or Escape creates nothing; a tap elsewhere keeps what was typed") {
     Rig rig;
     rig.arm();
     rig.tap({420, 900});
@@ -201,12 +201,14 @@ TEST_CASE("sticky note: empty text, Escape or a tap elsewhere creates nothing") 
     CHECK_FALSE(rig.reader->placingNote());
     rig.arm();
     rig.tap({420, 900});
-    rig.type("gone too");
+    rig.settle(200);
+    CHECK(rig.notes().empty());
+    rig.type("kept");
     rig.tap({618, 100});  // outside the note box
     CHECK_FALSE(rig.reader->noteOpen());
     CHECK_FALSE(rig.nav.keyboardFake.shown);
-    rig.settle(200);
-    CHECK(rig.notes().empty());
+    REQUIRE(rig.waitFor([&] { return rig.notes().size() == 1; }));
+    CHECK(rig.notes()[0].comment == "kept");
     CHECK_FALSE(rig.reader->placingNote());
 }
 

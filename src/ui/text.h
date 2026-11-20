@@ -44,6 +44,9 @@ TextResult measureText(std::string_view utf8, const TextStyle& style, int width,
 // the last as the final entry ({0} for no text).
 std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int width);
 // Draws lines [first, first + count) of `utf8` laid out box.w wide, line `first` at box.y.
+// The first of the last `count` lines `utf8` takes at `width` (0 when it fits in `count`): a box that
+// shows what is being typed draws from there, so the end of a long text stays in view.
+int firstOfLastLines(std::string_view utf8, const TextStyle& style, int width, int count);
 void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
                    Align align = Align::Left);
 // Text laid out once and kept, for long text drawn again and again (a plugin screen's text block):

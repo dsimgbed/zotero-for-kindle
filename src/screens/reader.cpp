@@ -738,6 +738,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (positionBannerRect().contains(g.pos)) return;
     }
     if (editor_) {
+        if (editor_->commenting() && g.type != GestureType::Tap) return;  // typing: only a tap ends it
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
             if (editor_->takeChanged()) {
                 refreshHighlights(nav);
@@ -752,8 +753,13 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         closeEditor(nav);
         if (g.type == GestureType::Tap) return;
     }
-    if (note_) {  // typing a note: a tap elsewhere gives up on it
-        if (g.type == GestureType::Tap && !noteRect().contains(g.pos)) closeSelection(nav);
+    if (note_) {  // typing a note: a tap elsewhere keeps what was typed (nothing typed: gives up)
+        if (g.type == GestureType::Tap && !noteRect().contains(g.pos)) {
+            const std::string text = note_->text();
+            if (notePlace_) return saveNote(text, nav);
+            if (text.find_first_not_of(" \t\n") == std::string::npos) return closeSelection(nav);
+            return saveSelection("highlight", text, nav);
+        }
         return;
     }
     if (selecting_ || selection_) {
@@ -1178,8 +1184,10 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_stroke(cr);
         drawText(cr, "Note", {kSans, 8, 500}, {n.x + 30, n.y + 24, n.w - 60, 50}, 1);
         const bool empty = note_->text().empty();
-        drawText(cr, empty ? "Type a note…" : note_->text(), {kSerif, 9, 400, false, empty ? kTertiary : kInk},
-                 {n.x + 30, n.y + 84, n.w - 60, 110}, 2);
+        const TextStyle style{kSerif, 9, 400, false, empty ? kTertiary : kInk};
+        const Rect text{n.x + 30, n.y + 84, n.w - 60, 110};
+        if (empty) drawText(cr, "Type a note…", style, text, 2);
+        else drawTextLines(cr, note_->text(), style, text, firstOfLastLines(note_->text(), style, text.w, 2), 2);  // the end, where typing is
         drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {n.x + 30, n.y + n.h - 56, n.w - 60, 40}, 1,
                  Align::Right);
     }

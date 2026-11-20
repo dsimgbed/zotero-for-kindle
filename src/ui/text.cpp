@@ -122,6 +122,11 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
     return resultOf(l.layout, utf8);
 }
 
+int firstOfLastLines(std::string_view utf8, const TextStyle& style, int width, int count) {
+    if (utf8.empty()) return 0;
+    return std::max(0, measureText(utf8, style, width, 0).lines - count);
+}
+
 TextResult measureText(std::string_view utf8, const TextStyle& style, int width, int max_lines) {
     if (utf8.empty()) return {};
     Layout l = makeLayout(nullptr, utf8, style, width, max_lines, Align::Left);

@@ -192,3 +192,80 @@ TEST_CASE("annotation edit bar matches the reviewed golden") {
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/annotation-edit.png");
 }
+
+TEST_CASE("annotation edit: a swipe while typing a comment keeps it open, the page put and the keyboard up") {
+    Rig rig;
+    const int page = rig.reader->page();
+    rig.tap(kOnBox);
+    rig.tap(rig.editor()->bar().buttonRect(0).center());  // Comment
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Text, "half typed"}, rig.nav);
+    rig.reader->onGesture(swipe(Direction::Left), rig.nav);
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {600, 700}, {600, 700}}, rig.nav);
+    REQUIRE(rig.editor());
+    CHECK(rig.editor()->commenting());
+    CHECK(rig.reader->page() == page);
+    CHECK(rig.nav.keyboardFake.shown);
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Return, ""}, rig.nav);
+    CHECK(rig.lib.annotation("EDITME01")->comment == "half typed");
+    CHECK_FALSE(rig.nav.keyboardFake.shown);
+}
+
+TEST_CASE("annotation edit: Book Notes — a swipe while typing a comment keeps it open with the keyboard") {
+    Rig rig;
+    BookNotesScreen notes(*rig.lib.rowFor("IT000003"), nullptr);
+    rig.nav.visible = &notes;
+    notes.onShow(rig.nav);
+    const Point row = notes.rowRects()[0].center();
+    notes.onGesture(Gesture{GestureType::LongPress, row, row}, rig.nav);
+    notes.onGesture(tapAt(notes.annotationEditor()->bar().buttonRect(0).center()), rig.nav);  // Comment
+    notes.onKey(KeyEvent{KeyEvent::Code::Text, "typed"}, rig.nav);
+    notes.onGesture(swipe(Direction::Up), rig.nav);
+    REQUIRE(notes.annotationEditor());
+    CHECK(notes.annotationEditor()->commenting());
+    CHECK(rig.nav.keyboardFake.shown);
+    notes.onKey(KeyEvent{KeyEvent::Code::Return, ""}, rig.nav);
+    CHECK(rig.lib.annotation("EDITME01")->comment == "typed");
+    CHECK_FALSE(rig.nav.keyboardFake.shown);
+}
+
+TEST_CASE("annotation edit: the comment opens with what a sync brought meanwhile") {
+    Rig rig;
+    rig.tap(kOnBox);
+    auto a = *rig.lib.annotation("EDITME01");
+    a.comment = "written on the computer";
+    a.version = 6;
+    rig.lib.upsertAnnotation(a);
+    rig.tap(rig.editor()->bar().buttonRect(0).center());  // Comment
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Text, "!"}, rig.nav);
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Return, ""}, rig.nav);
+    CHECK(rig.lib.annotation("EDITME01")->comment == "written on the computer!");
+}
+
+TEST_CASE("annotation edit: a tap outside the comment box saves what was typed") {
+    Rig rig;
+    rig.tap(kOnBox);
+    rig.tap(rig.editor()->bar().buttonRect(0).center());  // Comment
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Text, "typed"}, rig.nav);
+    rig.tap({600, 100});
+    auto a = rig.lib.annotation("EDITME01");
+    CHECK(a->comment == "typed");
+    CHECK(a->dirty);
+    CHECK_FALSE(rig.editor());
+    CHECK_FALSE(rig.nav.keyboardFake.shown);
+    CHECK(rig.nav.syncFake.pushes > 0);
+}
+
+TEST_CASE("annotation edit: a comment left as it was saves nothing (Return or a tap outside)") {
+    Rig rig;
+    REQUIRE_FALSE(rig.lib.annotation("EDITME01")->dirty);
+    rig.tap(kOnBox);
+    rig.tap(rig.editor()->bar().buttonRect(0).center());  // Comment
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Return, ""}, rig.nav);
+    CHECK_FALSE(rig.lib.annotation("EDITME01")->dirty);
+    rig.tap(kOnBox);
+    rig.tap(rig.editor()->bar().buttonRect(0).center());
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Text, "x"}, rig.nav);
+    rig.reader->onKey(KeyEvent{KeyEvent::Code::Backspace, ""}, rig.nav);
+    rig.tap({600, 100});
+    CHECK_FALSE(rig.lib.annotation("EDITME01")->dirty);
+}

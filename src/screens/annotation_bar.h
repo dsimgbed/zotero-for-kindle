@@ -190,11 +190,13 @@ public:
 private:
     enum class State { Bar, Confirm, Comment };
     void enter(State, Nav&);
+    Result saveComment(Nav&);  // the comment box closes: what was typed is saved (nothing if unchanged)
 
     AnnotationRecord annotation_;
     AnnotationBar bar_;
     State state_ = State::Bar;
     std::string comment_;
+    std::string base_;  // the comment as the box opened with it: unchanged, nothing is saved
     Rect commentBox_;  // placed when the comment opens, above the keyboard as it is then
     bool changed_ = false;
     bool direct_ = false;  // opened at the comment or the confirmation: no bar to go back to

@@ -93,3 +93,13 @@ TEST_CASE("text: drawText stays inside the box height") {
     CHECK(r.truncated);
     CHECK(r.height <= 60);
 }
+
+TEST_CASE("text: typing shows the last lines — the first of them, for long text") {
+    CHECK(firstOfLastLines("a short comment", kSerif9, 1000, 2) == 0);
+    std::string longText;
+    for (int i = 0; i < 40; ++i) longText += "a comment that keeps going ";
+    const int lines = measureText(longText, kSerif9, 1000, 0).lines;
+    REQUIRE(lines > 2);
+    CHECK(firstOfLastLines(longText, kSerif9, 1000, 2) == lines - 2);
+    CHECK(firstOfLastLines("", kSerif9, 1000, 2) == 0);
+}

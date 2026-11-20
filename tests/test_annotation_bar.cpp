@@ -165,6 +165,30 @@ TEST_CASE("annotation bar: Note asks for a comment with the keyboard and saves a
     CHECK_FALSE(rig.reader->wantsKeyboard());
 }
 
+TEST_CASE("annotation bar: a tap outside a typed note saves its highlight; an empty one cancels") {
+    {
+        Rig rig;
+        rig.select({130, 210});
+        rig.tap(rig.reader->annotationBar()->buttonRect(2).center());  // Note
+        rig.reader->onKey(KeyEvent{KeyEvent::Code::Text, "keep this"}, rig.nav);
+        rig.tap({600, 100});
+        auto anns = rig.annotations();
+        REQUIRE(anns.size() == 1);
+        CHECK(anns[0].comment == "keep this");
+        CHECK_FALSE(rig.reader->noteOpen());
+        CHECK_FALSE(rig.nav.keyboardFake.shown);
+    }
+    {
+        Rig rig;
+        rig.select({130, 210});
+        rig.tap(rig.reader->annotationBar()->buttonRect(2).center());  // Note
+        rig.tap({600, 100});
+        CHECK(rig.annotations().empty());
+        CHECK_FALSE(rig.reader->noteOpen());
+        CHECK_FALSE(rig.nav.keyboardFake.shown);
+    }
+}
+
 TEST_CASE("annotation bar: a tap outside cancels without saving") {
     Rig rig;
     rig.select({130, 210});

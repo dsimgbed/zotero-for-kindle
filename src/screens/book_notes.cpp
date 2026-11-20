@@ -110,6 +110,7 @@ void BookNotesScreen::draw(Canvas& canvas) {
 
 void BookNotesScreen::onGesture(const Gesture& g, Nav& nav) {
     if (editor_) {
+        if (editor_->commenting() && g.type != GestureType::Tap) return;  // typing: only a tap ends it
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
             if (editor_->takeChanged()) {
                 reload(nav);

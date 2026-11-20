@@ -351,7 +351,9 @@ bool AnnotationEditor::takeChanged() {
 void AnnotationEditor::enter(State s, Nav& nav) {
     nav.damage(rect(), Waveform::Ui);
     if (s == State::Comment) {
-        comment_ = annotation_.comment;
+        // From the comment as it is now: a sync may have brought one written on the computer.
+        if (auto now = nav.library().annotation(annotation_.key); now && !now->deletedHere) annotation_ = *now;
+        comment_ = base_ = annotation_.comment;
         nav.keyboard().show();
         commentBox_ = commentRectAbove(nav.keyboard().bounds());
     } else if (state_ == State::Comment) {
@@ -378,8 +380,10 @@ void AnnotationEditor::draw(cairo_t* cr) const {
     }
     drawText(cr, annotation_.type == "note" ? "Note" : "Comment", {kSans, 8, 500}, {r.x + 30, r.y + 24, r.w - 60, 50}, 1);
     const bool empty = comment_.empty();
-    drawText(cr, empty ? "Type a comment…" : comment_, {kSerif, 9, 400, false, empty ? kTertiary : kInk},
-             {r.x + 30, r.y + 84, r.w - 60, 110}, 2);
+    const TextStyle style{kSerif, 9, 400, false, empty ? kTertiary : kInk};
+    const Rect text{r.x + 30, r.y + 84, r.w - 60, 110};
+    if (empty) drawText(cr, "Type a comment…", style, text, 2);
+    else drawTextLines(cr, comment_, style, text, firstOfLastLines(comment_, style, text.w, 2), 2);  // the end, where typing is
     drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {r.x + 30, r.y + r.h - 56, r.w - 60, 40}, 1, Align::Right);
 }
 
@@ -387,8 +391,7 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
     switch (state_) {
         case State::Comment:
             if (commentBox_.contains(p)) return Result::Open;
-            nav.keyboard().hide();
-            return Result::Closed;
+            return saveComment(nav);  // a tap elsewhere keeps what was typed
         case State::Confirm:
             if (confirmRect(0).contains(p)) {
                 const bool told = nav.plugins().listening();
@@ -469,19 +472,22 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
     field.setText(comment_);
     field.apply(k);
     comment_ = field.text();
-    if (field.submitted()) {
-        auto now = nav.library().annotation(annotation_.key);
-        nav.keyboard().hide();
-        if (!now || now->deletedHere) return Result::Closed;
-        annotation_ = *now;
-        annotation_.comment = comment_;
-        if (!nav.library().editAnnotation(annotation_)) return Result::Closed;  // not the user's to change
-        plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
-        changed_ = true;
-        return Result::Closed;
-    }
+    if (field.submitted()) return saveComment(nav);
     nav.damage(commentBox_, Waveform::Fast);
     return Result::Open;
+}
+
+AnnotationEditor::Result AnnotationEditor::saveComment(Nav& nav) {
+    nav.keyboard().hide();
+    if (comment_ == base_) return Result::Closed;  // nothing typed: nothing to send
+    auto now = nav.library().annotation(annotation_.key);
+    if (!now || now->deletedHere) return Result::Closed;
+    annotation_ = *now;
+    annotation_.comment = comment_;
+    if (!nav.library().editAnnotation(annotation_)) return Result::Closed;  // not the user's to change
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
+    changed_ = true;
+    return Result::Closed;
 }
 
 }  // namespace zk
