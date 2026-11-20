@@ -188,3 +188,25 @@ TEST_CASE("reader fix: back from a panel that changed nothing, the page isn't pa
     }
     for (const auto& d : rig.nav.damages) CHECK_FALSE(d.rect == ReaderScreen::pageArea());
 }
+
+TEST_CASE("reader fix: three quick turns move three pages") {
+    // Audit B fix round 1: a page already overtaken (the first turn's) ended the turn under way.
+    Rig rig;
+    rig.delayMs = 150;  // the next page's pre-render is still going when the second tap comes
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.tapRight(*r);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // page 1 is posted, not yet picked up
+    rig.tapRight(*r);  // on to page 2
+    r->onTick(rig.nav);  // page 1 arrives: overtaken
+    REQUIRE(r->page() == 1);
+    CHECK(r->turning());
+    rig.tapRight(*r);  // on to page 3
+    REQUIRE(rig.waitPage(*r, 3));
+    for (int i = 0; i < 40 && r->turning(); ++i) {
+        r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(r->page() == 3);
+}

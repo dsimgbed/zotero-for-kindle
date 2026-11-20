@@ -523,8 +523,10 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 progress_ = e.progress;
                 wordsLeft_ = e.wordsLeftInChapter;
                 position_ = e.position;
-                turning_ = false;
-                turnTarget_ = -1;
+                if (turnTarget_ < 0 || e.page == turnTarget_) {  // else posted before a later turn overtook it
+                    turning_ = false;
+                    turnTarget_ = -1;
+                }
                 layoutPending_ = false;
                 if (preview_) {
                     if (preview_->savePosition) preview_->savePosition(position_.value);
@@ -659,6 +661,7 @@ void ReaderScreen::onResize(Nav& nav) {
     if (!worker_) return;
     layoutPending_ = true;
     for (auto& b : back_) b.page = -1;  // turned: pages are counted again
+    turnTarget_ = -1;  // setLayout drops a turn on its way: the re-layout's page ends it
     placeRemoteAgain();
     worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
 }
@@ -695,6 +698,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
     layout_ = l;
+    turnTarget_ = -1;  // setLayout drops a turn on its way: the re-layout's page ends it
     for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
     placeRemoteAgain();
     if (!preview_) saveLayout(nav.library(), row_.key, l);  // a preview's lasts while it is open
