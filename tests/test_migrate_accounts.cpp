@@ -139,18 +139,31 @@ struct OldInstall {
         writeFile(p.droppedConfig, R"({"userId":999,"apiKey":"dropped"})");
     }
 
-    // Every file under the root by its relative path (the root left out of its text), but the
-    // account's database files: SQLite rewrites those whenever it opens them (the database is
+    // Every file under the root by its relative path (the root left out of its text), but
+    // .leftovers (see leftovers()) and the account's database files: SQLite rewrites those whenever it opens them (the database is
     // checked by its rows instead).
     std::map<std::string, std::string> snapshot() const {
         std::map<std::string, std::string> out;
         for (const auto& e : fs::recursive_directory_iterator(root)) {
             if (!e.is_regular_file()) continue;
             const std::string rel = fs::relative(e.path(), root).string();
-            if (rel.rfind("us/accounts/777/zotero.db", 0) == 0) continue;
+            if (rel.rfind("us/accounts/777/zotero.db", 0) == 0 || rel.rfind("us/accounts/.leftovers/", 0) == 0) continue;
             std::string text = readFile(e.path());  // full paths (the preview index) without the temp dir
             for (size_t at; (at = text.find(root.string())) != std::string::npos;) text.replace(at, root.string().size(), "<root>");
             out[rel] = text;
+        }
+        return out;
+    }
+
+    // What a migration put aside in accounts/.leftovers/<time>/, by its path under the time.
+    std::map<std::string, std::string> leftovers() const {
+        std::map<std::string, std::string> out;
+        const fs::path dir = fs::path(p.accountsRoot) / ".leftovers";
+        std::error_code ec;
+        for (const auto& e : fs::recursive_directory_iterator(dir, ec)) {
+            if (!e.is_regular_file()) continue;
+            const fs::path rel = fs::relative(e.path(), dir);
+            out[fs::relative(rel, *rel.begin()).string()] = readFile(e.path());
         }
         return out;
     }
@@ -265,7 +278,7 @@ TEST_CASE("migrate accounts: interrupted after any step, the next launch ends in
     }
 }
 
-TEST_CASE("migrate accounts: a folder cut short mid-move is finished entry by entry, no duplicates") {
+TEST_CASE("migrate accounts: a folder cut short mid-move is finished entry by entry; what is in both places is put aside, never deleted") {
     const auto reference = referenceState();
     OldInstall old("zk-migrate-half");
     old.build();
@@ -277,15 +290,19 @@ TEST_CASE("migrate accounts: a folder cut short mid-move is finished entry by en
     // A power cut while files/ and the full-text cache moved: some entries are there, some not.
     fs::create_directories(a.filesDir);
     fs::rename(fs::path(old.p.filesDir) / "EPUB0001", fs::path(a.filesDir) / "EPUB0001");
-    // On FAT a rename cut short can leave the entry in both places: the same bytes twice.
+    // On FAT a rename cut short can leave one file under two names (both naming the same clusters):
+    // deleting either would free the other's data.
     writeFile(fs::path(a.fullTextDir) / "EPUB0001-md5.txt", "full text");
     writeFile(fs::path(a.stateDir) / "home-tree.json", R"({"tree":1})");
     CHECK(migrateToAccounts(old.p, &why) == MigrateResult::Migrated);
     old.checkMigrated();
     CHECK(old.snapshot() == reference);
+    const std::map<std::string, std::string> aside{{"cache/fulltext/EPUB0001-md5.txt", "full text"},
+                                                   {"state/home-tree.json", R"({"tree":1})"}};
+    CHECK(old.leftovers() == aside);
 }
 
-TEST_CASE("migrate accounts: a file different in both places keeps both (the old one beside the new)") {
+TEST_CASE("migrate accounts: a file different in both places keeps the target; the old one goes to .leftovers") {
     OldInstall old("zk-migrate-differs");
     old.build();
     const AccountPaths a = old.account();
@@ -296,8 +313,53 @@ TEST_CASE("migrate accounts: a file different in both places keeps both (the old
     writeFile(fs::path(a.stateDir) / "home-tree.json", R"({"tree":2})");
     CHECK(migrateToAccounts(old.p, &why) == MigrateResult::Migrated);
     CHECK(readFile(fs::path(a.stateDir) / "home-tree.json") == R"({"tree":2})");
-    CHECK(readFile(fs::path(a.stateDir) / "home-tree.json.from-old-layout") == R"({"tree":1})");
+    CHECK(old.leftovers() == std::map<std::string, std::string>{{"state/home-tree.json", R"({"tree":1})"}});
     CHECK_FALSE(fs::exists(old.p.stateDir + "/home-tree.json"));
+}
+
+TEST_CASE("migrate accounts: a folder that is the target under a second name is put aside whole, not emptied") {
+    // Two names for one folder, as a FAT rename cut short leaves files/ (stood for by a link).
+    OldInstall old("zk-migrate-samedir");
+    old.build();
+    const AccountPaths a = old.account();
+    auto steps = migrationSteps(old.p, kUser);
+    std::string why;
+    REQUIRE(steps[0].run(&why));
+    fs::create_directories(fs::path(a.filesDir).parent_path());
+    fs::rename(old.p.filesDir, a.filesDir);
+    fs::create_directory_symlink(a.filesDir, old.p.filesDir);
+    CHECK(migrateToAccounts(old.p, &why) == MigrateResult::Migrated);
+    CHECK(readFile(fs::path(a.filesDir) / "EPUB0001" / "book.epub") == "epub bytes");
+    CHECK(readFile(fs::path(a.filesDir) / "PDF00001" / "paper.pdf") == "pdf bytes");
+    CHECK_FALSE(fs::exists(fs::symlink_status(old.p.filesDir)));
+    old.checkMigrated();
+}
+
+TEST_CASE("migrate accounts: the moves reach the disk before the credentials, accounts.json and the marker's removal") {
+    OldInstall old("zk-migrate-flush");
+    old.build();
+    struct Seen {
+        bool oldDb, credentials, accounts, marker;
+    };
+    std::vector<Seen> flushes;
+    auto steps = migrationSteps(old.p, kUser, [&] {
+        flushes.push_back({fs::exists(old.p.dbPath), fs::exists(old.p.credentialsFile(kUser)),
+                           fs::exists(old.p.accountsFile()), fs::exists(old.p.accountsRoot + "/.migrating-777")});
+    });
+    std::string why;
+    for (auto& step : steps) REQUIRE_MESSAGE(step.run(&why), step.name, ": ", why);
+    REQUIRE(flushes.size() == 2);
+    // First: every move done, nothing committed yet.
+    CHECK_FALSE(flushes[0].oldDb);
+    CHECK_FALSE(flushes[0].credentials);
+    CHECK_FALSE(flushes[0].accounts);
+    CHECK(flushes[0].marker);
+    // Then: committed, the marker still there until both are on disk.
+    CHECK(flushes[1].credentials);
+    CHECK(flushes[1].accounts);
+    CHECK(flushes[1].marker);
+    CHECK_FALSE(fs::exists(old.p.accountsRoot + "/.migrating-777"));
+    old.checkMigrated();
 }
 
 TEST_CASE("migrate accounts: the userID comes from the database when there is no config") {
@@ -311,6 +373,11 @@ TEST_CASE("migrate accounts: the userID comes from the database when there is no
     CHECK_FALSE(loadCredentials(old.p, kUser));  // nothing to move: Setup asks for the key
     auto accounts = readAccounts(old.p.accountsFile());
     REQUIRE(accounts);
+    CHECK(accounts->active == kUser);
+    // Its key is asked for later (Update key); the start's repair keeps the library listed meanwhile.
+    repairAccounts(old.p, *accounts);
+    REQUIRE(accounts->accounts.size() == 1);
+    CHECK(accounts->accounts[0].userId == kUser);
     CHECK(accounts->active == kUser);
     Db db = Db::open(a.dbPath);
     Library lib(db);

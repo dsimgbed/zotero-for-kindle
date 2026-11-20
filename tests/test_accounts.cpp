@@ -160,6 +160,16 @@ TEST_CASE("accounts: repair drops an entry without its dir and keeps an orphan d
     repairAccounts(p, t);
     CHECK(t.accounts.empty());
     CHECK(t.active == 0);
+
+    // A library without its key (migrated from an install with no config.json) stays listed: the
+    // app asks for the key (Update key) instead of hiding the library.
+    fs::create_directories(accountPaths(p, 7).root);
+    AccountsState u;
+    u.active = 7;
+    u.accounts = {entry(7, 0, false)};
+    repairAccounts(p, u);
+    REQUIRE(u.accounts.size() == 1);
+    CHECK(u.active == 7);
 }
 
 TEST_CASE("accounts: wrong-typed or malformed files read as nothing and never throw") {

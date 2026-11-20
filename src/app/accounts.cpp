@@ -130,14 +130,13 @@ std::vector<std::string> repairAccounts(const Paths& paths, AccountsState& s) {
     };
     std::vector<AccountEntry> kept;
     for (AccountEntry& e : s.accounts) {
-        const bool creds = loadCredentials(paths, e.userId).has_value();
-        const bool dir = fs::is_directory(accountPaths(paths, e.userId).root);
-        if (creds && dir) {
+        if (fs::is_directory(accountPaths(paths, e.userId).root)) {
+            // Without credentials it stays: its library is there, the app asks for the key (Update key).
+            if (!loadCredentials(paths, e.userId)) note("account " + std::to_string(e.userId) + " has no credentials; kept");
             kept.push_back(std::move(e));
             continue;
         }
-        note("account " + std::to_string(e.userId) + " dropped from the list: missing " +
-             (!creds && !dir ? "credentials and data dir" : !creds ? "credentials" : "data dir"));
+        note("account " + std::to_string(e.userId) + " dropped from the list: missing data dir");
     }
     s.accounts = std::move(kept);
     if (std::none_of(s.accounts.begin(), s.accounts.end(), [&](const AccountEntry& e) { return e.userId == s.active; }))
@@ -148,7 +147,7 @@ std::vector<std::string> repairAccounts(const Paths& paths, AccountsState& s) {
     };
     std::error_code ec;
     for (const auto& d : fs::directory_iterator(paths.accountsRoot, ec))
-        if (d.is_directory() && !listed(d.path().filename().string()))
+        if (d.is_directory() && d.path().filename().string()[0] != '.' && !listed(d.path().filename().string()))
             note("orphan account dir left in place: " + d.path().filename().string());
     for (const auto& f : fs::directory_iterator(paths.configDir + "/accounts", ec))
         if (f.path().extension() == ".json" && !listed(f.path().stem().string()))

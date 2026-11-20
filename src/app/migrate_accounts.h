@@ -26,11 +26,13 @@ enum class MigrateResult {
 MigrateResult migrateToAccounts(const Paths&, std::string* why);
 
 // The steps migrateToAccounts runs for `userId`, in order (the first writes the marker, the last
-// removes it). Tests run a prefix to stand for an interruption.
+// removes it). Tests run a prefix to stand for an interruption. `flush` puts what was written on
+// the disk (default ::sync()): after the moves, before anything says they are done, and again
+// before the marker goes.
 struct MigrationStep {
     std::string name;
     std::function<bool(std::string* why)> run;
 };
-std::vector<MigrationStep> migrationSteps(const Paths&, int64_t userId);
+std::vector<MigrationStep> migrationSteps(const Paths&, int64_t userId, std::function<void()> flush = {});
 
 }  // namespace zk

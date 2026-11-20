@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -39,25 +40,47 @@ bool fail(std::string* why, const std::string& text) {
     return false;
 }
 
-bool sameBytes(const fs::path& a, const fs::path& b) {
-    std::error_code ea, eb;
-    if (fs::file_size(a, ea) != fs::file_size(b, eb) || ea || eb) return false;
-    std::ifstream fa(a, std::ios::binary), fb(b, std::ios::binary);
-    char ba[1 << 16], bb[1 << 16];
-    while (fa && fb) {
-        fa.read(ba, sizeof ba);
-        fb.read(bb, sizeof bb);
-        if (fa.gcount() != fb.gcount() || std::memcmp(ba, bb, static_cast<size_t>(fa.gcount())) != 0) return false;
+bool isDir(const fs::path& p) {
+    std::error_code ec;
+    return fs::is_directory(fs::status(p, ec));
+}
+
+// Puts `src` at `aside` (made unique), in .leftovers: what a cut-short move left in both places.
+// Renamed, never deleted: on FAT a rename cut short leaves two entries naming the same clusters,
+// and deleting either frees the other's data.
+bool putAside(const fs::path& src, const fs::path& dst, fs::path aside, std::string* why) {
+    std::error_code ec;
+    const fs::path base = aside;
+    for (int n = 2; present(aside); ++n) {
+        aside = base;
+        aside += "-" + std::to_string(n);
     }
-    return fa.eof() && fb.eof();
+    fs::create_directories(aside.parent_path(), ec);
+    log(LogLevel::Warn, "migration: %s is also at %s; the old one put aside as %s", src.c_str(), dst.c_str(), aside.c_str());
+    fs::rename(src, aside, ec);
+    return !ec || fail(why, "can't put " + src.string() + " aside as " + aside.string() + ": " + ec.message());
+}
+
+// Whether two folder names are one folder (a FAT rename cut short): a probe made in one shows in
+// the other. Not knowing counts as the same (the folder is then put aside whole, nothing emptied).
+bool sameFolder(const fs::path& a, const fs::path& b) {
+    const fs::path probe = a / ".zk-migration-probe";
+    std::error_code ec;
+    {
+        std::ofstream out(probe);
+        if (!out) return true;
+    }
+    const bool same = present(b / ".zk-migration-probe");
+    fs::remove(probe, ec);  // our own empty file
+    return same;
 }
 
 // Moves `src` to `dst` so that running it again, after an interruption anywhere, ends the same:
 // only the source: renamed; only the target: done; neither: nothing to do. Both: two folders are
-// merged entry by entry (the source folder goes once empty); the same bytes twice (a FAT rename cut
-// short) drop the source; two different files keep both, the old one beside the new as
-// "<name>.from-old-layout" — nothing is deleted that isn't also in the target.
-bool moveEntry(const fs::path& src, const fs::path& dst, std::string* why) {
+// merged entry by entry (the emptied source folder goes); anything else in both places — and a
+// folder that is the target under a second name — keeps the target and puts the source aside at
+// `aside`. Nothing is ever deleted.
+bool moveEntry(const fs::path& src, const fs::path& dst, const fs::path& aside, std::string* why) {
     std::error_code ec;
     if (!present(src)) return true;
     if (!present(dst)) {
@@ -65,29 +88,14 @@ bool moveEntry(const fs::path& src, const fs::path& dst, std::string* why) {
         fs::rename(src, dst, ec);
         return !ec || fail(why, "can't move " + src.string() + " to " + dst.string() + ": " + ec.message());
     }
-    if (fs::is_directory(fs::symlink_status(src, ec)) && fs::is_directory(fs::symlink_status(dst, ec))) {
-        std::vector<fs::path> children;
-        for (const auto& e : fs::directory_iterator(src, ec)) children.push_back(e.path());
-        if (ec) return fail(why, "can't list " + src.string() + ": " + ec.message());
-        for (const auto& child : children)
-            if (!moveEntry(child, dst / child.filename(), why)) return false;
-        fs::remove(src, ec);
-        return !ec || fail(why, "can't remove the emptied " + src.string() + ": " + ec.message());
-    }
-    if (fs::is_regular_file(fs::symlink_status(src, ec)) && fs::is_regular_file(fs::symlink_status(dst, ec)) &&
-        sameBytes(src, dst)) {
-        fs::remove(src, ec);
-        return !ec || fail(why, "can't remove " + src.string() + " (also at " + dst.string() + "): " + ec.message());
-    }
-    fs::path aside = dst;
-    aside += ".from-old-layout";
-    for (int n = 2; present(aside); ++n) {
-        aside = dst;
-        aside += ".from-old-layout-" + std::to_string(n);
-    }
-    log(LogLevel::Warn, "migration: %s differs from %s; kept as %s", src.c_str(), dst.c_str(), aside.c_str());
-    fs::rename(src, aside, ec);
-    return !ec || fail(why, "can't move " + src.string() + " to " + aside.string() + ": " + ec.message());
+    if (!isDir(src) || !isDir(dst) || sameFolder(src, dst)) return putAside(src, dst, aside, why);
+    std::vector<fs::path> children;
+    for (const auto& e : fs::directory_iterator(src, ec)) children.push_back(e.path());
+    if (ec) return fail(why, "can't list " + src.string() + ": " + ec.message());
+    for (const auto& child : children)
+        if (!moveEntry(child, dst / child.filename(), aside / child.filename(), why)) return false;
+    fs::remove(src, ec);  // empty now, and not the target (sameFolder)
+    return !ec || fail(why, "can't remove the emptied " + src.string() + ": " + ec.message());
 }
 
 // A meta value of an existing database, read without changing it (no create, no checkpoint).
@@ -250,11 +258,26 @@ bool listAccount(const Paths& p, int64_t userId, const std::string& dbPath, std:
 
 }  // namespace
 
-std::vector<MigrationStep> migrationSteps(const Paths& p, int64_t userId) {
+std::vector<MigrationStep> migrationSteps(const Paths& p, int64_t userId, std::function<void()> flush) {
     const AccountPaths a = accountPaths(p, userId);
+    if (!flush) flush = [] { ::sync(); };
+    // What a cut-short move left in both places: <accountsRoot>/.leftovers/<time>/<path in the account>.
+    char stamp[32];
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    ::localtime_r(&now, &tm);
+    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+    const fs::path leftovers = fs::path(p.accountsRoot) / ".leftovers" / stamp;
     std::vector<MigrationStep> steps;
     auto move = [&](std::string name, fs::path src, fs::path dst) {
-        steps.push_back({"move " + name, [src, dst](std::string* why) { return moveEntry(src, dst, why); }});
+        const fs::path aside = leftovers / fs::path(dst).lexically_relative(a.root);
+        steps.push_back({"move " + name, [src, dst, aside](std::string* why) { return moveEntry(src, dst, aside, why); }});
+    };
+    auto flushStep = [&](std::string name) {
+        steps.push_back({std::move(name), [flush](std::string*) {
+                             flush();
+                             return true;
+                         }});
     };
     steps.push_back({"write the marker", [p, userId](std::string* why) { return writeMarker(p, userId, why); }});
     for (const char* s : kDbSidecars) move(std::string("zotero.db") + s, p.dbPath + s, a.dbPath + s);
@@ -286,8 +309,12 @@ std::vector<MigrationStep> migrationSteps(const Paths& p, int64_t userId) {
         move(id + "/.cache/fulltext", dir / ".cache" / "fulltext", a.fullTextDir);
     }
     steps.push_back({"move the device settings", [p, a](std::string* why) { return moveDeviceKeysOf(p, a.dbPath, why); }});
+    // /mnt/us is FAT: its renames reach the disk in no set order. Nothing may say "done" (config.json
+    // gone, accounts.json written, the marker removed) before they are there.
+    flushStep("flush the moves");
     steps.push_back({"move the credentials", [p, userId](std::string* why) { return moveCredentials(p, userId, why); }});
     steps.push_back({"write accounts.json", [p, userId, a](std::string* why) { return listAccount(p, userId, a.dbPath, why); }});
+    flushStep("flush before the marker goes");
     steps.push_back({"remove the marker", [p, userId](std::string* why) {
                          std::error_code ec;
                          fs::remove(p.accountsRoot + "/" + kMarkerPrefix + std::to_string(userId), ec);

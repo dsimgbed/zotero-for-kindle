@@ -60,8 +60,10 @@ std::optional<AccountsState> readAccounts(const std::string& file);
 // temp + fsync + rename, mode 0600. Refuses more than kMaxAccounts.
 bool writeAccounts(const std::string& file, const AccountsState&);
 
-// Drops entries lacking credentials or their data dir (the active id moves to the first left, or 0);
-// orphan dirs and credential files are left and logged. Returns the log lines.
+// Drops entries lacking their data dir (the active id moves to the first left, or 0); an entry
+// without credentials stays (its library is there; the app asks for the key). Orphan dirs and
+// credential files are left and logged (.leftovers and other dot-dirs aren't accounts). Returns the
+// log lines.
 std::vector<std::string> repairAccounts(const Paths&, AccountsState&);
 
 }  // namespace zk
