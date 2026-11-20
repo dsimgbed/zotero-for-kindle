@@ -6,7 +6,7 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
-## 0.11.0 (unreleased): a shelf, quotes, and opening at an annotation
+## 0.11.0 (unreleased): a shelf, quotes, opening at an annotation, and the window's size
 
 - `zk.ui.items({ style: "shelf" })` — the items as cover tiles in rows (4 on a Paperwhite or a
   Kindle, 6 on a Scribe): the app's cover, a progress bar once opened, and "13%", "New", "Read" or
@@ -19,6 +19,10 @@ first, with what to do about it.
   to it. An annotation that is unknown, deleted, another item's or not in the `attachment` given
   rejects with *Annotation not found*. Older apps ignore the option and open the item where it was
   left.
+- `zk.display` — the app's window, read-only: `{ width, height, model, landscape }`, in layout pixels
+  at 300 ppi (a Paperwhite 5 is 1236 × 1547, a basic Kindle 1078 × 1337), `model` `"pw5"`, `"kt4"`,
+  `"scribe"` or the device's name. For a screen that adapts to a short screen. On older apps it is
+  `undefined`: check `zk.display?.height`.
 
 ## 0.10.2 (unreleased): fixes
 

@@ -11,6 +11,7 @@
 #include "plugins/manifest.h"
 #include "plugins/plugin_ctx.h"
 #include "plugins/state.h"
+#include "ui/metrics.h"
 
 namespace zk::plugins {
 
@@ -959,6 +960,11 @@ const freeze = (o) => {
   return o;
 };
 zk.plugin = Object.freeze({ id: info.id, version: info.version, dataDir: info.dataDir });
+// The app's window, read when asked (it turns with the device).
+const display = {};
+for (const k of ["width", "height", "model", "landscape"])
+  Object.defineProperty(display, k, { get: () => native.display()[k], enumerable: true });
+zk.display = Object.freeze(display);
 zk.settings = freeze(JSON.parse(info.settings));
 zk.PermissionError = PermissionError;
 zk.LimitError = LimitError;
@@ -1000,6 +1006,15 @@ JSValue jsLog(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     log(ctxOf(c), level == 2 ? LogLevel::Error : level == 1 ? LogLevel::Warn : LogLevel::Info,
         argc > 1 ? str(c, argv[1]) : std::string());
     return JS_UNDEFINED;
+}
+
+// zk.display: the window in layout pixels (300 ppi), and the device.
+JSValue jsDisplay(JSContext* c, JSValueConst, int, JSValueConst*) {
+    const Metrics m = metricsSnapshot();
+    nlohmann::json d = {{"width", m.width}, {"height", m.height}, {"model", deviceModel(m.device)},
+                        {"landscape", m.width > m.height}};
+    js::Value v = js::Value::fromJson(ctxOf(c).cx, d);
+    return JS_DupValue(c, v.raw());
 }
 
 JSValue jsSetTimeout(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
@@ -1187,6 +1202,7 @@ void installCore(PluginCtx& p) {
 
     js::Value natives(c, JS_NewObject(c));
     defineFunction<jsLog>(c, natives.raw(), "log", 2);
+    defineFunction<jsDisplay>(c, natives.raw(), "display", 0);
     nlohmann::json info = {{"id", p.manifest.id}, {"version", p.manifest.version}, {"dataDir", p.dataDir},
                            {"settings", p.settings.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)}};
     js::Value made = runPrelude(p.cx, kCore, sizeof kCore - 1, "<zk core>", {natives, p.zk, js::Value::fromJson(p.cx, info)});

@@ -55,6 +55,7 @@
 
 ## Variables
 
+- [display](zk/display.md)
 - [plugin](zk/plugin.md)
 - [settings](zk/settings-1.md)
 - [storage](zk/storage-1.md)
