@@ -39,6 +39,11 @@ struct SyncDeps {
     // Free bytes where the files go (kept collections pause under kKeptMinFree). Default: statvfs.
     std::function<uint64_t()> freeBytes;
     std::function<int64_t()> wallMs;  // ms since the epoch (a failed kept file's retry); default: the clock
+    // A book being opened has max(this, its size / openCapBytesPerS) to arrive, on top of the
+    // stall limit: a line that trickles just above it would otherwise hold the Kindle awake, and
+    // every sync and open behind it, for hours.
+    int openCapFloorMs = 600'000;
+    int64_t openCapBytesPerS = 20 * 1024;
 };
 
 // Kept collections stop downloading below this much free space (spec B).
@@ -89,9 +94,11 @@ private:
     // `passed` gains the groups pushed to.
     SyncReport pushChanges(Worker&, std::vector<int64_t>* passed = nullptr);
     // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
-    // onTotal: once, when the size is known. *started: whether any of the file arrived.
+    // onTotal: once, when the size is known. *started: whether any of the file arrived. capped: a
+    // book being opened, which has its time (SyncDeps::openCapFloorMs) to arrive.
     bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err,
-                  const std::function<void(int64_t total)>& onTotal = nullptr, bool* started = nullptr);
+                  const std::function<void(int64_t total)>& onTotal = nullptr, bool* started = nullptr,
+                  bool capped = false);
     bool keepStep(Worker&, bool fresh);  // true: more to download
     // Zotero asked (a 429 with a long Retry-After or Backoff) not to be asked before this wall time
     // (ms; kept in the library, so a restart honours it): set while it lasts.

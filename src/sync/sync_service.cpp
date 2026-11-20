@@ -419,7 +419,7 @@ void SyncService::run() {
                                                "no attachment " + cmd.attachmentKey};
                     } else if (!local) {
                         UserError err;
-                        if (!download(w, cmd.itemKey, *att, &err)) done.error = err;
+                        if (!download(w, cmd.itemKey, *att, &err, nullptr, nullptr, true)) done.error = err;
                     }
                     const bool ok = !done.error;
                     if (!stopping_) emit(done);
@@ -481,7 +481,7 @@ void SyncService::run() {
 }
 
 bool SyncService::download(Worker& w, const std::string& itemKey, const AttachmentRecord& att, UserError* err,
-                           const std::function<void(int64_t)>& onTotal, bool* started) {
+                           const std::function<void(int64_t)>& onTotal, bool* started, bool capped) {
     SyncEvent p0;
     p0.kind = SyncEvent::Kind::DownloadProgress;
     p0.itemKey = itemKey;
@@ -491,6 +491,8 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
     int lastPct = 0;
     bool totalSeen = false;
     if (started) *started = false;
+    const auto t0 = Clock::now();
+    bool overTime = false;
     w.files->setOnRateWait([&](const UserError& why) {  // the row says why it waits
         SyncEvent e = p0;
         e.error = why;
@@ -498,6 +500,14 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
     });
     w.files->setProgress([&](int64_t d, int64_t t) {
         if (started && d > 0) *started = true;
+        if (capped && !overTime) {
+            const int64_t capMs = std::max<int64_t>(deps_.openCapFloorMs, t > 0 ? t * 1000 / deps_.openCapBytesPerS : 0);
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count() > capMs) {
+                overTime = true;
+                std::lock_guard<std::mutex> lock(mutex_);
+                *cancel_ = true;  // ends the transfer; reset below
+            }
+        }
         if (onTotal && !totalSeen && t > 0) {
             totalSeen = true;
             onTotal(t);
@@ -511,9 +521,20 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
         e.total = t;
         emit(std::move(e));
     });
-    const bool ok = w.files->download(att, deps_.filesDir, err);
+    bool ok = w.files->download(att, deps_.filesDir, err);
     w.files->setProgress(nullptr);
     w.files->setOnRateWait(nullptr);
+    if (overTime) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!stopping_) *cancel_ = false;  // the cancel was for this file only
+        }
+        ok = false;
+        if (err)
+            *err = UserError{ErrorKind::HostNotAnswering,
+                             localFileName(att) + " is coming in too slowly. Try again on a faster connection.",
+                             "over its time (" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - t0).count()) + " s)"};
+    }
     if (ok) w.lib->setFileState(att.key, AttachmentRecord::State::Local, (fs::path(deps_.filesDir) / att.key / localFileName(att)).string());
     return ok;
 }

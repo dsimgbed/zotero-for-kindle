@@ -51,6 +51,7 @@ struct Rig {
     std::atomic<uint64_t> freeBytes{uint64_t{1} << 40};
     std::atomic<int64_t> wallMs{1'762'000'000'000};
     int onlineGiveUpMs = 120'000;
+    int openCapFloorMs = 600'000;
 
     Rig() {
         char tmpl[] = "/tmp/zk-svc-XXXXXX";
@@ -87,6 +88,7 @@ struct Rig {
         deps.wallMs = [this] { return wallMs.load(); };
         deps.onlinePollMs = 20;
         deps.onlineGiveUpMs = onlineGiveUpMs;
+        deps.openCapFloorMs = openCapFloorMs;
         service = std::make_unique<SyncService>(std::move(deps));
         service->start();
     }
@@ -287,6 +289,44 @@ TEST_CASE("sync service: when Zotero asks for a long wait, no sync asks it again
     auto later = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
     CHECK_FALSE(later.back().error);
     CHECK(asked > before);
+}
+
+TEST_CASE("sync service: a book that keeps dripping in past its time ends with an error; the next open works") {
+    Rig rig;
+    rig.openCapFloorMs = 150;  // the cap: max(this, size / 20 KB/s) = 200 ms for these 4 KB
+    std::atomic<bool> drip{true};
+    rig.route = [&, base = rig.route](const HttpRequest& r) {
+        if (drip && r.url.size() > 4 && r.url.compare(r.url.size() - 4, 4, ".zip") == 0) {
+            const auto t0 = Clock::now();
+            for (int64_t done = 1; msSince(t0) < 5000; ++done) {  // a byte at a time, never stalling
+                if (r.onProgress) r.onProgress(done, 4096);
+                if (r.cancel && *r.cancel) {
+                    HttpResponse aborted;
+                    aborted.curlCode = 42;
+                    aborted.curlError = "Callback aborted";
+                    return aborted;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return FakeHttp::status(500);
+        }
+        return base(r);
+    };
+    rig.serveFile();
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    const auto t0 = Clock::now();
+    rig.service->openBook("BOOK0001", "ABCD1234");
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished));
+    CHECK(msSince(t0) < 3000);
+    REQUIRE(events.back().error);
+    CHECK(events.back().error->message.find("too slowly") != std::string::npos);
+    drip = false;  // a good line again: the same book opens
+    rig.serveFile();
+    rig.service->openBook("BOOK0001", "ABCD1234");
+    auto again = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished));
+    CHECK_FALSE(again.back().error);
 }
 
 TEST_CASE("sync service: poll never waits for the worker") {
