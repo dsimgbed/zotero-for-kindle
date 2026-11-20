@@ -374,7 +374,7 @@ TEST_CASE("catalog install: its storage, log and settings stay with it across up
     CHECK(readFile(t.path / "feed-riffle/plugin.log") == "log");
     CHECK(readFile(t.path / "feed-riffle/settings.json") == "{\"feeds\":[\"mine\"]}");
     CHECK_FALSE(fs::exists(t.path / ".previous/feed-riffle/storage.db"));
-    REQUIRE(rollBack(t.str(), "feed-riffle", &err));
+    REQUIRE(rollBack(t.str(), "feed-riffle", kApp, &err));
     CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.0.0");
     CHECK(readFile(t.path / "feed-riffle/storage.db") == "kv");
     CHECK(readFile(t.path / "feed-riffle/settings.json") == "{\"feeds\":[\"mine\"]}");
@@ -393,22 +393,44 @@ TEST_CASE("catalog install: one previous version is kept, and rollBack swaps bot
     CHECK(previousVersion(t.str(), "feed-riffle") == "1.1.0");
     CHECK(std::distance(fs::directory_iterator(t.path / ".previous"), fs::directory_iterator{}) == 1);
 
-    REQUIRE(rollBack(t.str(), "feed-riffle", &err));
+    REQUIRE(rollBack(t.str(), "feed-riffle", kApp, &err));
     CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.1.0");
     CHECK(readFile(t.path / "feed-riffle/data/notes.txt") == "mine");
     CHECK(previousVersion(t.str(), "feed-riffle") == "1.2.0");
     CHECK_FALSE(fs::exists(t.path / ".previous/feed-riffle/data"));
     CHECK(incomingEmpty(t));
 
-    REQUIRE(rollBack(t.str(), "feed-riffle", &err));
+    REQUIRE(rollBack(t.str(), "feed-riffle", kApp, &err));
     CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.2.0");
     CHECK(readFile(t.path / "feed-riffle/data/notes.txt") == "mine");
     CHECK(previousVersion(t.str(), "feed-riffle") == "1.1.0");
 
     TempDir none;
     installOld(none);
-    CHECK_FALSE(rollBack(none.str(), "feed-riffle", &err));  // nothing kept
+    CHECK_FALSE(rollBack(none.str(), "feed-riffle", kApp, &err));  // nothing kept
     CHECK(readFile(none.path / "feed-riffle/main.js") == "// v1.0.0");
+}
+
+TEST_CASE("catalog install: rollBack refuses a kept version this app can't run, as install does") {
+    TempDir t;
+    installOld(t);
+    UserError err;
+    REQUIRE(stageZip(t, goodZip("1.2.0"), &err));
+    REQUIRE(commit(t.str(), "feed-riffle", &err));
+    SUBCASE("it needs a newer app") {
+        writeFile(t.path / ".previous/feed-riffle/plugin.json", manifest("1.0.0", json::array({"library:read"}), "feed-riffle", "2.0.0"));
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
+        CHECK(err.message == "It needs app 2.0.0.");
+    }
+    SUBCASE("another plugin API") {
+        json m = json::parse(manifest("1.0.0"));
+        m["api"] = 1;
+        writeFile(t.path / ".previous/feed-riffle/plugin.json", m.dump());
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
+        CHECK(err.message == "Written for plugin API 1; this app runs API 0.");
+    }
+    CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.2.0");  // nothing swapped
+    CHECK(fs::exists(t.path / ".previous/feed-riffle/plugin.json"));
 }
 
 TEST_CASE("catalog install: [Review Focus] repairInterrupted after a kill mid-swap leaves one working plugin") {
@@ -541,7 +563,7 @@ TEST_CASE("catalog install: [Review Focus] a data/ stranded in .previous is move
     SUBCASE("with a data/ in <id> too, commit and rollBack refuse and change nothing") {
         writeFile(cur / "data/fresh.txt", "new");
         CHECK_FALSE(commit(t.str(), "feed-riffle", &err));
-        CHECK_FALSE(rollBack(t.str(), "feed-riffle", &err));
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", kApp, &err));
         CHECK(readFile(prev / "data/notes.txt") == "mine");
         CHECK(readFile(cur / "data/fresh.txt") == "new");
         CHECK(readFile(cur / "main.js") == "// v1.1.0");

@@ -315,7 +315,7 @@ void CatalogService::startRollBack(const std::string& id) {
             if (host) host->setEnabled(id, false);
             else PluginState(config_.pluginsDir + "/.state.json").setEnabled(id, false);
         };
-        if (!swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, e); }, error, turnOff))
+        if (!swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, config_.app, e); }, error, turnOff))
             return false;
         if (!adds.empty()) set([](State& s) { s.notice = "It is off: this version can do more. Turn it on to allow it."; });
         return true;
