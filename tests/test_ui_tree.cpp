@@ -245,3 +245,29 @@ TEST_CASE("ui tree: Home's body refuses a search and a field, other blocks pass"
     CHECK(why == "column[0].row[0]: field can't be on Home");
     CHECK(parseTree(json{{"kind", "column"}, {"children", json::array({search})}}, &why));  // fine on a screen
 }
+
+TEST_CASE("ui tree: a quote takes text, an optional source and id; it counts one block and may be on Home") {
+    const Block t = ok(json::parse(R"({"kind":"column","children":[
+      {"kind":"quote","text":"It is a truth\nuniversally acknowledged","source":"Pride and Prejudice · p. 1","id":"passage"},
+      {"kind":"quote","text":"  Alone  "}]})"));
+    REQUIRE(t.children.size() == 2);
+    const Block& q = t.children[0];
+    CHECK(q.kind == K::Quote);
+    CHECK(q.text == "It is a truth\nuniversally acknowledged");  // its line breaks kept, as a text block's
+    CHECK(q.meta == "Pride and Prejudice · p. 1");
+    CHECK(q.id == "passage");
+    CHECK(t.children[1].text == "Alone");
+    CHECK(t.children[1].meta.empty());
+    CHECK(t.children[1].id.empty());
+    CHECK(blockCount(t) == 3);
+    std::string why;
+    CHECK(parseTree(json::parse(R"({"kind":"quote","text":"x"})"), &why, TreeUse::HomeBody));
+}
+
+TEST_CASE("ui tree: a quote without text, with an unknown field or a duplicate id is refused, naming where") {
+    CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"quote","source":"s"}]})")) == "column[0].quote: \"text\" is missing");
+    CHECK(whyNot(json::parse(R"({"kind":"quote","text":"t","author":"a"})")) == "quote: unknown field \"author\"");
+    CHECK(whyNot(json::parse(R"({"kind":"quote","text":7})")) == "quote: \"text\" must be a string");
+    CHECK(whyNot(json::parse(R"({"kind":"column","children":[{"kind":"button","id":"q","title":"B"},{"kind":"quote","id":"q","text":"t"}]})")) ==
+          "column[1].quote: another block already has the id \"q\"");
+}

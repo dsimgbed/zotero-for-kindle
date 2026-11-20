@@ -29,7 +29,8 @@ Waveform waveFor(const Laid* a, const Laid* b, bool pageTurned) {
         case K::Card: return Waveform::Quality;
         case K::Items: return a->block->itemStyle == Block::ItemStyle::Card ? Waveform::Quality : Waveform::Ui;
         case K::Text:
-        case K::Notice: return a->rect == b->rect ? Waveform::Fast : Waveform::Ui;
+        case K::Notice:
+        case K::Quote: return a->rect == b->rect ? Waveform::Fast : Waveform::Ui;
         default: return Waveform::Ui;
     }
 }

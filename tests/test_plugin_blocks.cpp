@@ -587,3 +587,72 @@ TEST_CASE("plugin items fix: a card shows its download's status, as a row does")
     const bool same = shot() == plain;
     CHECK_FALSE(same);
 }
+
+// ---- quote (0.11) ----------------------------------------------------------------------------------
+
+namespace {
+
+const char* kPride =
+    "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife. "
+    "However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so "
+    "well fixed in the minds of the surrounding families, that he is considered as the rightful property of some one or other "
+    "of their daughters. “My dear Mr. Bennet,” said his lady to him one day, “have you heard that Netherfield Park is let at last?”";
+
+json quoteScreen() {
+    json j = json::parse(R"({"kind":"column","gap":"medium","children":[
+      {"kind":"text","text":"A passage","style":"label"},
+      {"kind":"quote","id":"passage","text":"It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.","source":"Pride and Prejudice · p. 1"},
+      {"kind":"quote","text":"Call me Ishmael."},
+      {"kind":"quote","id":"long","text":"","source":"Pride and Prejudice · Austen · p. 1"},
+      {"kind":"button","id":"more","title":"Another"}]})");
+    j["children"][3]["text"] = kPride;
+    return j;
+}
+
+}  // namespace
+
+TEST_CASE("plugin blocks: golden on PW5 — quotes with and without a source, a long one ellipsized at 5 lines") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    Canvas c(kPw5.width, kPw5.height);
+    fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
+    drawHeader(c.cr(), "Reading Desk", true);
+    const Block t = tree(quoteScreen());
+    drawTree(c.cr(), layoutTree(t, blocksArea(), 0), {});
+    checkGolden(c, "tests/golden/plugin-blocks-quote.png");
+}
+
+TEST_CASE("plugin blocks: a quote is at most 5 lines and its source tall; a short one only as tall as its text") {
+    if (!fonts()) return;
+    for (const Metrics* dev : {&kPw5, &kKt4, &kScribe}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        const Block t = tree(quoteScreen());
+        const Laid l = layoutTree(t, blocksArea(), 0);
+        REQUIRE(l.pages == 1);
+        REQUIRE(l.children.size() == 5);
+        const int shortH = l.children[2].rect.h, longH = l.children[3].rect.h;
+        CHECK(shortH > 0);
+        CHECK(longH > shortH);
+        // the long one's text alone would be far more than 5 lines: the block stops at 5 and its source
+        json more = quoteScreen();
+        more["children"][3]["text"] = std::string(kPride) + " " + kPride + " " + kPride;
+        const Block t2 = tree(more);
+        CHECK(layoutTree(t2, blocksArea(), 0).children[3].rect.h == longH);
+        checkFits(t);
+        checkFits(t2);
+    }
+}
+
+TEST_CASE("plugin blocks: a quote with an id is tapped as itself; one without is not") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const Block t = tree(quoteScreen());
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    const auto hit = hitTest(l, l.children[1].rect.center());
+    REQUIRE(hit);
+    CHECK(hit->id == "passage");
+    CHECK(hit->kind == K::Quote);
+    CHECK(hit->rect == l.children[1].rect);
+    CHECK_FALSE(hitTest(l, l.children[2].rect.center()));
+}

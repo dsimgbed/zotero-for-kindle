@@ -203,3 +203,25 @@ TEST_CASE("plugin diff: an items block nested in a column is diffed on its rows 
     REQUIRE(d2.size() == 1);
     CHECK(d2[0].rect == le.children[0].rect);
 }
+
+TEST_CASE("plugin diff: a quote's new text redraws it with Fast in place, Ui when its size changed") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    const char* kQuote = R"({"kind":"column","children":[
+      {"kind":"text","text":"Desk","style":"title"},
+      {"kind":"quote","id":"passage","text":"It is a truth universally acknowledged.","source":"Austen · p. 1"},
+      {"kind":"button","id":"more","title":"More"}]})";
+    const Block a = tree(kQuote), same = tree(kQuote), b = tree(with(kQuote, "It is a truth", "It is a fact"));
+    const Laid la = layoutTree(a, blocksArea(), 0), lb = layoutTree(b, blocksArea(), 0);
+    CHECK(diffTrees(la, layoutTree(same, blocksArea(), 0)).empty());
+    auto d = diffTrees(la, lb);
+    REQUIRE(d.size() == 1);
+    CHECK(d[0].rect == lb.children[1].rect);
+    CHECK(d[0].wave == Waveform::Fast);
+    const Block c = tree(with(kQuote, "It is a truth universally acknowledged.",
+                              "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in "
+                              "want of a wife. However little known the feelings or views of such a man may be"));
+    d = diffTrees(la, layoutTree(c, blocksArea(), 0));
+    REQUIRE_FALSE(d.empty());
+    CHECK(d[0].wave == Waveform::Ui);
+}

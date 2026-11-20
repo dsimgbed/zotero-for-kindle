@@ -33,6 +33,11 @@ const TextStyle kRowTitle{kSans, 9.5, 500};
 const TextStyle kRowSub{kSans, 7, 400, false, kSecondary};
 const TextStyle kRowMeta{kSans, 7.5, 400, false, kTertiary};
 const TextStyle kEmpty{kSerif, 10, 400, false, kSecondary};
+// A quote (0.11): a passage set apart by a rule on its left, not by a box (the reader's own
+// highlights are boxes enough); at most 5 lines, so a long highlight can't take Home's body.
+const TextStyle kQuoteText{kSerif, 9, 400, true};
+const TextStyle kQuoteSource{kSans, 7, 400, false, kSecondary};
+constexpr int kQuoteRuleW = 6, kQuoteIndent = kQuoteRuleW + 30, kQuoteLines = 5, kQuoteSourceGap = 14, kQuotePadY = 4;
 
 int gapPx(Block::Gap g) {
     switch (g) {
@@ -285,6 +290,11 @@ int naturalH(const Block& b, int w) {
         case K::Divider: return kDividerH;
         case K::Space: return spacePx(b.gap);
         case K::Notice: return textH(b.text, kNotice, w, 3);
+        case K::Quote: {
+            const int inner = w - kQuoteIndent;
+            return 2 * kQuotePadY + textH(b.text, kQuoteText, inner, kQuoteLines) +
+                   (b.meta.empty() ? 0 : kQuoteSourceGap + textH(b.meta, kQuoteSource, inner, 1));
+        }
         default: return unitsOf(b, w).natural();
     }
 }
@@ -536,6 +546,15 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
         case K::Divider: hRule(cr, r.y + r.h / 2 - 1, r.x, r.x + r.w, kRule); break;
         case K::Space: break;
         case K::Notice: drawText(cr, b.text, kNotice, r, 3); break;
+        case K::Quote: {
+            fillRect(cr, {r.x, r.y, kQuoteRuleW, r.h}, kInk);
+            const int x = r.x + kQuoteIndent, w = r.w - kQuoteIndent;
+            const int th = textH(b.text, kQuoteText, w, kQuoteLines);
+            drawText(cr, b.text, kQuoteText, {x, r.y + kQuotePadY, w, th}, kQuoteLines);
+            if (!b.meta.empty())
+                drawText(cr, b.meta, kQuoteSource, {x, r.y + kQuotePadY + th + kQuoteSourceGap, w, r.h}, 1);
+            break;
+        }
     }
     cairo_restore(cr);
 }
@@ -551,6 +570,7 @@ void hitIn(const Laid& l, Point p, std::optional<Hit>& hit) {
         case K::Field:
         case K::Deck: hit = Hit{b.id, "", b.kind, l.rect}; break;
         case K::Notice:
+        case K::Quote:
             if (!b.id.empty()) hit = Hit{b.id, "", b.kind, l.rect};
             break;
         case K::Buttons:

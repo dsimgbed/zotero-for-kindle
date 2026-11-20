@@ -101,7 +101,7 @@ struct Hit {
 };
 
 // The interactive block under `p`: a button, a list row, an item, a chip, a search/field, the deck, a notice
-// with an id.
+// or a quote with an id.
 std::optional<Hit> hitTest(const Laid& root, Point p);
 
 // The laid block with this id (a search/field to redraw while typing), or nullptr.

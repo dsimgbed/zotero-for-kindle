@@ -44,6 +44,14 @@ std::string multiLine(const std::string& s) {
     return out;
 }
 
+std::string trimmed(const std::string& s) {
+    const auto blank = [](char ch) { return static_cast<unsigned char>(ch) <= 0x20; };
+    size_t a = 0, b = s.size();
+    while (a < b && blank(s[a])) ++a;
+    while (b > a && blank(s[b - 1])) --b;
+    return s.substr(a, b - a);
+}
+
 struct Parser {
     TreeUse use = TreeUse::Screen;
     size_t blocks = 0, text = 0;
@@ -172,7 +180,7 @@ struct Parser {
             {"list", Block::Kind::List},
             {"search", Block::Kind::Search}, {"field", Block::Kind::Field},     {"chips", Block::Kind::Chips},
             {"button", Block::Kind::Button}, {"buttons", Block::Kind::Buttons}, {"divider", Block::Kind::Divider},
-            {"space", Block::Kind::Space},   {"notice", Block::Kind::Notice},
+            {"space", Block::Kind::Space},   {"notice", Block::Kind::Notice},   {"quote", Block::Kind::Quote},
         };
         const auto* found = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return kind == p.first; });
         if (found == std::end(kinds)) bad(prefix.empty() ? "the screen" : prefix, "unknown block kind \"" + kind + "\"");
@@ -375,6 +383,12 @@ struct Parser {
                 onlyFields(o, where, {"text", "id"});
                 b.text = str(o, "text", where, true);
                 if (o.contains("id")) b.id = id(o, where);  // tappable (0.9)
+                break;
+            case K::Quote:  // a passage (0.11): its text as written, its source on one line; tappable with an id
+                onlyFields(o, where, {"text", "source", "id"});
+                b.text = trimmed(str(o, "text", where, true, true));  // a highlight's edges are noise here
+                b.meta = str(o, "source", where, false);
+                if (o.contains("id")) b.id = id(o, where);
                 break;
             case K::Button: break;  // handled above
         }
