@@ -647,14 +647,26 @@ declare namespace zk {
      * looked up in that library; with `library` omitted (or a plain key) the app finds the item
      * by its key across the libraries it shows.
      *
+     * With `annotation` (an {@link Annotation}'s key, needs app 0.11.0) the reader opens the file
+     * that annotation is in and goes to it, as a tap in the app's Notes does. An annotation that
+     * is unknown, deleted, another item's, or not in the `attachment` given rejects with
+     * `"Annotation not found"`; on an app before 0.11.0 the option is ignored and the item opens
+     * where it was left.
+     *
      * **Permission**: `library:read`. Needs app 0.10.0.
      *
      * @example
      * if (e.kind === "tap" && e.id === "continue") await zk.library.open(lastKey);
      * @example
      * await zk.library.open({ key: item.key, library: item.libraryId }, { attachment: pdf.key });
+     * @example
+     * // a highlight, tapped: the reader opens at it (app 0.11.0)
+     * await zk.library.open(passage.itemKey, { annotation: passage.key });
      */
-    function open(item: string | { key: string; library?: number }, options?: { attachment?: string }): Promise<void>;
+    function open(
+      item: string | { key: string; library?: number },
+      options?: { attachment?: string; annotation?: string },
+    ): Promise<void>;
   }
 
   /** Filters for {@link zk.library.items}. They combine: an item must match all that are given. */
@@ -1396,6 +1408,21 @@ declare namespace zk {
      */
     function notice(text: string, opts?: { id?: string }): NoticeBlock;
 
+    /**
+     * A passage set apart: its text in italics with a rule on its left, at most 5 lines (a longer
+     * one ends with "…"), and its `source` on a line under it. With an `id`, tapping it sends a
+     * `tap` event with that id (open the highlight with {@link zk.library.open}'s `annotation`).
+     * Line breaks in `text` are kept; spaces around it are not. May be on Home's body. Needs app
+     * 0.11.0.
+     *
+     * @example
+     * zk.ui.quote({ text: "It is a truth universally acknowledged…", source: "Pride and Prejudice · p. 1" });
+     * @example
+     * zk.ui.quote({ id: "passage", text: a.text ?? "", source: `${item.title} · p. ${a.pageLabel}` });
+     * // onEvent: if (e.kind === "tap" && e.id === "passage") await zk.library.open(item.key, { annotation: a.key });
+     */
+    function quote(quote: { id?: string; text: string; source?: string }): QuoteBlock;
+
     // ── Navigation ──
 
     /**
@@ -1450,7 +1477,8 @@ declare namespace zk {
       | ButtonsBlock
       | DividerBlock
       | SpaceBlock
-      | NoticeBlock;
+      | NoticeBlock
+      | QuoteBlock;
 
     /** A child of a layout block, or a falsy value to skip (so `cond && block` works). */
     type Child = Block | Falsy;
@@ -1641,6 +1669,17 @@ declare namespace zk {
       id?: string;
     }
 
+    /** See {@link quote}. Needs app 0.11.0. */
+    interface QuoteBlock {
+      kind: "quote";
+      /** The passage: at most 5 lines show. */
+      text: string;
+      /** Where it is from, on one line under it (`"Pride and Prejudice · p. 1"`). */
+      source?: string;
+      /** Makes it tappable: a tap sends a `tap` event with this id. */
+      id?: string;
+    }
+
     /**
      * What `onEvent` receives. Events arrive one at a time, in the order they happened; a
      * pending `change` (typing not yet sent) is always sent before any other event of the same
@@ -1649,7 +1688,8 @@ declare namespace zk {
      * - `open` — the screen is opening; first, before its first render ("Loading…" shows until
      *   it returns). For set-up slower than `render`'s 1 s.
      * - `tap` — a {@link button}, or one of {@link buttons}, by its `id`; the {@link deck}'s card,
-     *   by the deck's `id`; a {@link notice} with an `id` (the last two need app 0.9.0).
+     *   by the deck's `id`; a {@link notice} with an `id` (the last two need app 0.9.0); a
+     *   {@link quote} with an `id` (app 0.11.0).
      * - `select` — a {@link list} row: `id` is the list's, `row` the row's.
      * - `swipe` — the {@link deck}'s card, left or right.
      * - `change` / `submit` — a {@link search} or {@link field}: its whole text.

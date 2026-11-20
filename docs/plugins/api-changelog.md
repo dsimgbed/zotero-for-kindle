@@ -6,6 +6,16 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.11.0 (unreleased): quotes, and opening at an annotation
+
+- `zk.ui.quote({ id?, text, source? })` — a passage in italics with a rule on its left, at most 5
+  lines (a longer one ends with "…"), its `source` on a line under it. With an `id` a tap sends
+  `{ kind: "tap", id }`. Allowed in Home's body.
+- `zk.library.open(item, { annotation })` — the reader opens the file that annotation is in and goes
+  to it. An annotation that is unknown, deleted, another item's or not in the `attachment` given
+  rejects with *Annotation not found*. Older apps ignore the option and open the item where it was
+  left.
+
 ## 0.10.2 (unreleased): fixes
 
 - A screen's failures: an `onEvent` that throws counts, and the `render` after it no longer clears

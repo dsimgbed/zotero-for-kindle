@@ -18,7 +18,8 @@ type Block =
   | ButtonsBlock
   | DividerBlock
   | SpaceBlock
-  | NoticeBlock;
+  | NoticeBlock
+  | QuoteBlock;
 ```
 
 A building block: what `render` returns, and what layout blocks contain.
