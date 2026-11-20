@@ -244,7 +244,14 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void LibraryScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    const int64_t total = list_.pager().total();
     list_.onDownloadEvent(e, listArea(), nav);
+    if (e.kind == SyncEvent::Kind::DownloadFinished && view_.downloaded && list_.pager().total() == total) {
+        // A book downloaded in the background (a kept collection's) joins Downloaded though no
+        // row of it was on the page: count again, and repaint if it is new here.
+        list_.refresh(nav.library());
+        if (list_.pager().total() != total) nav.damage(listArea(), Waveform::Quality);
+    }
     if (e.kind == SyncEvent::Kind::DownloadFinished) nav.damage(filterLineRect(), Waveform::Ui);  // Downloaded's count
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     if (!readLibraries(nav)) list_.refresh(nav.library());  // a group may have gone meanwhile
