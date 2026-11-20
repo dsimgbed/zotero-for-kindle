@@ -14,6 +14,7 @@ namespace zk {
 
 struct Config;
 class Http;
+class RateLimiter;
 
 // A file's download has no limit on its whole time (a large book over a slow line takes long);
 // it ends once it has stalled (under 1 KB/s) for this long.
@@ -27,8 +28,10 @@ public:
     virtual bool download(const AttachmentRecord&, const std::string& destDir, UserError*) = 0;
     // Called while the file downloads (bytes done, total; total 0 = unknown).
     virtual void setProgress(std::function<void(int64_t done, int64_t total)>) = 0;
-    // How Zotero's rate-limit waits are slept (see zotero/rate_limit.h); WebDAV has none.
-    virtual void setRateWait(std::function<void(int seconds)>) {}
+    // Zotero's rate limits (zotero/rate_limit.h) for requests to Zotero: the limiter to share with
+    // the API (one Backoff for both), and what to tell while one is waited out. WebDAV has none.
+    virtual void setRateLimiter(RateLimiter&) {}
+    virtual void setOnRateWait(std::function<void(const UserError&)>) {}
 };
 
 // WebDAV when the account has a WebDAV address, Zotero storage otherwise. A group's files always

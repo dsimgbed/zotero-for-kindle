@@ -87,7 +87,7 @@ TEST_CASE("api: 429 with retry-after waits, retries and succeeds") {
     CHECK(rig.slept == std::vector<int>{3});
     REQUIRE(waits.size() == 1);
     CHECK(waits[0].kind == ErrorKind::RateLimited);
-    CHECK(waits[0].message.find("retrying at") != std::string::npos);
+    CHECK(waits[0].message.find("Zotero asks to wait until ") != std::string::npos);
 }
 
 TEST_CASE("api: rate limiting that never ends gives up with RateLimited") {
@@ -258,4 +258,33 @@ TEST_CASE("api: with a group's library set, library calls go to /groups/<id>; se
     rig.api.setLibrary(0);
     rig.http.expect("GET", kBase + "/users/1/deleted?since=5", FakeHttp::ok("{}"));
     CHECK(rig.api.deleted(5, nullptr));
+}
+
+TEST_CASE("rate limit: a wait cut short by stopping ends the request; nothing more goes out") {
+    FakeHttp http;
+    RateLimiter rate;
+    rate.setSleeper([](int) { return false; });  // stop() during the wait
+    http.expect("GET", kBase + "/users/1/items", FakeHttp::status(429, {{"retry-after", "3"}}));
+    http.expect("GET", kBase + "/users/1/items", FakeHttp::ok("{}"));
+    HttpRequest req;
+    req.url = kBase + "/users/1/items";
+    const HttpResponse r = rate.send(http, req);
+    CHECK(http.sent.size() == 1);
+    CHECK(r.curlCode != 0);
+}
+
+TEST_CASE("rate limit: a request that ends rate-limited tells how long Zotero asked to wait") {
+    FakeHttp http;
+    RateLimiter rate;
+    std::vector<int> gaveUp;
+    rate.setSleeper([](int) { return true; });
+    rate.setOnGiveUp([&](int s) { gaveUp.push_back(s); });
+    http.expect("GET", kBase + "/a", FakeHttp::status(429, {{"retry-after", "3600"}}));
+    HttpRequest req;
+    req.url = kBase + "/a";
+    CHECK(rate.send(http, req).status == 429);
+    CHECK(gaveUp == std::vector<int>{3600});
+    for (int i = 0; i < 4; ++i) http.expect("GET", kBase + "/a", FakeHttp::status(429, {{"retry-after", "2"}}));
+    CHECK(rate.send(http, req).status == 429);  // still busy after three waits
+    CHECK(gaveUp == std::vector<int>{3600, 2});
 }

@@ -72,7 +72,9 @@ public:
     ZoteroApi(Http&, int64_t userId, std::string apiKey);
 
     void setSleeper(std::function<void(int seconds)>);
-    void setOnWait(std::function<void(const UserError&)>);  // "Zotero is busy — retrying at …"
+    // Shares another limiter (the sync worker's, which file downloads use too): one Backoff for all.
+    void setRateLimiter(RateLimiter& r) { rate_ = &r; }
+    void setOnWait(std::function<void(const UserError&)>);  // "Zotero asks to wait until HH:MM."
 
     // The library the calls below go to: 0 the user's own, else a group ID.
     void setLibrary(int64_t groupId) { library_ = groupId; }
@@ -121,7 +123,8 @@ private:
     Http& http_;
     int64_t userId_;
     std::string apiKey_;
-    RateLimiter rate_;
+    RateLimiter ownRate_;
+    RateLimiter* rate_ = &ownRate_;
     std::function<void(const UserError&)> onWait_;
     int64_t library_ = 0;
 };

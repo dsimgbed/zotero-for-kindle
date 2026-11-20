@@ -19,7 +19,8 @@ public:
     ZoteroStorage(Http&, int64_t userId, std::string apiKey);
     bool download(const AttachmentRecord&, const std::string& destDir, UserError*) override;
     void setProgress(std::function<void(int64_t done, int64_t total)> f) override { progress_ = std::move(f); }
-    void setRateWait(std::function<void(int seconds)> f) override { rate_.setSleeper(std::move(f)); }
+    void setRateLimiter(RateLimiter& r) override { rate_ = &r; }
+    void setOnRateWait(std::function<void(const UserError&)> f) override { onRateWait_ = std::move(f); }
     // Free bytes at a path (statvfs by default); tests inject their own.
     void setFreeSpaceProbe(std::function<uint64_t(const std::string& path)> f) { freeSpace_ = std::move(f); }
 
@@ -29,7 +30,9 @@ private:
     std::string apiKey_;
     std::function<uint64_t(const std::string&)> freeSpace_;
     std::function<void(int64_t, int64_t)> progress_;
-    RateLimiter rate_;  // for the /file requests to api.zotero.org (not the storage link)
+    RateLimiter ownRate_;
+    RateLimiter* rate_ = &ownRate_;  // for the /file requests to api.zotero.org (not the storage link)
+    std::function<void(const UserError&)> onRateWait_;
 };
 
 }  // namespace zk

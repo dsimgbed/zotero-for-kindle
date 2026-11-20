@@ -50,7 +50,12 @@ UserError badBody(const std::string& what) {
 ZoteroApi::ZoteroApi(Http& http, int64_t userId, std::string apiKey)
     : http_(http), userId_(userId), apiKey_(std::move(apiKey)) {}
 
-void ZoteroApi::setSleeper(std::function<void(int)> f) { rate_.setSleeper(std::move(f)); }
+void ZoteroApi::setSleeper(std::function<void(int)> f) {
+    rate_->setSleeper([f = std::move(f)](int s) {
+        f(s);
+        return true;
+    });
+}
 void ZoteroApi::setOnWait(std::function<void(const UserError&)> f) { onWait_ = std::move(f); }
 
 std::string ZoteroApi::userUrl(const std::string& path) const {
@@ -77,7 +82,7 @@ bool KeyInfo::anyGroupAccess() const {
 HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
     req.headers.emplace_back("Zotero-API-Version", "3");
     req.headers.emplace_back("Zotero-API-Key", apiKey_);
-    HttpResponse r = rate_.send(http_, req, [&](const HttpResponse& busy) {
+    HttpResponse r = rate_->send(http_, req, [&](const HttpResponse& busy) {
         UserError wait = classify(busy, NetState{}, kHost, false, req.method);
         log(LogLevel::Info, "zotero: %s", wait.message.c_str());
         if (onWait_) onWait_(wait);

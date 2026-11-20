@@ -5,6 +5,8 @@
 #include "sync/config.h"
 #include "sync/webdav.h"
 #include "sync/zotero_storage.h"
+#include "zotero/api.h"
+#include "zotero/rate_limit.h"
 
 #include <unistd.h>
 
@@ -148,7 +150,12 @@ TEST_CASE("zotero storage: a refused key and a busy server read as usual") {
     {
         Rig rig;
         std::vector<int> slept;
-        rig.store.setRateWait([&](int s) { slept.push_back(s); });
+        RateLimiter rate;
+        rate.setSleeper([&](int s) {
+            slept.push_back(s);
+            return true;
+        });
+        rig.store.setRateLimiter(rate);
         rig.http.expect("GET", kFileUrl, FakeHttp::status(429, {{"retry-after", "3600"}}));
         UserError err;
         CHECK_FALSE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
@@ -160,13 +167,22 @@ TEST_CASE("zotero storage: a refused key and a busy server read as usual") {
 TEST_CASE("zotero storage: Zotero's Retry-After and Backoff are waited out, as for the API's own requests") {
     Rig rig;
     std::vector<int> slept;
-    rig.store.setRateWait([&](int s) { slept.push_back(s); });
+    RateLimiter rate;
+    rate.setSleeper([&](int s) {
+        slept.push_back(s);
+        return true;
+    });
+    rig.store.setRateLimiter(rate);
+    std::vector<std::string> told;
+    rig.store.setOnRateWait([&](const UserError& e) { told.push_back(e.message); });
     rig.http.expect("GET", kFileUrl, FakeHttp::status(429, {{"retry-after", "5"}}));
     rig.http.expect("GET", kFileUrl, FakeHttp::status(302, {{"location", kS3}, {"backoff", "7"}}));
     rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
     UserError err;
     REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
     CHECK(slept == std::vector<int>{5});
+    REQUIRE(told.size() == 1);  // the row can say why it waits
+    CHECK(told[0].rfind("Zotero asks to wait until ", 0) == 0);
     rig.redirect();
     rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
     REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
@@ -235,4 +251,24 @@ TEST_CASE("file store: with WebDAV set up, My Library's files come from WebDAV a
     files->download(a, rig.dest.string(), &err);
     REQUIRE_FALSE(rig.http.sent.empty());
     CHECK(rig.http.sent[0].url.rfind("https://dav.example.org/zotero/MINE0001", 0) == 0);
+}
+
+TEST_CASE("zotero storage: a Backoff the API was given delays the file request too (one limiter)") {
+    Rig rig;
+    std::vector<int> slept;
+    RateLimiter rate;
+    rate.setSleeper([&](int s) {
+        slept.push_back(s);
+        return true;
+    });
+    ZoteroApi api(rig.http, 42, "abcdefghijklmnopqrstuvwx");
+    api.setRateLimiter(rate);
+    rig.store.setRateLimiter(rate);
+    rig.http.expect("GET", "https://api.zotero.org/users/42/items", FakeHttp::ok("{}", {{"last-modified-version", "1"}, {"backoff", "7"}}));
+    REQUIRE(api.versions("items", 0, nullptr));
+    rig.redirect();
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    UserError err;
+    REQUIRE(rig.store.download(rig.attachment(), rig.dest.string(), &err));
+    CHECK(slept == std::vector<int>{7});
 }

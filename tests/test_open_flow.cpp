@@ -72,6 +72,14 @@ TEST_CASE("open flow: a remote book downloads with progress in its row") {
     p.total = 100;
     rig.event(p);
     CHECK(rig.flow.statusFor(r.attachmentKey) == "Downloading 42%");
+    {  // Zotero asks the download to wait: the row says so
+        SyncEvent w = rig.download(SyncEvent::Kind::DownloadProgress, r);
+        w.error = UserError{ErrorKind::RateLimited, "Zotero asks to wait until 14:03.", "HTTP 429"};
+        rig.event(w);
+        CHECK(rig.flow.statusFor(r.attachmentKey) == "Zotero asks to wait until 14:03.");
+        rig.nav.damages.clear();
+        rig.event(p);
+    }
     REQUIRE(rig.nav.damages.size() == 1);
     CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect == rig.rowRect(1));

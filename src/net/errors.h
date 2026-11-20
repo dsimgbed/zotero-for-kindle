@@ -4,6 +4,7 @@
 
 #include "net/http.h"
 
+#include <cstdint>
 #include <string>
 
 namespace zk {
@@ -28,6 +29,9 @@ struct UserError {
 // `method` tells a refused read (bad key) from a refused write (key without write access).
 UserError classify(const HttpResponse&, const NetState&, const std::string& host, bool hostIsTailnet,
                    const std::string& method = "GET");
+
+// "Zotero asks to wait until HH:MM." (local time): Zotero's rate limit, until then.
+std::string rateLimitMessage(int64_t untilWallMs);
 
 // *.ts.net names and Tailscale's 100.64.0.0/10 addresses.
 bool isTailnetHost(const std::string& host);

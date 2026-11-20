@@ -25,6 +25,8 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
+constexpr const char* kZoteroWaitMeta = "zoteroWaitUntil";  // wall ms Zotero asked not to be asked before
+
 // Puts the service's cancel flag on every request and refuses new ones once it is set.
 class CancellableHttp final : public Http {
 public:
@@ -78,6 +80,7 @@ struct SyncService::Worker {
     std::vector<KeptFile> keptQueue;
     std::map<std::string, int> keptTotal;
     std::set<std::string> keptStalledNow;  // stalled in this round: moved to the back once
+    RateLimiter rate;  // Zotero's rate limits, one for the API and file downloads alike
 };
 
 SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {
@@ -247,12 +250,15 @@ void SyncService::run() {
                               [lib](int64_t group) { return lib->libraryEditable(group); },
                               [lib](const std::string& key) { return lib->annotationEditable(key); });
         if (lib->userId() == 0 && deps_.config.userId > 0) lib->setUser(deps_.config.userId, "");
+        w.rate.setSleeper([this](int s) { return sleepFor(s); });  // stop() cuts it short
+        // A long wait Zotero asks for isn't slept: no sync asks before it is over (zoteroWaitUntil).
+        w.rate.setOnGiveUp([this, lib](int s) { lib->setMetaValue(kZoteroWaitMeta, std::to_string(deps_.wallMs() + int64_t{s} * 1000)); });
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
-        w.api->setSleeper([this](int s) { sleepFor(s); });
+        w.api->setRateLimiter(w.rate);
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
         w.engine->setPluginEventsWanted(deps_.pluginEventsWanted);
         w.files = makeFileStore(*w.guard, deps_.config);
-        w.files->setRateWait([this](int s) { sleepFor(s); });  // stop() cuts it short
+        w.files->setRateLimiter(w.rate);
     } catch (const DbError& e) {
         log(LogLevel::Error, "sync service: can't open the database: %s", e.what());
         SyncEvent ev;
@@ -323,12 +329,24 @@ void SyncService::run() {
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
                 case Command::Kind::Push: {
+                    if (zoteroWaitUntil(w)) break;  // the edits stay unsent; the first sync after it sends them
                     std::vector<int64_t> passed;
                     const SyncReport pushed = pushChanges(w, &passed);
                     recordGroupErrors(*w.lib, passed, pushed);
                     break;
                 }
                 case Command::Kind::Sync: {
+                    if (const auto until = zoteroWaitUntil(w)) {
+                        // Zotero asked for quiet until then: not asked again before (whoever asks).
+                        lastSync = Clock::now();
+                        SyncEvent done;
+                        done.kind = SyncEvent::Kind::SyncFinished;
+                        done.request = cmd.request;
+                        done.error = UserError{ErrorKind::RateLimited, rateLimitMessage(*until), "waiting for Zotero"};
+                        done.report.error = done.error;
+                        if (!stopping_) emit(std::move(done));
+                        break;
+                    }
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
                         pushDue_.reset();  // this sync sends them
@@ -473,6 +491,11 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
     int lastPct = 0;
     bool totalSeen = false;
     if (started) *started = false;
+    w.files->setOnRateWait([&](const UserError& why) {  // the row says why it waits
+        SyncEvent e = p0;
+        e.error = why;
+        emit(std::move(e));
+    });
     w.files->setProgress([&](int64_t d, int64_t t) {
         if (started && d > 0) *started = true;
         if (onTotal && !totalSeen && t > 0) {
@@ -490,8 +513,20 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
     });
     const bool ok = w.files->download(att, deps_.filesDir, err);
     w.files->setProgress(nullptr);
+    w.files->setOnRateWait(nullptr);
     if (ok) w.lib->setFileState(att.key, AttachmentRecord::State::Local, (fs::path(deps_.filesDir) / att.key / localFileName(att)).string());
     return ok;
+}
+
+std::optional<int64_t> SyncService::zoteroWaitUntil(Worker& w) {
+    int64_t until = 0;
+    try {
+        until = std::stoll(w.lib->metaValue(kZoteroWaitMeta));
+    } catch (...) {
+        return std::nullopt;
+    }
+    if (until <= deps_.wallMs()) return std::nullopt;
+    return until;
 }
 
 namespace {
@@ -608,8 +643,10 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
     }
     // Once the size is known: would it take the Kindle under the floor? (WebDAV keeps the zip and
     // the file it holds, so twice the size.)
+    const bool fromZotero = deps_.config.webdavUrl.empty() || next.att.lib != kMyLibrary;
+    if (fromZotero && zoteroWaitUntil(w)) return stop({});  // Zotero asked for quiet: a later sync
     bool tooBig = false;
-    const uint64_t factor = deps_.config.webdavUrl.empty() || next.att.lib != kMyLibrary ? 1 : 2;
+    const uint64_t factor = fromZotero ? 1 : 2;
     auto onTotal = [&](int64_t total) {
         const uint64_t need = static_cast<uint64_t>(total) * factor, free = deps_.freeBytes();
         if (free >= need && free - need >= kKeptMinFree) return;

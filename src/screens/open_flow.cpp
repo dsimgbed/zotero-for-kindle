@@ -94,7 +94,8 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (it == pending_.end()) return;
     Pending& p = it->second;
     if (e.kind == SyncEvent::Kind::DownloadProgress) {
-        p.status = e.total > 0 ? "Downloading " + std::to_string(100 * e.done / e.total) + "%" : "Downloading…";
+        if (e.error) p.status = e.error->message;  // waiting, and why (Zotero asked to)
+        else p.status = e.total > 0 ? "Downloading " + std::to_string(100 * e.done / e.total) + "%" : "Downloading…";
     } else if (e.kind == SyncEvent::Kind::DownloadFinished) {
         p.running = false;
         if (e.error) {

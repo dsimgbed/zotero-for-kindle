@@ -93,6 +93,9 @@ private:
     bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err,
                   const std::function<void(int64_t total)>& onTotal = nullptr, bool* started = nullptr);
     bool keepStep(Worker&, bool fresh);  // true: more to download
+    // Zotero asked (a 429 with a long Retry-After or Backoff) not to be asked before this wall time
+    // (ms; kept in the library, so a restart honours it): set while it lasts.
+    std::optional<int64_t> zoteroWaitUntil(Worker&);
     void setKept(std::map<std::string, KeptStatus>);  // KeptChanged if it changed
 
     SyncDeps deps_;
