@@ -383,6 +383,7 @@ private:
     bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     bool inkFlushGaveUp_ = false;
+    bool toldInkLost_ = false, toldAreaLost_ = false;  // what the close gave up on, said once per kind
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
     std::vector<std::vector<Point>> inkPending_;  // drawn, not yet sent

@@ -601,6 +601,19 @@ TEST_CASE("pen ink fix: closing the book waits for handwriting once, not twice")
     CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(200));
 }
 
+TEST_CASE("pen ink fix: handwriting the close gave up on is said to be lost, once") {
+    // Final wave: only areas and notes were told; lost handwriting was just logged.
+    InkRig rig(DocType::Pdf, 2000);
+    rig.reader->onTick(rig.nav);
+    rig.stroke({{300, 400}, {340, 410}, {380, 430}});
+    rig.reader->turnTo(5);
+    rig.reader->flushInk(rig.nav, 100);  // gives up
+    rig.reader->flushInk(rig.nav);       // the close's second flush
+    int told = 0;
+    for (const auto& t : rig.nav.toasts) told += t == "Some handwriting couldn't be saved.";
+    CHECK(told == 1);
+}
+
 TEST_CASE("pen ink fix: a pen resting on the glass keeps blocking the palm") {
     // Pen PR review I5: a still pen sends nothing, and "near" lapsed after 2 s.
     FakeDisplay display;
