@@ -641,6 +641,7 @@ int main(int argc, char** argv) {
     catalogService.start();
     app.setPollHook([&] {
         switcher.tick();  // a switch moves on whatever shows
+        if (accountsUi) accountsUi->poll();  // Zotero's word on a key dropped over USB
         updateListening();
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
             startConfirmed = true;
@@ -973,7 +974,7 @@ int main(int argc, char** argv) {
         return "account " + std::to_string(userId);
     };
     switch (startup.dropped) {
-        case Startup::Dropped::KeyUpdated: app.toast("The key of " + accountName(startup.droppedUser) + " from config.json is kept"); break;
+        case Startup::Dropped::KeyPending: accountsUi->checkDroppedKey(); break;  // kept once Zotero says it's theirs
         case Startup::Dropped::Added:
             if (activeAccount != startup.droppedUser) app.toast("Added " + accountName(startup.droppedUser));
             break;

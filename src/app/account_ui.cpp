@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <thread>
 
 #include "app/app.h"
+#include "app/startup.h"
+#include "core/wake.h"
 #include "core/log.h"
 #include "net/errors.h"
 #include "screens/setup.h"
@@ -160,6 +163,13 @@ void AccountsUi::added(const Config& c, const std::string& name) {
         return;
     }
     log(LogLevel::Info, "accounts: %lld added", static_cast<long long>(c.userId));
+    // A config.json from before (a first account dropped over USB, kept for Setup) is this
+    // account's credentials again: no second copy stays.
+    if (const auto old = loadConfig(deps_.paths.configDir); old && old->userId == c.userId) {
+        std::error_code ec;
+        fs::remove(deps_.paths.configFile(), ec);
+        if (ec) log(LogLevel::Warn, "accounts: %s not removed: %s", deps_.paths.configFile().c_str(), ec.message().c_str());
+    }
     added_ = c.userId;
     if (!switcher_.switchTo(c.userId, openUserId() ? AccountSwitcher::Why::User : AccountSwitcher::Why::Startup))
         app_.toast("Can't switch now; the account is in Settings → Accounts");
@@ -387,6 +397,58 @@ void AccountsUi::opened(AccountSession& s) {
 void AccountsUi::onSyncEvent(const SyncEvent& e) {
     if (e.kind != SyncEvent::Kind::SyncFinished || e.error) return;
     if (AccountSession* s = switcher_.session()) s->keepSummary(true);
+    checkDroppedKey();  // Zotero answers now
+}
+
+// ---- a key dropped over USB ------------------------------------------------------------------------
+
+void AccountsUi::checkDroppedKey() {
+    if (dropCheck_) return;  // asked already
+    const auto key = pendingDroppedKey(deps_.paths);
+    if (!key || !deps_.keyOwner) return;
+    if (!deps_.online()) {
+        if (!offlineSaid_) app_.toast("The key for " + nameOf(key->userId) + " will be checked when Wi-Fi is on");
+        offlineSaid_ = true;
+        return;
+    }
+    auto check = std::make_shared<DropCheck>();
+    check->key = *key;
+    dropCheck_ = check;
+    std::thread([check, owner = deps_.keyOwner] {
+        UserError r = owner(check->key);
+        {
+            std::lock_guard<std::mutex> lock(check->mutex);
+            check->owner = std::move(r);
+            check->done = true;
+        }
+        wakeUi();
+    }).detach();
+}
+
+void AccountsUi::poll() {
+    if (!dropCheck_) return;
+    Config key;
+    UserError owner;
+    {
+        std::lock_guard<std::mutex> lock(dropCheck_->mutex);
+        if (!dropCheck_->done) return;
+        key = dropCheck_->key;
+        owner = dropCheck_->owner;
+    }
+    dropCheck_.reset();
+    const std::string name = nameOf(key.userId);
+    switch (settleDroppedKey(deps_.paths, key, owner)) {
+        case DroppedKey::Applied:
+            app_.toast("The new key of " + name + " from config.json is kept");
+            if (key.userId == openUserId() && deps_.keyChanged) deps_.keyChanged(key);
+            break;
+        case DroppedKey::Offline:
+            if (!offlineSaid_) app_.toast("The key for " + name + " will be checked when Wi-Fi is on");
+            offlineSaid_ = true;
+            break;
+        case DroppedKey::Refused: app_.toast("The key in config.json isn't " + name + "'s, so it wasn't used"); break;
+        case DroppedKey::None: break;
+    }
 }
 
 // ---- Home --------------------------------------------------------------------------------------------

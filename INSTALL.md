@@ -63,7 +63,9 @@ deletes the file from the USB drive.
 
 The same file works later too:
 
-- **For an account already on the Kindle** (the same `userId`), it replaces that account's key and WebDAV details.
+- **For an account already on the Kindle** (the same `userId`), it replaces that account's key and WebDAV details
+  once Zotero confirms, with Wi-Fi on, that the key is that user's. Until then nothing changes and the file stays;
+  a key of another user is not used.
 - **For another Zotero user**, it adds an account (up to three; see [Accounts](README.md#accounts)). The account
   you have open stays open; the new one is in *Settings → Accounts* and on Home's account switch.
 - **With three accounts already**, the file is left on the USB drive and nothing changes; the app says so. Remove

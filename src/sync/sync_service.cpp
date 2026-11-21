@@ -399,8 +399,10 @@ void SyncService::run() {
                     emit(start);
                     // Which groups there are, and who may edit them (one request when nothing changed).
                     UserError discovery;
-                    if (!discoverGroups(*w.api, *w.lib, deps_.wallMs(), &discovery) && unreachable(discovery)) {
-                        // Zotero can't be reached: every other request would fail the same way.
+                    if (!discoverGroups(*w.api, *w.lib, deps_.wallMs(), &discovery) &&
+                        (unreachable(discovery) || foreignKey(discovery))) {
+                        // Zotero can't be reached: every other request would fail the same way. Or
+                        // the key is another user's: nothing is sent or fetched with it.
                         lastSync = Clock::now();
                         SyncEvent done;
                         done.kind = SyncEvent::Kind::SyncFinished;

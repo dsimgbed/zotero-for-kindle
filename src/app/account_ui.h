@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "app/account_switch.h"
@@ -70,8 +71,15 @@ public:
     // main's onOpened, after the services started: a removal waiting for the switch away from the
     // account ends; an account just added syncs.
     void opened(AccountSession&);
-    // A sync of the open account finished well: its summary (and when) kept in accounts.json.
+    // A sync of the open account finished well: its summary (and when) kept in accounts.json; a
+    // dropped key still waiting is checked now that Zotero answers.
     void onSyncEvent(const SyncEvent&);
+    // A config.json dropped over USB for an account on the Kindle (startup.h, KeyPending): Zotero
+    // is asked whose the key is (keyOwner, off the UI thread) when online — at start, and after a
+    // good sync while it waits; the key is kept only if it is that account's. Offline: said once,
+    // nothing changes. poll() (every loop step) takes Zotero's answer.
+    void checkDroppedKey();
+    void poll();
 
     // Home: the chip (the open account's name with two accounts or more, else ""), its sheet, and
     // what the sheet's choices do.
@@ -105,6 +113,14 @@ private:
     int64_t removing_ = 0;  // the open account to remove once the switch away from it has opened another
     int64_t added_ = 0;     // an account just added: it syncs once open
     bool openLocked_ = false;  // the open account is locked (on sleep) until its right PIN
+    struct DropCheck {
+        std::mutex mutex;
+        bool done = false;
+        Config key;
+        UserError owner;
+    };
+    std::shared_ptr<DropCheck> dropCheck_;  // Zotero asked about a dropped key; the answer not yet taken
+    bool offlineSaid_ = false;
 };
 
 }  // namespace zk

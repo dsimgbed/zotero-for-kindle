@@ -17,6 +17,7 @@ public:
 
     FakeZotero user;
     int64_t userId = 1;  // the key's user (another: also set user.libraryPath = "users/<id>/")
+    int64_t keyUserId = 0;  // keys/current's userID when not userId (a key of someone else's)
     struct Group {
         std::unique_ptr<FakeZotero> server = std::make_unique<FakeZotero>();
         std::string name;
@@ -55,7 +56,7 @@ public:
         if (req.method == "GET" && rest == "keys/current") {
             json access = {{"user", {{"library", true}, {"write", true}, {"files", true}}}};
             if (!groupAccess.is_null()) access["groups"] = groupAccess;
-            return ok(r, json{{"key", "k3y"}, {"userID", userId}, {"username", "pavel"}, {"access", access}});
+            return ok(r, json{{"key", "k3y"}, {"userID", keyUserId ? keyUserId : userId}, {"username", "pavel"}, {"access", access}});
         }
         if (req.method == "GET" && rest == "users/" + std::to_string(userId) + "/groups?format=versions") {
             json out = json::object();

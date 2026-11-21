@@ -97,7 +97,8 @@ Write `zotero/config.json` on the Kindle (`userId` is a number):
 ```
 
 At its next start the app moves this file into protected system storage and deletes it from the USB drive. On a
-Kindle that already has accounts, the same file updates the key of the account with that `userId`, or adds a new
+Kindle that already has accounts, the same file updates the key of the account with that `userId` (once Zotero
+confirms it is that user's key, with Wi-Fi on), or adds a new
 account (up to three); with three accounts it is left in place and nothing changes.
 
 ## Updating an existing install

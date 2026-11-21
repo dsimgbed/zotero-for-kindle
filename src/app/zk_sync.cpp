@@ -142,8 +142,14 @@ int main(int argc, char** argv) {
     if (!cfg || cfg->userId <= 0 || cfg->apiKey.empty() || dbPath.empty()) {
         std::printf("error: No Zotero account configured.\n  details: %s\n",
                     !envFile.empty() && !cfg ? ("no key in " + envFile).c_str()
-                    : !target.error.empty()  ? (target.error + "; or pass --env FILE").c_str()
+                    : !target.error.empty()  ? (target.error + (envFile.empty() ? "; or pass --env FILE" : "")).c_str()
                                              : "no key or library");
+        return 1;
+    }
+    if (!envFile.empty() && target.userId > 0 && cfg->userId != target.userId) {  // never one account's key on another's library
+        std::printf("error: %s is user %lld's key, not account %lld's.\n  details: pass --account %lld, or --db\n",
+                    envFile.c_str(), static_cast<long long>(cfg->userId), static_cast<long long>(target.userId),
+                    static_cast<long long>(cfg->userId));
         return 1;
     }
     // crengine's cache: the account's own (the app's place for it), else the old one.
@@ -183,7 +189,7 @@ int main(int argc, char** argv) {
             const auto t0 = std::chrono::steady_clock::now();
             UserError discovery;
             if (!discoverGroups(api, lib, nowMs(), &discovery)) {
-                if (unreachable(discovery)) {  // nothing else would get through either
+                if (unreachable(discovery) || foreignKey(discovery)) {  // nothing else would get through, or may
                     printError(discovery);
                     return 1;
                 }

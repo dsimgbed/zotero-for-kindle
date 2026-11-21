@@ -3,6 +3,7 @@
 #include "app/accounts.h"
 #include "app/migrate_accounts.h"
 #include "core/log.h"
+#include "sync/libraries.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -53,14 +54,9 @@ Startup::Dropped takeDropped(const Paths& p, Startup& s) {
     const bool listed = accounts && std::any_of(accounts->accounts.begin(), accounts->accounts.end(),
                                                 [&](const AccountEntry& e) { return e.userId == c->userId; });
     const long long user = static_cast<long long>(c->userId);
-    if (listed) {  // the same user: the account's key, under its own ID
-        if (!saveCredentials(p, *c)) {
-            log(LogLevel::Error, "config: the key of account %lld from %s can't be saved; left in place", user, p.droppedConfig.c_str());
-            return Dropped::Invalid;
-        }
-        dropTaken(p.droppedConfig);
-        log(LogLevel::Info, "config: %s is account %lld's new key", p.droppedConfig.c_str(), user);
-        return Dropped::KeyUpdated;
+    if (listed) {  // the same user: its key once Zotero says it is that user's (applyDroppedKey)
+        log(LogLevel::Info, "config: %s is for account %lld: kept until Zotero confirms the key", p.droppedConfig.c_str(), user);
+        return Dropped::KeyPending;
     }
     if (!accounts || accounts->accounts.empty()) {  // a first account: Setup checks it first
         if (!importDroppedConfig(p.droppedConfig, p.configDir)) return Dropped::Invalid;
@@ -83,7 +79,49 @@ Startup::Dropped takeDropped(const Paths& p, Startup& s) {
     return Dropped::Added;
 }
 
+bool sameConfig(const Config& a, const Config& b) {
+    return a.userId == b.userId && a.apiKey == b.apiKey && a.webdavUrl == b.webdavUrl && a.webdavUser == b.webdavUser &&
+           a.webdavPassword == b.webdavPassword;
+}
+
 }  // namespace
+
+std::optional<Config> pendingDroppedKey(const Paths& p) {
+    if (p.droppedConfig.empty()) return std::nullopt;
+    auto c = readConfigFile(p.droppedConfig);
+    if (!c) return std::nullopt;
+    const auto accounts = readAccounts(p.accountsFile());
+    const bool listed = accounts && std::any_of(accounts->accounts.begin(), accounts->accounts.end(),
+                                                [&](const AccountEntry& e) { return e.userId == c->userId; });
+    return listed ? c : std::nullopt;
+}
+
+DroppedKey settleDroppedKey(const Paths& p, const Config& c, const UserError& owner) {
+    const auto now = pendingDroppedKey(p);
+    if (!now || !sameConfig(*now, c)) return DroppedKey::None;  // gone or changed while Zotero was asked
+    const long long user = static_cast<long long>(c.userId);
+    if (owner.kind != ErrorKind::None) {
+        if (unreachable(owner)) return DroppedKey::Offline;
+        log(LogLevel::Warn, "config: the key in %s isn't account %lld's (%s): not used, left in place", p.droppedConfig.c_str(),
+            user, owner.details.c_str());
+        return DroppedKey::Refused;
+    }
+    if (!saveCredentials(p, c)) {
+        log(LogLevel::Error, "config: account %lld's new key can't be saved; %s left in place", user, p.droppedConfig.c_str());
+        return DroppedKey::Refused;
+    }
+    dropTaken(p.droppedConfig);
+    log(LogLevel::Info, "config: account %lld's new key from %s, confirmed by Zotero, is kept", user, p.droppedConfig.c_str());
+    return DroppedKey::Applied;
+}
+
+DroppedKey applyDroppedKey(const Paths& p, const std::function<UserError(const Config&)>& owner, Config* applied) {
+    const auto c = pendingDroppedKey(p);
+    if (!c) return DroppedKey::None;
+    const DroppedKey r = settleDroppedKey(p, *c, owner(*c));
+    if (r == DroppedKey::Applied && applied) *applied = *c;
+    return r;
+}
 
 Startup startupConfig(const Paths& p) {
     Startup s;

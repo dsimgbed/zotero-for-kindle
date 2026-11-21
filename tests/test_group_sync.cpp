@@ -743,3 +743,46 @@ TEST_CASE("group sync (service): a tracked sync's id comes back on its SyncFinis
     }
     CHECK(found);
 }
+
+TEST_CASE("group sync: a key Zotero says is another user's is refused; the account stays whose it is") {
+    Rig rig;
+    rig.lib.setUser(1, "pavel");
+    rig.hub.keyUserId = 99;  // the key is user 99's, the account user 1's
+    UserError err;
+    CHECK_FALSE(discoverGroups(rig.api, rig.lib, rig.now, &err));
+    CHECK(foreignKey(err));
+    CHECK(err.message == "This account's key belongs to someone else — Update key");
+    CHECK(rig.lib.userId() == 1);  // never relabelled as the key's owner
+    CHECK(rig.lib.userName() == "pavel");
+    CHECK(rig.hub.count("groups/4242") == 0);  // nothing of any group read with it
+    CHECK(rig.lib.libraries().size() == 1);
+    // Asked again at the next sync (nothing about the key was kept), and refused again.
+    rig.hub.sent.clear();
+    CHECK_FALSE(discoverGroups(rig.api, rig.lib, rig.now, &err));
+    CHECK(rig.hub.count("/keys/current") == 1);
+}
+
+TEST_CASE("group sync (service): a key of another user stops the account's sync, its data kept") {
+    ServiceRig rig;
+    REQUIRE_FALSE(rig.sync().back().error);  // the account's library, synced with its own key
+    {
+        Db db = Db::open(rig.deps.dbPath);
+        Library ui(db);
+        ui.markRead("BOOKMINE", true);  // something to send
+    }
+    {
+        std::lock_guard<std::mutex> lock(rig.m);
+        rig.hub.keyUserId = 99;
+        rig.hub.groups.at(kLab).version++;  // the group list changed: the key is read again
+        rig.hub.sent.clear();
+    }
+    auto seen = rig.sync();
+    REQUIRE(seen.back().error);
+    CHECK(foreignKey(*seen.back().error));
+    CHECK(seen.back().error->message == "This account's key belongs to someone else — Update key");
+    CHECK(rig.count("users/1/items") == 0);  // nothing pulled or pushed with it
+    Db db = Db::open(rig.deps.dbPath);
+    Library ui(db);
+    CHECK(ui.item("BOOKMINE"));  // the account's data stays
+    CHECK(ui.userId() == 1);
+}

@@ -7,6 +7,10 @@
 
 namespace zk {
 
+namespace {
+const char* const kForeignKey = "key of another user";
+}  // namespace
+
 bool discoverGroups(ZoteroApi& api, Library& lib, int64_t nowMs, UserError* err) {
     UserError e;
     auto listing = api.groupVersions(&e);
@@ -45,6 +49,12 @@ bool discoverGroups(ZoteroApi& api, Library& lib, int64_t nowMs, UserError* err)
         if (!key) {
             log(LogLevel::Warn, "sync: key access not read: %s (%s)", e.message.c_str(), e.details.c_str());
             if (err) *err = e;
+            return false;
+        }
+        if (key->userId != api.userId()) {  // never the account relabelled as the key's owner
+            log(LogLevel::Error, "sync: the key is user %lld's, not account %lld's: not synced",
+                static_cast<long long>(key->userId), static_cast<long long>(api.userId()));
+            if (err) *err = {ErrorKind::ApiKeyRejected, "This account's key belongs to someone else — Update key", kForeignKey};
             return false;
         }
         lib.setUser(key->userId, !key->username.empty() ? key->username : key->displayName);
@@ -168,6 +178,8 @@ void recordGroupErrors(Library& lib, const std::vector<int64_t>& groups, const S
         lib.setGroupSyncError(g, message);
     }
 }
+
+bool foreignKey(const UserError& e) { return e.kind == ErrorKind::ApiKeyRejected && e.details == kForeignKey; }
 
 bool unreachable(const UserError& e) {
     switch (e.kind) {

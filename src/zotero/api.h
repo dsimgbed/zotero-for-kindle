@@ -72,6 +72,7 @@ public:
     ZoteroApi(Http&, int64_t userId, std::string apiKey);
 
     void setSleeper(std::function<void(int seconds)>);
+    int64_t userId() const { return userId_; }  // the account the calls are made for
     // Shares another limiter (the sync worker's, which file downloads use too): one Backoff for all.
     void setRateLimiter(RateLimiter& r) { rate_ = &r; }
     void setOnWait(std::function<void(const UserError&)>);  // "Zotero asks to wait until HH:MM."

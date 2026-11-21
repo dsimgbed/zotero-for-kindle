@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 
 #include "app/accounts.h"
+#include "app/pin.h"
 #include "app/startup.h"
 #include "sync/config.h"
 #include "test_paths.h"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 using namespace zk;
 namespace fs = std::filesystem;
@@ -63,34 +65,79 @@ struct Kindle {
 
 }  // namespace
 
-TEST_CASE("startup drop: the same user as an account on the Kindle replaces only that account's key") {
+TEST_CASE("startup drop: the same user's key waits for Zotero's word; nothing changes before") {
     Kindle k({111, 222});
-    const std::string list = k.list(), first = k.credentials(111);
-    k.drop(R"({"userId":222,"apiKey":"new222"})");
+    const std::string list = k.list(), first = k.credentials(111), second = k.credentials(222);
+    const std::string dropped = R"({"userId":222,"apiKey":"new222"})";
+    k.drop(dropped);
     const Startup s = startupConfig(k.p);
-    CHECK(s.dropped == Startup::Dropped::KeyUpdated);
+    CHECK(s.dropped == Startup::Dropped::KeyPending);
     CHECK(s.droppedUser == 222);
     CHECK_FALSE(s.imported);
-    REQUIRE(loadCredentials(k.p, 222));
-    CHECK(loadCredentials(k.p, 222)->apiKey == "new222");
-    CHECK(loadCredentials(k.p, 222)->webdavUrl.empty());  // the dropped file is the account's settings, whole
-    CHECK(k.credentials(111) == first);  // nothing of another account
-    CHECK(k.list() == list);             // nothing else: the list as it was
-    CHECK_FALSE(fs::exists(k.p.droppedConfig));
-    CHECK_FALSE(fs::exists(k.p.configFile()));
+    CHECK(k.credentials(222) == second);  // not taken on the file's word
+    CHECK(k.credentials(111) == first);
+    CHECK(k.list() == list);
+    CHECK(readFile(k.p.droppedConfig) == dropped);  // left until Zotero says whose it is
     REQUIRE(s.config);
-    CHECK(s.config->userId == 111);  // the open account stays the active one
-    CHECK(s.config->apiKey == "key111");
+    CHECK(s.config->userId == 111);
+    REQUIRE(pendingDroppedKey(k.p));
+    CHECK(pendingDroppedKey(k.p)->apiKey == "new222");
 }
 
-TEST_CASE("startup drop: the active account's new key is the one it opens with") {
+TEST_CASE("startup drop: the same user's key is kept once Zotero says it is that user's, and only then") {
     Kindle k({111, 222});
-    k.drop(R"({"userId":111,"apiKey":"new111"})");
+    const std::string first = k.credentials(111), second = k.credentials(222);
+    const std::string dropped = R"({"userId":222,"apiKey":"new222"})";
+    k.drop(dropped);
+    std::vector<Config> asked;
+    auto says = [&](UserError answer) {
+        return [&asked, answer](const Config& c) {
+            asked.push_back(c);
+            return answer;
+        };
+    };
+    // Offline: nothing changes, the file waits.
+    CHECK(applyDroppedKey(k.p, says({ErrorKind::NoWifi, "No Wi-Fi.", "offline"})) == DroppedKey::Offline);
+    CHECK(k.credentials(222) == second);
+    CHECK(readFile(k.p.droppedConfig) == dropped);
+    // Another user's key (or none Zotero knows): refused, the file left, nothing changes.
+    CHECK(applyDroppedKey(k.p, says({ErrorKind::ApiKeyRejected, "This API key belongs to another Zotero user.",
+                                     "userID mismatch"})) == DroppedKey::Refused);
+    CHECK(k.credentials(222) == second);
+    CHECK(readFile(k.p.droppedConfig) == dropped);
+    // The owner's: kept, under its own user only; the file goes.
+    Config kept;
+    CHECK(applyDroppedKey(k.p, says({}), &kept) == DroppedKey::Applied);
+    CHECK(kept.userId == 222);
+    CHECK(loadCredentials(k.p, 222)->apiKey == "new222");
+    CHECK(k.credentials(111) == first);
+    CHECK_FALSE(fs::exists(k.p.droppedConfig));
+    REQUIRE(asked.size() == 3);
+    CHECK(asked.back().userId == 222);
+    CHECK(asked.back().apiKey == "new222");
+    // Nothing dropped: nothing asked.
+    CHECK(applyDroppedKey(k.p, says({})) == DroppedKey::None);
+    CHECK(asked.size() == 3);
+}
+
+TEST_CASE("startup drop: a key dropped for a PIN-locked account can't reset its PIN while unproved") {
+    Kindle k({111});
+    AccountPins pins(k.p.accountsFile(), [] { return int64_t{1'000'000}; }, [] { return int64_t{0}; });
+    REQUIRE(pins.setPin(111, "1234"));
+    k.drop(R"({"userId":111,"apiKey":"anything"})");
     const Startup s = startupConfig(k.p);
-    CHECK(s.dropped == Startup::Dropped::KeyUpdated);
-    REQUIRE(s.config);
-    CHECK(s.config->apiKey == "new111");
-    CHECK(loadCredentials(k.p, 222)->apiKey == "key222");
+    CHECK(s.dropped == Startup::Dropped::KeyPending);
+    CHECK(applyDroppedKey(k.p, [](const Config&) { return UserError{ErrorKind::NoWifi, "No Wi-Fi.", "offline"}; }) ==
+          DroppedKey::Offline);
+    CHECK(applyDroppedKey(k.p, [](const Config&) {
+              return UserError{ErrorKind::ApiKeyRejected, "This API key is invalid.", "HTTP 403"};
+          }) == DroppedKey::Refused);
+    // reset-pin.txt with that key: not this account's key, so no new PIN.
+    const auto stored = loadCredentials(k.p, 111);
+    REQUIRE(stored);
+    CHECK(stored->apiKey == "key111");
+    CHECK(pins.tryKey(111, *stored, "anything") != AccountPins::Result::Ok);
+    CHECK(pins.entry(111)->pin);
 }
 
 TEST_CASE("startup drop: a new user is added and listed; the open account stays open") {

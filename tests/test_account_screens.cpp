@@ -104,6 +104,7 @@ struct Rig {
         paths.deviceSettingsFile = (dir / "device.json").string();
         paths.dbPath = (dir / "zotero.db").string();
         paths.filesDir = (dir / "files").string();
+        paths.droppedConfig = (dir / "usb-config.json").string();
         fs::create_directories(paths.configDir);
         AccountsState st;
         st.active = accounts.front().first;
@@ -433,6 +434,57 @@ TEST_CASE("account screens: Add account with a new user's key adds it, switches 
     CHECK(k.entry(33)->name == "user33");
     CHECK(loadCredentials(k.paths, 33)->apiKey == "key33");
     CHECK_FALSE(fs::exists(k.paths.configFile()));  // Add account writes no config.json
+}
+
+TEST_CASE("account screens: a key dropped over USB for an account is kept only once Zotero says it is that account's") {
+    Rig k;
+    k.openAt(11);
+    auto drop = [&](const std::string& text) { std::ofstream(k.paths.droppedConfig) << text; };
+    auto answered = [&](const std::string& toast) {
+        return eventually([&] {
+            k.app.step(0);
+            k.ui->poll();
+            return k.app.lastToast() == toast;
+        }, 10000);
+    };
+    // Someone else's key, said to be Anna's: offline, nothing changes and it waits.
+    drop(R"({"userId":22,"apiKey":"key99"})");
+    k.ui->checkDroppedKey();
+    CHECK(k.app.lastToast() == "The key for Anna will be checked when Wi-Fi is on");
+    CHECK(loadCredentials(k.paths, 22)->apiKey == "key22");
+    CHECK(fs::exists(k.paths.droppedConfig));
+    // Online: Zotero says it isn't Anna's — refused, the file left, Anna's key as it was.
+    k.online = true;
+    k.ui->checkDroppedKey();
+    REQUIRE(answered("The key in config.json isn't Anna's, so it wasn't used"));
+    CHECK(loadCredentials(k.paths, 22)->apiKey == "key22");
+    CHECK(fs::exists(k.paths.droppedConfig));
+    // The open account's own key, with new WebDAV details: kept, the file gone.
+    drop(R"({"userId":11,"apiKey":"key11","webdavUrl":"https://dav.new/"})");
+    k.ui->checkDroppedKey();
+    REQUIRE(answered("The new key of Pavel from config.json is kept"));
+    CHECK(loadCredentials(k.paths, 11)->webdavUrl == "https://dav.new/");
+    CHECK(loadCredentials(k.paths, 22)->apiKey == "key22");
+    CHECK_FALSE(fs::exists(k.paths.droppedConfig));
+}
+
+TEST_CASE("account screens: a first account added from a dropped config.json leaves no config.json behind") {
+    Rig k({{11, "Pavel"}});
+    Config dropped;
+    dropped.userId = 33;
+    dropped.apiKey = "key33";
+    REQUIRE(saveConfig(k.paths.configDir, dropped));  // kept by startup for Setup (startup.h, FirstAccount)
+    k.app.push(k.ui->firstAccountSetup(dropped, true));
+    auto* setup = k.topAs<SetupScreen>();
+    REQUIRE(setup);
+    CHECK(setup->config().userId == 33);
+    setup->onGesture(tapOn(SetupScreen::connectRect()), k.app);
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        return k.session() && k.session()->userId() == 33 && !k.switcher->busy();
+    }, 10000));
+    CHECK(loadCredentials(k.paths, 33)->apiKey == "key33");
+    CHECK_FALSE(fs::exists(k.paths.configFile()));  // no second copy of the credentials
 }
 
 TEST_CASE("account screens: Update key refuses another user's key; the same user's new key is kept") {
