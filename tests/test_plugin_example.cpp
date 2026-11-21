@@ -863,6 +863,7 @@ TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and
     CHECK(pair.items[1].texts == Strings{"Another Paper", "Vaswani et al.", "67% · today"});
     const Block* twoUp = firstOf(*pair.items[0].block, Block::Kind::Cover);
     REQUIRE(twoUp);
+    const auto twoUpWidth = twoUp->widthPct;  // (the tree it is in goes with the next render)
 
     // Read: the next paper opened takes its place; an EPUB is a book whatever its type.
     d.lib.markRead("PAPR0002", true);
@@ -877,7 +878,7 @@ TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and
     REQUIRE(t.at("pair").items.size() == 1);
     const Block* alone = firstOf(*t.at("pair").items[0].block, Block::Kind::Cover);
     REQUIRE(alone);
-    CHECK(alone->widthPct < twoUp->widthPct);
+    CHECK(alone->widthPct < twoUpWidth);
 }
 
 TEST_CASE("example: Reading Desk — nothing opened of a kind: its first pin never opened and not read, UP NEXT, Not started; Pinned is a row of covers minus the pair") {

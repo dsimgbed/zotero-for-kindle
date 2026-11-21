@@ -23,6 +23,8 @@
 #include "fake_plugins.h"
 #include "fn_http.h"
 #include "open_guard.h"
+#include "docs/engine_factory.h"
+#include "plugins/fulltext.h"
 #include "plugins/host.h"
 #include "screens/account_error.h"
 #include "store/db.h"
@@ -360,4 +362,41 @@ TEST_CASE("session: the first account (Setup saved its config.json on a new inst
     REQUIRE_MESSAGE(s, why);
     CHECK(fs::exists(accountPaths(p, 11).dbPath));
     CHECK(fs::is_directory(accountPaths(p, 11).filesDir));
+}
+
+TEST_CASE("session: crengine's document cache goes with the session; the next account's EPUB full text never touches it") {
+    Device d;
+    d.account(11);
+    d.account(22);
+    const EngineEnv device{"third_party/crengine/cr3gui/data", {"assets/fonts-device"}, ""};
+    std::string why;
+    auto a = AccountSession::open(d.paths, d.entry(11), d.config(11), d.device, &why, d.deps());
+    REQUIRE(a);
+    const AccountPaths ap = a->paths();
+    {
+        // A's reader: crengine's cache is A's cache/cre while it reads.
+        UserError err;
+        auto engine = loadEngine(DocType::Epub, a->engineEnv(device), &err);
+        REQUIRE_MESSAGE(engine, err.message);
+        REQUIRE(engine->open("tests/data/epub/pride-and-prejudice.epub", &err));
+    }
+    CHECK(fs::exists(ap.creDir + "/cr3cache.inx"));
+    a->stop();
+    a.reset();
+    fs::remove_all(ap.root);  // A removed
+    auto b = AccountSession::open(d.paths, d.entry(22), d.config(22), d.device, &why, d.deps());
+    REQUIRE(b);
+    // A plugin's full text in B's session (its engine names no cache: the text is read with it off).
+    AttachmentRecord att;
+    att.key = "BOOK0001";
+    att.contentType = "application/epub+zip";
+    att.md5 = "abc123";
+    att.linkMode = "imported_file";
+    att.localPath = "tests/data/epub/pride-and-prejudice.epub";
+    att.state = AttachmentRecord::State::Local;
+    UserError err;
+    REQUIRE_MESSAGE(extractFullText(att, b->paths().fullTextDir, device, &err), err.message);
+    CHECK_FALSE(fs::exists(ap.root));  // not made again
+    b->stop();
+    CHECK_FALSE(fs::exists(ap.root));
 }

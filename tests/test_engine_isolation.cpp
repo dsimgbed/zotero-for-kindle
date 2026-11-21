@@ -33,12 +33,12 @@ EngineEnv testEnv() {
 
 }  // namespace
 
-TEST_CASE("engine isolation: the EPUB module exports only its factory") {
+TEST_CASE("engine isolation: the EPUB module exports only its factory and its document cache's close") {
     const char* env = std::getenv("ZK_LIB_DIR");
     const std::string dir = env ? env : "build-desktop";
     const std::string syms = exportedSymbols(dir + "/libzk-epub.so");
     INFO(syms);
-    int lines = 0, ours = 0;
+    int lines = 0, ours = 0, cacheClose = 0;
     std::istringstream ls(syms);
     for (std::string line; std::getline(ls, line);) {
         if (line.find(" T ") == std::string::npos && line.find(" D ") == std::string::npos &&
@@ -46,9 +46,11 @@ TEST_CASE("engine isolation: the EPUB module exports only its factory") {
             continue;  // only defined code/data symbols count
         ++lines;
         ours += line.find("zk_epub_engine_create") != std::string::npos;
+        cacheClose += line.find("zk_epub_doc_cache_close") != std::string::npos;
     }
     CHECK(ours == 1);
-    CHECK(lines == 1);
+    CHECK(cacheClose == 1);
+    CHECK(lines == 2);
 }
 
 TEST_CASE("engine isolation: the EPUB module loads and renders a page") {

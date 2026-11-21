@@ -295,11 +295,14 @@ endif
 
 # ---- Readers (Plan 4): each engine is a shared module loaded at runtime ---------------------
 # crengine and MuPDF bring their own static freetype/harfbuzz; inside a module linked
-# -Bsymbolic with a version script exporting only the factory, they never meet the firmware's
+# -Bsymbolic with a version script exporting only the factory (and the EPUB module's cache
+# close), they never meet the firmware's
 # copies that pango uses (spike README). The app links neither engine.
 module_link_args = []
+epub_link_args = []  # (the version script exports it on Linux)
 if host_machine.system() == 'darwin'
   module_link_args += ['-Wl,-exported_symbol,_zk_*_engine_create']
+  epub_link_args = ['-Wl,-exported_symbol,_zk_epub_doc_cache_close']  # the account session closes crengine's cache
 else
   module_link_args += ['-Wl,-Bsymbolic', '-Wl,--version-script=' + meson.project_source_root() / 'src/docs/zk-engine.map']
 endif
@@ -339,7 +342,7 @@ if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
     include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
     cpp_args : ['-fvisibility=hidden'],
     dependencies : [engine_crengine_dep],
-    link_args : module_link_args,
+    link_args : module_link_args + epub_link_args,
     install : true, install_dir : 'lib')
 endif
 

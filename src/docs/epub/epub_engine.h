@@ -13,6 +13,10 @@ namespace zk {
 
 class EpubDom;
 
+// crengine's document cache (one per process, the open account's cache/cre) closed: nothing is
+// written to it until an engine names a cache again (the account session's stop).
+void closeDocCache();
+
 class EpubEngine final : public DocumentEngine {
 public:
     explicit EpubEngine(const EngineEnv&);

@@ -72,7 +72,7 @@ public:
         if (off_) ldomDocCache::close();
     }
     ~DocCacheOff() {
-        if (off_) ldomDocCache::init(Utf8ToUnicode(lString8(docCacheDir().c_str())), kDocCacheBytes);
+        if (off_ && !docCacheDir().empty()) ldomDocCache::init(Utf8ToUnicode(lString8(docCacheDir().c_str())), kDocCacheBytes);
     }
     DocCacheOff(const DocCacheOff&) = delete;
     DocCacheOff& operator=(const DocCacheOff&) = delete;
@@ -146,6 +146,12 @@ bool looksLikeHtml(const std::string& path) {
 }
 
 }  // namespace
+
+void closeDocCache() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    if (ldomDocCache::enabled()) ldomDocCache::close();
+    docCacheDir().clear();
+}
 
 EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());

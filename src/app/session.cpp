@@ -7,6 +7,7 @@
 #include "app/device_settings.h"
 #include "app/settings_store.h"
 #include "core/log.h"
+#include "docs/engine_factory.h"
 #include "docs/render_worker.h"
 #include "sync/files_sweep.h"
 
@@ -140,6 +141,7 @@ void AccountSession::stop() {
     // Render workers end with their readers (the screens are left first); what is left finishes
     // its engine call here, before this account's files go away under it.
     RenderWorker::waitForAll(3000);
+    closeEngineDocCache();  // crengine's cache (this account's cache/cre) closed: no engine of it is left
     previews_.reset();
     homeTree_.reset();
     lib_.reset();
