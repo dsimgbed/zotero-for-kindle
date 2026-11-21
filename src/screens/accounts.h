@@ -41,8 +41,9 @@ std::string sizeText(int64_t bytes);
 class AccountsHost {
 public:
     virtual ~AccountsHost() = default;
-    // In their order; `withSizes`: also what each takes on the Kindle (walks its folder).
-    virtual std::vector<AccountSummary> accounts(bool withSizes = false) = 0;
+    // In their order (counts as each account's session last kept them; the open one's live).
+    // `measure`: that account's size on the Kindle too (walks its folder).
+    virtual std::vector<AccountSummary> accounts(int64_t measure = 0) = 0;
     virtual int64_t wallMs() = 0;
     virtual void switchTo(int64_t userId) = 0;  // the account switch (the PIN first, if it has one)
     virtual void addAccount(Nav&) = 0;          // Setup for another Zotero user

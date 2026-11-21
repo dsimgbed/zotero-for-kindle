@@ -35,6 +35,25 @@ std::string AccountSwitcher::nameOf(int64_t userId) const {
 bool AccountSwitcher::switchTo(int64_t userId, Why why) {
     if (busy() || userId <= 0) return false;
     if (session_ && session_->userId() == userId) return true;  // already open
+    // From an open account, a locked one's PIN first: wrong or cancelled, nothing was left.
+    if (session_ && unlockedAhead_ != userId && entryFor(userId).pin) {
+        if (!deps_.unlock) return false;
+        phase_ = Phase::Asking;
+        target_ = userId;
+        log(LogLevel::Info, "accounts: %lld's PIN, before switching", static_cast<long long>(userId));
+        deps_.unlock(userId, [this, userId, why](bool unlocked) {
+            if (phase_ != Phase::Asking || target_ != userId) return;  // a stale answer
+            phase_ = Phase::Idle;
+            if (!unlocked) {
+                log(LogLevel::Info, "accounts: %lld left locked; %lld stays open", static_cast<long long>(userId),
+                    static_cast<long long>(session_ ? session_->userId() : 0));
+                return;
+            }
+            unlockedAhead_ = userId;
+            switchTo(userId, why);
+        });
+        return true;
+    }
     target_ = userId;
     why_ = why;
     if (session_) previous_ = session_->userId();
@@ -69,8 +88,32 @@ void AccountSwitcher::skip() {
     app_.wakeAt(app_.nowMs());
 }
 
+bool AccountSwitcher::closeAll(std::string title, std::function<void()> then) {
+    if (busy()) return false;
+    phase_ = Phase::Closing;
+    closingTitle_ = std::move(title);
+    closed_ = std::move(then);
+    armed_ = false;
+    app_.clearTo(std::make_unique<SwitchingScreen>([this] { return view(); }, nullptr, [this](Nav&) { tick(); }));
+    if (session_ && leave_) leave_();
+    app_.defer([this] {  // the screens left are destroyed at the end of this step
+        armed_ = true;
+        app_.wakeAt(app_.nowMs());
+    });
+    return true;
+}
+
 void AccountSwitcher::tick() {
     const int64_t now = app_.nowMs();
+    if (phase_ == Phase::Closing) {
+        if (!armed_) return;
+        stopOld();
+        phase_ = Phase::Idle;
+        auto then = std::move(closed_);
+        closed_ = nullptr;
+        if (then) then();
+        return;
+    }
     if (phase_ == Phase::Leaving) {
         if (!armed_) return;
         SyncService* sync = session_ ? session_->sync() : nullptr;
@@ -96,7 +139,9 @@ void AccountSwitcher::proceed() {
     stopOld();  // 3.
     // 4. After the PIN, if the account has one.
     const AccountEntry e = entryFor(target_);
-    if (!e.pin) return open();
+    const bool askedAhead = unlockedAhead_ == target_;
+    unlockedAhead_ = 0;
+    if (!e.pin || askedAhead) return open();
     if (!deps_.unlock) return failed("it is locked and its PIN can't be asked here");
     phase_ = Phase::Unlocking;
     deps_.unlock(target_, [this, target = target_](bool unlocked) {
@@ -166,6 +211,10 @@ void AccountSwitcher::failed(const std::string& why) {
 
 SwitchingScreen::View AccountSwitcher::view() const {
     SwitchingScreen::View v;
+    if (phase_ == Phase::Closing) {
+        v.title = closingTitle_;
+        return v;
+    }
     v.title = "Switching to " + targetName_ + "…";
     if (phase_ == Phase::Pushing) {
         const int64_t left = std::max<int64_t>(0, (pushUntilMs_ - app_.nowMs() + 999) / 1000);

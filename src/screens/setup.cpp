@@ -49,6 +49,17 @@ UserError checkAccount(Http& http, const Config& c, std::string* name) {
     return {};
 }
 
+UserError checkKeyOwner(Http& http, const Config& c) {
+    ZoteroApi api(http, c.userId, c.apiKey);
+    api.setSleeper([](int) {});
+    UserError err;
+    auto key = api.keyInfo(&err);
+    if (!key) return err;
+    if (key->userId != c.userId)
+        return {ErrorKind::ApiKeyRejected, "This API key belongs to another Zotero user.", "userID mismatch"};
+    return {};
+}
+
 SetupScreen::SetupScreen(Config initial, bool imported, std::string configDir, Checker checker, Connected connected,
                          bool canGoBack)
     : imported_(imported), configDir_(std::move(configDir)), checker_(std::move(checker)), connected_(std::move(connected)),
@@ -136,7 +147,7 @@ void SetupScreen::onTick(Nav& nav) {
         return;
     }
     const Config c = config();
-    if (purpose_.kind == SetupPurpose::Kind::First && !saveConfig(configDir_, c)) {
+    if (purpose_.kind == SetupPurpose::Kind::First && purpose_.keepsConfigFile && !saveConfig(configDir_, c)) {
         error_ = UserError{ErrorKind::DiskFull, "Can't save the settings on the Kindle.", configDir_};
         nav.redrawAll(Waveform::Quality);
         return;

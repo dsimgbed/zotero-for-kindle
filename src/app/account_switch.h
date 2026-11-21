@@ -7,7 +7,8 @@
 //      ends it at once); what isn't sent stays queued in that account's library;
 //   3. the old session stops (downloads cancelled, plugin host, sync, workers, caches, library)
 //      and is destroyed;
-//   4. the new session is opened (after the PIN, if the account has one);
+//   4. the new session is opened (after the PIN, if the account has one; from an open account, the
+//      PIN is asked before step 1, so a wrong or cancelled PIN leaves the open account as it was);
 //   5. once it is open, `active` is written to accounts.json, its services start and its Home
 //      shows (main's onOpened).
 // `active` names only an account that opened, so a library that can't be opened is never the one
@@ -38,8 +39,9 @@ struct SwitcherDeps {
     SessionDeps session;                // what each session is opened with
     // The account's key (default: loadCredentials(paths, userId)).
     std::function<std::optional<Config>(int64_t userId)> credentials;
-    // Asks the account's PIN (Task 8's lock screen); answers true once unlocked, false if the user
-    // went elsewhere. Unset: an account with a PIN can't be opened.
+    // Asks the account's PIN (the lock: the PIN pad); answers true once unlocked, false if the user
+    // went elsewhere. Unset: an account with a PIN can't be opened. From an open account it is asked
+    // before anything is left; with none open (startup), before the account is opened.
     std::function<void(int64_t userId, std::function<void(bool unlocked)>)> unlock;
     // Whether the old account's changes can be sent now (default: session.wifiUp, else the device's).
     std::function<bool()> online;
@@ -68,6 +70,11 @@ public:
     // goes on from the Switching screen's ticks.
     bool switchTo(int64_t userId, Why);
     bool busy() const { return phase_ != Phase::Idle; }
+    // The open account left and stopped as a switch does (steps 1 and 3, without the push: every
+    // screen goes first, and the session stops a step later, once they are destroyed), then
+    // `then` (removing the last account: Setup). The Switching screen says `title`. False while a
+    // switch runs.
+    bool closeAll(std::string title, std::function<void()> then);
     // Skip on the Switching screen: the push ends now; the switch goes on.
     void skip();
     // Moves a running switch on: from every loop step (main's poll hook) and the Switching screen's
@@ -83,7 +90,7 @@ public:
     int64_t lastSwitchMs() const { return lastSwitchMs_; }
 
 private:
-    enum class Phase { Idle, Leaving, Pushing, Unlocking };
+    enum class Phase { Idle, Asking, Leaving, Pushing, Unlocking, Closing };
 
     void proceed();    // steps 3–5
     void stopOld();    // step 3
@@ -106,6 +113,9 @@ private:
     uint64_t pushRequest_ = 0;
     int64_t pushUntilMs_ = 0, startedMs_ = 0, lastSwitchMs_ = -1;
     bool skipped_ = false;
+    int64_t unlockedAhead_ = 0;  // its PIN was right before the switch began
+    std::string closingTitle_;
+    std::function<void()> closed_;
     bool armed_ = false;  // the screens left are gone: the Switching screen's ticks go on with it
     std::string targetName_, previousName_;
 };

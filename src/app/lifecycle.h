@@ -23,9 +23,16 @@ public:
     // Also called when the Kindle goes to the background (plugins' background tasks stop).
     void setOnBackground(std::function<void()> f) { onBackgroundExtra_ = std::move(f); }
     void setOnForeground(std::function<void()> f) { onForegroundExtra_ = std::move(f); }
-    // Lock on sleep (spec: multiple accounts, PIN): asked first thing as the Kindle goes to the
-    // background, so the screen it wakes to — repainted from what was last drawn — is the PIN pad.
-    void setLock(std::function<void()> f) { lock_ = std::move(f); }
+    // Lock on sleep (spec: multiple accounts, PIN), on real sleep only — not a system dialog or the
+    // keyboard: asked as the app goes to the background when `asleep` (the screensaver is up), so
+    // the screen the Kindle wakes to (repainted from what was last drawn) is the PIN pad; and, as a
+    // fallback, on coming back when `suspendedMs` grew meanwhile (the device suspended though the
+    // screensaver wasn't seen going up).
+    void setLock(std::function<void()> lock, std::function<bool()> asleep, std::function<int64_t()> suspendedMs = {}) {
+        lock_ = std::move(lock);
+        asleep_ = std::move(asleep);
+        suspendedMs_ = std::move(suspendedMs);
+    }
     void onBackground();
     void onForeground(int64_t nowMs);
     void onReading(bool reading);  // the reader (or one of its panels) shows, or stopped showing
@@ -39,6 +46,9 @@ private:
     std::function<void()> onBackgroundExtra_;
     std::function<void()> onForegroundExtra_;
     std::function<void()> lock_;
+    std::function<bool()> asleep_;
+    std::function<int64_t()> suspendedMs_;
+    int64_t suspendedAtBackground_ = 0;
     bool background_ = false, reading_ = false;
     void applyInterval();  // the setting's, unless asleep or reading (then none)
 };

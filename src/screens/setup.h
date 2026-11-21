@@ -22,6 +22,9 @@ namespace zk {
 // The checks behind Connect; ErrorKind::None when everything works. `name`: the key's Zotero
 // username (its display name when it has none), once the key is read.
 UserError checkAccount(Http&, const Config&, std::string* name = nullptr);
+// Only whose the key is: ErrorKind::None when Zotero says it is `c.userId`'s (details "userID
+// mismatch" when another user's; the key's other rights aren't asked).
+UserError checkKeyOwner(Http&, const Config& c);
 
 struct SetupPurpose {
     enum class Kind { First, Add, Update };
@@ -30,6 +33,9 @@ struct SetupPurpose {
     std::string name;    // Update: the account's
     // Add: the name of the account on this Kindle with this user ID ("" when there is none).
     std::function<std::string(int64_t userId)> present;
+    // First: the key is also written to config.json (a first setup, which the account layout takes
+    // in); not after the last account was removed (the account list is there).
+    bool keepsConfigFile = true;
 };
 
 class SetupScreen final : public Screen {

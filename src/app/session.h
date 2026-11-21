@@ -70,6 +70,12 @@ public:
     void stopServices();
     void stop();
 
+    // What the account sheet shows of it while it isn't open (items, unsent changes; `synced`: a
+    // good sync just ended, so also when), kept in its accounts.json entry. Also done by stop().
+    void keepSummary(bool synced);
+    int64_t itemCount();   // its libraries' top-level items, as the lists count them
+    int unsentCount();     // changes made on the Kindle a sync would still send
+
     // Not after stop().
     Library& library() { return *lib_; }
     PreviewCache& previews() { return *previews_; }
@@ -90,6 +96,7 @@ private:
     void startSync();
 
     AccountPaths paths_;
+    std::string accountsFile_;
     AccountEntry entry_;
     Config config_;
     DeviceSettings& device_;

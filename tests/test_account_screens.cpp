@@ -128,6 +128,7 @@ struct Rig {
         d.device = &device;
         d.session.makeHttp = [] { return std::make_unique<FnHttp>([](const HttpRequest&) { return HttpResponse{}; }); };
         d.session.wifiUp = [this] { return online.load(); };
+        d.session.wallMs = [this] { return wall.load(); };
         d.unlock = [this](int64_t id, std::function<void(bool)> done) { ui->unlock(id, std::move(done)); };
         app.setRoot(0, std::make_unique<SwitchingScreen>([] { return SwitchingScreen::View{"Zotero", "", false}; }, nullptr, nullptr));
         app.start();
@@ -209,7 +210,7 @@ struct Rig {
 // Settings → Accounts' data, as fixed values (the goldens).
 struct FakeHost final : AccountsHost {
     std::vector<AccountSummary> list;
-    std::vector<AccountSummary> accounts(bool) override { return list; }
+    std::vector<AccountSummary> accounts(int64_t) override { return list; }
     int64_t wallMs() override { return kWall; }
     void switchTo(int64_t) override {}
     void addAccount(Nav&) override {}
@@ -374,12 +375,8 @@ TEST_CASE("account screens: the sheet shows a locked account's name and lock onl
     Rig k({{11, "Pavel"}, {22, "Anna"}, {33, "Lena"}});
     k.setPin(22, "1234");
     k.openAt(11);
-    {  // Anna's library has something unsent: still nothing of it shows
-        Db db = Db::open(accountPaths(k.paths, 22).dbPath);
-        Library lib(db);
-        fillFixtureLibrary(lib, 6);
-        lib.markRead(fixtureKey("IT", 1), true);
-    }
+    // Anna's session kept what it had (items, something unsent): still nothing of it shows.
+    REQUIRE(keepAccountSummary(k.paths.accountsFile(), 22, 77, 2, kWall - 60'000));
     const AccountSheet sheet = k.ui->sheet();
     REQUIRE(sheet.rows().size() == 3);
     const auto& a = sheet.rows()[1];
@@ -599,7 +596,152 @@ TEST_CASE("account screens: Forgot PIN? — another account's key is refused, th
     CHECK(readAccounts(r.file)->accounts[1].backoff.misses == 2);
 }
 
+TEST_CASE("account screens: a typed key that isn't the one on the Kindle counts as a wrong try, offline, without an answer, or refused") {
+    PadRig r;
+    bool online = false;
+    UserError answer{ErrorKind::HostNotFound, "No connection to Zotero.", "curl 6"};
+    std::atomic<int> asked{0};
+    PinPadDeps d;
+    d.userId = 22;
+    d.name = "Anna";
+    d.pins = r.pins.get();
+    d.credentials = [] {
+        Config c;
+        c.userId = 22;
+        c.apiKey = "key22";
+        return std::optional<Config>(c);
+    };
+    d.checkKey = [&](const Config&) {
+        ++asked;
+        return answer;
+    };
+    d.online = [&] { return online; };
+    std::optional<Config> kept;
+    d.keepKey = [&](const Config& c) { kept = c; };
+    PinPadScreen pad(PinPadScreen::Purpose::Unlock, d);
+    pad.onShow(r.nav);
+    pad.onGesture(tapOn(pad.forgotRect()), r.nav);
+    pad.onGesture(tapOn(pad.typeKeyRect()), r.nav);
+    auto typeKey = [&](const std::string& key) {
+        for (int i = 0; i < 40; ++i) pad.onKey(KeyEvent{KeyEvent::Code::Backspace}, r.nav);
+        pad.onKey(KeyEvent{KeyEvent::Code::Text, key}, r.nav);
+        pad.onGesture(tapOn(pad.checkKeyRect()), r.nav);
+        REQUIRE(eventually([&] {
+            pad.onTick(r.nav);
+            return pad.message().rfind("Not the key on this Kindle", 0) != 0;
+        }));
+    };
+    auto misses = [&] { return readAccounts(r.file)->accounts[1].backoff.misses; };
+    typeKey("wrong1");  // offline: not even asked
+    CHECK(asked == 0);
+    CHECK(misses() == 1);
+    CHECK(pad.message() == "This key isn't this account's");
+    online = true;
+    typeKey("wrong2");  // asked, no answer
+    CHECK(asked == 1);
+    CHECK(misses() == 2);
+    CHECK(pad.message() == "This key isn't this account's");
+    answer = {ErrorKind::ApiKeyRejected, "This API key belongs to another Zotero user.", "userID mismatch"};
+    typeKey("wrong3");  // refused
+    CHECK(misses() == 3);
+    CHECK_FALSE(kept);
+    // A new key Zotero says is Anna's: kept, the wrong tries forgiven, Set a new PIN / Remove PIN.
+    answer = {};
+    typeKey("newkey22");
+    CHECK(pad.stage() == PinPadScreen::Stage::Reset);
+    REQUIRE(kept);
+    CHECK(kept->apiKey == "newkey22");
+    CHECK(kept->userId == 22);
+    CHECK(misses() == 0);
+}
+
+TEST_CASE("account screens: reset-pin.txt is deleted even while a wait runs, and counts nothing then") {
+    PadRig r;
+    PinPadScreen pad = r.pad();
+    pad.onShow(r.nav);
+    for (int i = 0; i < 6; ++i) r.type(pad, "0000");
+    REQUIRE(pad.waiting());
+    // (Forgot PIN? from a pad shown afresh, the wait still running)
+    PinPadScreen forgot = r.pad();
+    forgot.onShow(r.nav);
+    forgot.onGesture(tapOn(forgot.forgotRect()), r.nav);
+    std::ofstream(r.dir / "reset-pin.txt") << "key22";
+    forgot.onGesture(tapOn(forgot.checkFileRect()), r.nav);
+    CHECK_FALSE(fs::exists(r.dir / "reset-pin.txt"));
+    CHECK(forgot.stage() == PinPadScreen::Stage::Forgot);
+    CHECK(forgot.message().rfind("Wrong tries: put reset-pin.txt back and try again in ", 0) == 0);
+    CHECK(readAccounts(r.file)->accounts[1].backoff.misses == 6);
+}
+
 // ---- the lock --------------------------------------------------------------------------------------
+
+TEST_CASE("account screens: switching to a locked account asks its PIN over the open one; Back leaves it as it was; the right PIN switches") {
+    Rig k;
+    k.setPin(22, "2468");
+    k.openAt(11);
+    k.app.push(std::make_unique<AccountsScreen>(*k.ui));
+    Screen* list = k.top();
+    k.ui->switchTo(22);
+    k.app.step(0);
+    auto* pad = k.topAs<PinPadScreen>();
+    REQUIRE(pad);
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 11);
+    k.tap(headerBackRect());
+    CHECK_FALSE(k.app.locked());
+    CHECK(k.top() == list);  // nothing of Pavel was left
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 11);
+    CHECK_FALSE(k.switcher->busy());
+    k.ui->switchTo(22);
+    k.app.step(0);
+    k.typePin("2468");
+    REQUIRE(k.settle());
+    k.app.step(0);
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 22);
+    CHECK(k.homeOf() == 22);
+    CHECK_FALSE(k.app.locked());
+}
+
+TEST_CASE("account screens: the sheet shows an account that isn't open from the account list, never from its library") {
+    Rig k;
+    k.openAt(11);
+    fillFixtureLibrary(k.session()->library(), 6);
+    k.session()->library().markRead(fixtureKey("IT", 1), true);
+    const int64_t items = k.session()->itemCount();
+    REQUIRE(items > 0);
+    // A good sync: the summary kept, with when.
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::SyncFinished;
+    k.ui->onSyncEvent(done);
+    CHECK(k.entry(11)->itemCount == items);
+    CHECK(k.entry(11)->unsentCount == 1);
+    CHECK(k.entry(11)->syncedWallMs == kWall);
+    // Anna's library is never opened for the sheet (it doesn't even exist yet).
+    const AccountSheet sheet = k.ui->sheet();
+    CHECK(sheet.rows()[1].line == "0 items");
+    CHECK_FALSE(fs::exists(accountPaths(k.paths, 22).dbPath));
+    // Pavel left: what his session kept when it stopped is what the sheet shows of him.
+    k.session()->library().markRead(fixtureKey("IT", 2), true);
+    REQUIRE(k.switcher->switchTo(22, AccountSwitcher::Why::User));
+    REQUIRE(k.settle());
+    CHECK(k.entry(11)->unsentCount == 2);
+    for (const auto& row : k.ui->sheet().rows())
+        if (row.userId == 11) CHECK(row.line == thousands(items) + " items · 2 changes not sent");
+}
+
+TEST_CASE("account screens: Settings → Accounts' Manage… opens the list") {
+    Rig k({{11, "Pavel"}});
+    k.openAt(11);
+    Config c;
+    c.userId = 11;
+    k.app.push(std::make_unique<SettingsScreen>(c, [&](Nav& nav) { nav.push(std::make_unique<AccountsScreen>(*k.ui)); }));
+    k.tap(k.topAs<SettingsScreen>()->accountRect());
+    auto* list = k.topAs<AccountsScreen>();
+    REQUIRE(list);
+    CHECK(list->shown().size() == 1);
+}
 
 TEST_CASE("account screens: wake with Lock on sleep — the PIN pad covers the reader, which keeps its page once unlocked") {
     Rig k;
@@ -633,7 +775,20 @@ TEST_CASE("account screens: wake with Lock on sleep — the PIN pad covers the r
     SyncStatus status;
     Lifecycle lifecycle(k.nullSync, status, [] { return 10; }, [] { return true; });
     lifecycle.attach(k.app);
-    lifecycle.setLock([&] { k.ui->lockNow(); });
+    bool asleep = false;
+    lifecycle.setLock([&] { k.ui->lockNow(); }, [&] { return asleep; });
+    // A system dialog or the keyboard over the app (FocusOut): no lock.
+    InputEvent dialog;
+    dialog.kind = InputEvent::Kind::Background;
+    k.display.input.push_back(dialog);
+    k.app.step(0);
+    CHECK_FALSE(k.app.locked());
+    InputEvent back;
+    back.kind = InputEvent::Kind::Foreground;
+    k.display.input.push_back(back);
+    k.app.step(0);
+    CHECK(k.top() == r);
+    asleep = true;  // the screensaver
     InputEvent sleep;
     sleep.kind = InputEvent::Kind::Background;
     k.display.input.push_back(sleep);
@@ -657,6 +812,32 @@ TEST_CASE("account screens: wake with Lock on sleep — the PIN pad covers the r
     }));
     CHECK(r->page() == 3);
     RenderWorker::waitForAll(3000);
+}
+
+TEST_CASE("account screens: a suspend not seen as the app went to the background still locks on coming back") {
+    Rig k;
+    k.setPin(11, "1357");
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    k.app.step(0);
+    k.typePin("1357");
+    REQUIRE(k.settle());
+    SyncStatus status;
+    Lifecycle lifecycle(k.nullSync, status, [] { return 10; }, [] { return true; });
+    lifecycle.attach(k.app);
+    int64_t suspended = 5'000;
+    lifecycle.setLock([&] { k.ui->lockNow(); }, [] { return false; }, [&] { return suspended; });
+    InputEvent away;
+    away.kind = InputEvent::Kind::Background;
+    k.display.input.push_back(away);
+    k.app.step(0);
+    CHECK_FALSE(k.app.locked());
+    suspended += 600'000;  // the Kindle slept ten minutes meanwhile
+    InputEvent back;
+    back.kind = InputEvent::Kind::Foreground;
+    k.display.input.push_back(back);
+    k.app.step(0);
+    CHECK(k.app.locked());
+    CHECK(k.topAs<PinPadScreen>());
 }
 
 TEST_CASE("account screens: Lock on sleep off, or no PIN — waking shows what was there") {
@@ -753,17 +934,35 @@ TEST_CASE("account screens: a locked account can be removed without its PIN, beh
     CHECK_FALSE(fs::exists(accountPaths(k.paths, 22).root));
 }
 
-TEST_CASE("account screens: removing the last account closes it and leaves Setup for a first account") {
+TEST_CASE("account screens: removing the last account leaves every screen (a reader too) before its session stops, and leaves Setup for a first account") {
     Rig k({{11, "Pavel"}});
     k.openAt(11);
+    fillFixtureLibrary(k.session()->library(), 12);
+    std::optional<ItemRow> row;
+    for (const auto& r : k.app.library().rows(ListQuery{}))
+        if (!r.attachmentKey.empty() && !row) row = r;
+    REQUIRE(row);
+    auto reader = std::make_unique<ReaderScreen>(*row, "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+    }, 6);
+    ReaderScreen* r = reader.get();
+    k.app.push(std::move(reader));
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        return r->ready();
+    }));
     k.app.push(std::make_unique<RemoveAccountScreen>(*k.ui, 11));
-    k.tap(k.topAs<RemoveAccountScreen>()->removeRect());
+    k.top()->onGesture(tapOn(k.topAs<RemoveAccountScreen>()->removeRect()), k.app);
+    CHECK(k.session());  // the screens go first; the session a step later
+    CHECK(k.switcher->busy());
+    REQUIRE(k.settle());
     k.app.step(0);
     CHECK(k.noAccounts == 1);
     CHECK_FALSE(k.session());
     auto* setup = k.topAs<SetupScreen>();
     REQUIRE(setup);
-    CHECK(setup->purpose().kind == SetupPurpose::Kind::Add);
+    CHECK(setup->purpose().kind == SetupPurpose::Kind::First);  // "Set up Zotero", as on an empty Kindle
+    CHECK_FALSE(setup->purpose().keepsConfigFile);
     CHECK(setup->config().userId == 0);  // empty, not the removed account's key
     CHECK_FALSE(fs::exists(accountPaths(k.paths, 11).root));
     CHECK_FALSE(fs::exists(k.paths.credentialsFile(11)));

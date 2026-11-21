@@ -209,6 +209,12 @@ void AccountPins::missed(int64_t userId) {
 
 void AccountPins::miss(int64_t userId) { missed(userId); }
 
+void AccountPins::keyProved(int64_t userId) {
+    monoUntil_.erase(userId);
+    if (!update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); }))
+        log(LogLevel::Error, "accounts: can't clear the wrong tries of %lld", static_cast<long long>(userId));
+}
+
 AccountPins::Result AccountPins::tryPin(int64_t userId, const std::string& pin) {
     const auto e = entry(userId);
     if (!e) return Result::Failed;
@@ -218,7 +224,8 @@ AccountPins::Result AccountPins::tryPin(int64_t userId, const std::string& pin) 
         missed(userId);
         return Result::Wrong;
     }
-    if (e->backoff.misses > 0) update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); });
+    if (e->backoff.misses > 0 && !update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); }))
+        log(LogLevel::Error, "accounts: can't clear the wrong tries of %lld", static_cast<long long>(userId));
     monoUntil_.erase(userId);
     return Result::Ok;
 }
@@ -230,7 +237,8 @@ AccountPins::Result AccountPins::tryKey(int64_t userId, const Config& stored, co
         missed(userId);
         return Result::Wrong;
     }
-    update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); });
+    if (!update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); }))
+        log(LogLevel::Error, "accounts: can't clear the wrong tries of %lld", static_cast<long long>(userId));
     monoUntil_.erase(userId);
     return Result::Ok;
 }

@@ -34,6 +34,9 @@ struct AccountsUiDeps {
     std::function<bool()> online;           // default: the device's Wi-Fi
     // checkAccount over the network; `name`: the key's Zotero username.
     std::function<UserError(const Config&, std::string* name)> checkKey;
+    // Whose a key is, asked of Zotero (checkKeyOwner): a typed reset key that may be the account's
+    // new one. Default: checkKey.
+    std::function<UserError(const Config&)> keyOwner;
     std::function<std::optional<Config>(int64_t userId)> credentials;  // default: loadCredentials
     // The open account's key changed (Update key, or a new key proving a forgotten PIN): its sync
     // starts again with it.
@@ -47,7 +50,7 @@ public:
     AccountsUi(App&, AccountSwitcher&, AccountsUiDeps);
 
     // AccountsHost
-    std::vector<AccountSummary> accounts(bool withSizes = false) override;
+    std::vector<AccountSummary> accounts(int64_t measure = 0) override;
     int64_t wallMs() override { return deps_.wallMs(); }
     void switchTo(int64_t userId) override;
     void addAccount(Nav&) override;
@@ -67,7 +70,7 @@ public:
     // main's onOpened, after the services started: a removal waiting for the switch away from the
     // account ends; an account just added syncs.
     void opened(AccountSession&);
-    // A sync of the open account finished well: when, kept in its library (the sheet's "synced … ago").
+    // A sync of the open account finished well: its summary (and when) kept in accounts.json.
     void onSyncEvent(const SyncEvent&);
 
     // Home: the chip (the open account's name with two accounts or more, else ""), its sheet, and
@@ -79,7 +82,6 @@ public:
     std::unique_ptr<Screen> firstAccountSetup();
 
     AccountPins& pins() { return pins_; }
-    static constexpr const char* kSyncedKey = "accounts.syncedWallMs";
 
 private:
     // `useAnother` (the lock's): Use another account, offering the other accounts.

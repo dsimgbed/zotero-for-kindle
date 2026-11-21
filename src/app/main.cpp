@@ -868,6 +868,10 @@ int main(int argc, char** argv) {
         CurlHttp http(kCaBundle);
         return checkAccount(http, c, name);
     };
+    accountsDeps.keyOwner = [](const Config& c) {
+        CurlHttp http(kCaBundle);
+        return checkKeyOwner(http, c);
+    };
     accountsDeps.keyChanged = [&](const Config& c) {
         config = c;
         status.reset();
@@ -910,7 +914,7 @@ int main(int argc, char** argv) {
                             return storageAvailable(s ? s->paths().filesDir : usbDir);  // the USB storage
                         });
     lifecycle.attach(app);
-    lifecycle.setLock([&] { accountsUi->lockNow(); });  // Lock on sleep: the PIN pad is what the Kindle wakes to
+    lifecycle.setLock([&] { accountsUi->lockNow(); }, [&lipc] { return deviceAsleep(*lipc); }, suspendedMs);  // Lock on sleep: the PIN pad is what the Kindle wakes to
     lifecycle.setOnBackground([&] {
         backgroundRound.onSleep();  // sleeping cuts background tasks short
         if (plugins) plugins->setBackground(true);  // and plugins' timers wait for the foreground

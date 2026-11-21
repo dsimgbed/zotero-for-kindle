@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "app/accounts.h"
 #include "screens/remove_account.h"
 #include "screens/sync_status.h"
 #include "ui/metrics.h"
@@ -64,7 +65,7 @@ Rect AccountsScreen::rowRect(size_t i) const {
 }
 
 Rect AccountsScreen::addRect() const {
-    if (accounts_.size() >= 3) return {};
+    if (accounts_.size() >= kMaxAccounts) return {};
     return {kMargin, rowRect(accounts_.size()).y + 50, W() - 2 * kMargin, 100};
 }
 
@@ -87,8 +88,8 @@ void AccountsScreen::draw(Canvas& canvas) {
         const int nameW = std::min(measureText(name, nameStyle, r.w - 200, 1).width, r.w - 200);
         drawText(cr, name, nameStyle, {r.x + 50, r.y + 30, r.w - 200, 60}, 1);
         if (a.locked) lockIcon(cr, r.x + 50 + nameW + 44, r.y + 66, kSecondary, 0.8);
-        const std::string line = a.locked ? "Locked" : (a.active ? "Open · " : "") + accountLine(a, nowWall_);
-        drawText(cr, line, kValue, {r.x + 50, r.y + 96, r.w - 150, 50}, 1);
+        if (!a.locked)  // a locked one: its name and the lock only
+            drawText(cr, (a.active ? "Open · " : "") + accountLine(a, nowWall_), kValue, {r.x + 50, r.y + 96, r.w - 150, 50}, 1);
         centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {r.x + r.w - 30, r.y, 30, r.h}, Align::Right);
     }
     if (const Rect add = addRect(); !add.empty()) {
@@ -113,7 +114,7 @@ AccountPageScreen::AccountPageScreen(AccountsHost& host, int64_t userId) : host_
 
 void AccountPageScreen::onShow(Nav& nav) {
     gone_ = true;
-    for (auto& a : host_.accounts(true))
+    for (auto& a : host_.accounts(userId_))
         if (a.userId == userId_) {
             account_ = a;
             gone_ = false;

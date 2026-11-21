@@ -25,7 +25,7 @@ int64_t systemWallMs() {
 }  // namespace
 
 AccountSession::AccountSession(const Paths& p, const AccountEntry& e, const Config& c, DeviceSettings& device, SessionDeps deps)
-    : paths_(accountPaths(p, e.userId)), entry_(e), config_(c), device_(device), deps_(std::move(deps)) {
+    : paths_(accountPaths(p, e.userId)), accountsFile_(p.accountsFile()), entry_(e), config_(c), device_(device), deps_(std::move(deps)) {
     if (!deps_.wallMs) deps_.wallMs = systemWallMs;
 }
 
@@ -134,10 +134,33 @@ void AccountSession::stopServices() {
     sync_.reset();
 }
 
+int64_t AccountSession::itemCount() {
+    int64_t n = 0;
+    for (const auto& l : lib_->libraries(false)) n += l.items;
+    return n;
+}
+
+int AccountSession::unsentCount() {
+    int n = 0;
+    for (const auto& l : lib_->libraries(true)) n += lib_->libraryRemovalCheck(l.id).unsent;
+    return n;
+}
+
+void AccountSession::keepSummary(bool synced) {
+    if (!lib_) return;
+    try {
+        if (!keepAccountSummary(accountsFile_, entry_.userId, itemCount(), unsentCount(), synced ? deps_.wallMs() : 0))
+            log(LogLevel::Warn, "account %lld: its summary isn't kept in the account list", static_cast<long long>(entry_.userId));
+    } catch (const DbError& e) {
+        log(LogLevel::Warn, "account %lld: no summary kept: %s", static_cast<long long>(entry_.userId), e.what());
+    }
+}
+
 void AccountSession::stop() {
     if (stopped_) return;
     stopped_ = true;
     stopServices();
+    keepSummary(false);  // what the sheet shows of it from now on (the sync is stopped: its last word is in)
     // Render workers end with their readers (the screens are left first); what is left finishes
     // its engine call here, before this account's files go away under it.
     RenderWorker::waitForAll(3000);

@@ -9,7 +9,6 @@
 #include "net/errors.h"
 #include "screens/setup.h"
 #include "screens/switching.h"
-#include "store/db.h"
 #include "store/library.h"
 
 namespace zk {
@@ -26,13 +25,6 @@ int64_t systemWallMs() {
 std::vector<AccountEntry> inOrder(std::vector<AccountEntry> list) {
     std::stable_sort(list.begin(), list.end(), [](const AccountEntry& a, const AccountEntry& b) { return a.order < b.order; });
     return list;
-}
-
-// What a library shows of itself on the account screens.
-void countsOf(Library& lib, AccountSummary& a) {
-    for (const auto& l : lib.libraries(false)) a.items += l.items;
-    for (const auto& l : lib.libraries(true)) a.unsent += lib.libraryRemovalCheck(l.id).unsent;
-    a.syncedWallMs = std::atoll(lib.metaValue(AccountsUi::kSyncedKey).c_str());
 }
 
 int64_t folderBytes(const std::string& dir) {
@@ -61,6 +53,11 @@ AccountsUi::AccountsUi(App& app, AccountSwitcher& switcher, AccountsUiDeps deps)
       pins_(deps_.paths.accountsFile(), deps_.wallMs ? deps_.wallMs : systemWallMs, [&app] { return app.nowMs(); }) {
     if (!deps_.wallMs) deps_.wallMs = systemWallMs;
     if (!deps_.online) deps_.online = [] { return probeNetState().wifiConnected; };
+    if (!deps_.keyOwner && deps_.checkKey)
+        deps_.keyOwner = [check = deps_.checkKey](const Config& c) {
+            std::string name;
+            return check(c, &name);
+        };
     if (!deps_.credentials) deps_.credentials = [paths = deps_.paths](int64_t id) { return loadCredentials(paths, id); };
 }
 
@@ -76,7 +73,9 @@ std::string AccountsUi::nameOf(int64_t userId) {
     return accountName(a);
 }
 
-std::vector<AccountSummary> AccountsUi::accounts(bool withSizes) {
+// From accounts.json only (each session keeps its summary there), except the open account's,
+// read from its open library: no other account's library is ever opened to show it.
+std::vector<AccountSummary> AccountsUi::accounts(int64_t measure) {
     std::vector<AccountSummary> out;
     const auto st = readAccounts(deps_.paths.accountsFile());
     if (!st) return out;
@@ -90,20 +89,19 @@ std::vector<AccountSummary> AccountsUi::accounts(bool withSizes) {
         a.lockOnSleep = e.lockOnSleep;
         a.locked = a.hasPin && !a.active;  // nothing of it until its PIN
         if (!a.locked) {
-            const AccountPaths p = accountPaths(deps_.paths, e.userId);
-            try {
-                if (a.active) {
-                    countsOf(switcher_.session()->library(), a);
-                } else if (fs::exists(p.dbPath)) {  // read and closed again; it isn't open anywhere else
-                    Db db = Db::open(p.dbPath);
-                    Library lib(db);
-                    countsOf(lib, a);
+            a.items = e.itemCount;
+            a.unsent = e.unsentCount;
+            a.syncedWallMs = e.syncedWallMs;
+            if (a.active) {
+                try {
+                    a.items = switcher_.session()->itemCount();
+                    a.unsent = switcher_.session()->unsentCount();
+                } catch (const std::exception& ex) {
+                    log(LogLevel::Warn, "accounts: can't count the open library: %s", ex.what());
                 }
-            } catch (const std::exception& ex) {
-                log(LogLevel::Warn, "accounts: can't read the library of %lld: %s", static_cast<long long>(e.userId), ex.what());
             }
             a.keyLine = keyLineOf(deps_.credentials(e.userId), e.userId);
-            if (withSizes) a.bytes = folderBytes(p.root);
+            if (measure == e.userId) a.bytes = folderBytes(accountPaths(deps_.paths, e.userId).root);
         }
         out.push_back(std::move(a));
     }
@@ -129,7 +127,16 @@ std::unique_ptr<Screen> AccountsUi::addSetup(bool canGoBack) {
     return setup;
 }
 
-std::unique_ptr<Screen> AccountsUi::firstAccountSetup() { return addSetup(false); }
+std::unique_ptr<Screen> AccountsUi::firstAccountSetup() {
+    auto name = std::make_shared<std::string>();
+    auto check = [check = deps_.checkKey, name](const Config& c) { return check ? check(c, name.get()) : UserError{}; };
+    auto connected = [this, name](const Config& c, Nav&) { app_.defer([this, c, n = *name] { added(c, n); }); };
+    auto setup = std::make_unique<SetupScreen>(Config{}, false, deps_.paths.configDir, check, connected, false);
+    SetupPurpose p;  // as at first: no account on the Kindle; no config.json (the account list is there)
+    p.keepsConfigFile = false;
+    setup->setPurpose(std::move(p));
+    return setup;
+}
 
 void AccountsUi::addAccount(Nav& nav) {
     const auto st = readAccounts(deps_.paths.accountsFile());
@@ -199,11 +206,8 @@ std::unique_ptr<PinPadScreen> AccountsUi::pad(int64_t userId, PinPadScreen::Purp
     d.pins = &pins_;
     d.credentials = [this, userId] { return deps_.credentials(userId); };
     d.resetFile = deps_.resetFile;
-    if (deps_.checkKey)
-        d.checkKey = [check = deps_.checkKey](const Config& c) {
-            std::string name;
-            return check(c, &name);
-        };
+    d.checkKey = deps_.keyOwner;
+    d.online = deps_.online;
     d.keepKey = [this](const Config& c) { keepKey(c); };
     d.done = std::move(done);
     d.back = std::move(back);
@@ -231,6 +235,23 @@ std::vector<AccountSheet::Row> AccountsUi::rowsExcept(int64_t userId) {
 }
 
 void AccountsUi::unlock(int64_t userId, std::function<void(bool)> done) {
+    // Not unlocked: a removal waiting for this switch doesn't happen either (and says so).
+    auto notUnlocked = [this, done] {
+        if (removing_) {
+            app_.toast(nameOf(removing_) + " wasn't removed");
+            removing_ = 0;
+        }
+        done(false);
+    };
+    // From an open account (asked before the switch begins) the pad can go back to it.
+    std::function<void(Nav&)> back;
+    if (openUserId())
+        back = [this, notUnlocked](Nav&) {
+            app_.defer([this, notUnlocked] {
+                app_.unlock();
+                notUnlocked();
+            });
+        };
     app_.lock(pad(
         userId, PinPadScreen::Purpose::Unlock,
         [this, done](Nav&) {
@@ -239,10 +260,11 @@ void AccountsUi::unlock(int64_t userId, std::function<void(bool)> done) {
                 done(true);
             });
         },
-        nullptr,
-        [this, done](int64_t other, Nav&) {  // this one stays closed; the switch goes to the one chosen
-            app_.defer([this, done, other] {
-                done(false);
+        std::move(back),
+        [this, notUnlocked](int64_t other, Nav&) {  // this one stays closed; the switch goes to the one chosen
+            app_.defer([this, notUnlocked, other] {
+                app_.unlock();
+                notUnlocked();
                 switcher_.switchTo(other, AccountSwitcher::Why::User);
             });
         }));
@@ -290,16 +312,19 @@ void AccountsUi::remove(Nav& nav, int64_t userId) {
         for (const auto& e : inOrder(st->accounts))
             if (e.userId != userId) others.push_back(e);
     if (!others.empty()) {  // it goes once the next one is open (the switch stops it first)
+        // An account without a PIN first: no other account's PIN in the way of a removal.
+        const auto unlocked = std::find_if(others.begin(), others.end(), [](const AccountEntry& e) { return !e.pin; });
         removing_ = userId;
-        if (!switcher_.switchTo(others.front().userId, AccountSwitcher::Why::Remove)) removing_ = 0;
+        if (!switcher_.switchTo((unlocked != others.end() ? *unlocked : others.front()).userId, AccountSwitcher::Why::Remove))
+            removing_ = 0;
         return;
     }
-    // The last one: every screen left, its session stopped, then it goes; Setup takes its place.
-    app_.clearTo(std::make_unique<SwitchingScreen>([name] { return SwitchingScreen::View{"Removing " + name + "…", "", false}; },
-                                                   nullptr, nullptr));
-    switcher_.close();
-    if (!removeAccount(deps_.paths, userId)) log(LogLevel::Error, "accounts: %lld can't be removed", static_cast<long long>(userId));
-    if (deps_.noAccount) deps_.noAccount(firstAccountSetup());
+    // The last one: every screen left and destroyed, its session stopped (as a switch does), then
+    // it goes; Setup for a first account takes its place.
+    switcher_.closeAll("Removing " + name + "…", [this, userId] {
+        if (!removeAccount(deps_.paths, userId)) log(LogLevel::Error, "accounts: %lld can't be removed", static_cast<long long>(userId));
+        if (deps_.noAccount) deps_.noAccount(firstAccountSetup());
+    });
 }
 
 void AccountsUi::finishRemoval() {
@@ -311,7 +336,10 @@ void AccountsUi::finishRemoval() {
 }
 
 void AccountsUi::opened(AccountSession& s) {
-    if (removing_ == s.userId()) removing_ = 0;  // it was opened again instead (the error screen's choice)
+    if (removing_ == s.userId()) {  // it was opened again instead (the error screen's choice)
+        app_.toast(nameOf(removing_) + " wasn't removed");
+        removing_ = 0;
+    }
     if (removing_) finishRemoval();
     if (added_ == s.userId()) {
         added_ = 0;
@@ -321,7 +349,7 @@ void AccountsUi::opened(AccountSession& s) {
 
 void AccountsUi::onSyncEvent(const SyncEvent& e) {
     if (e.kind != SyncEvent::Kind::SyncFinished || e.error) return;
-    if (AccountSession* s = switcher_.session()) s->library().setMetaValue(kSyncedKey, std::to_string(deps_.wallMs()));
+    if (AccountSession* s = switcher_.session()) s->keepSummary(true);
 }
 
 // ---- Home --------------------------------------------------------------------------------------------

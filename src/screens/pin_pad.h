@@ -32,8 +32,11 @@ struct PinPadDeps {
     // The account's key on the Kindle (Forgot PIN?'s proof is compared with it).
     std::function<std::optional<Config>()> credentials;
     std::string resetFile;  // <USB>/zotero/reset-pin.txt
-    // Online: whether a typed key is this user's (checkAccount); unset: typed keys are compared offline only.
+    // Whose a typed key is, asked of Zotero (checkKeyOwner): a key that isn't the one on the Kindle
+    // counts as a wrong try at once; Zotero saying it is this user's (a new key) only takes it back.
+    // Unset, or offline (`online` false): typed keys are compared offline only.
     std::function<UserError(const Config&)> checkKey;
+    std::function<bool()> online;
     // A new key Zotero confirmed for this user: kept as the account's key.
     std::function<void(const Config&)> keepKey;
     std::function<void(Nav&)> done;  // unlocked; the PIN set, changed or removed; the PIN was right

@@ -52,6 +52,11 @@ struct AccountEntry {
     std::optional<PinHash> pin;
     bool lockOnSleep = false;
     PinBackoff backoff;
+    // What the account sheet shows of an account that isn't open, kept by its session after each
+    // good sync and when it stops (so nothing of another account's library is opened to show it).
+    int64_t itemCount = 0;
+    int unsentCount = 0;
+    int64_t syncedWallMs = 0;  // the last good sync (0: not known)
 };
 
 struct AccountsState {
@@ -80,5 +85,8 @@ bool addAccount(const Paths&, int64_t userId, const std::string& name);
 // half-deleted library), then its entry and its credentials go, then the folder is deleted.
 // `active` moves to the first account left (0: none). The account must not be open.
 bool removeAccount(const Paths&, int64_t userId);
+// The account's summary (itemCount, unsentCount, and syncedWallMs when `syncedWallMs` > 0) written
+// into its entry; false when it isn't listed or the list can't be written.
+bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs);
 
 }  // namespace zk

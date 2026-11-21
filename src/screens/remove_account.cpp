@@ -22,7 +22,7 @@ RemoveAccountScreen::RemoveAccountScreen(AccountsHost& host, int64_t userId) : h
 }
 
 void RemoveAccountScreen::load() {
-    for (auto& a : host_.accounts(true))
+    for (auto& a : host_.accounts(userId_))
         if (a.userId == userId_) account_ = a;
     online_ = host_.online();
 }

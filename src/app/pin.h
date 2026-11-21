@@ -53,8 +53,10 @@ public:
     Result tryPin(int64_t userId, const std::string& pin);
     // The forgotten-PIN proof: `key` is the account's API key (`stored`: its credentials).
     Result tryKey(int64_t userId, const Config& stored, const std::string& key);
-    // A miss of another kind (a typed key Zotero said isn't this account's).
+    // A miss of another kind.
     void miss(int64_t userId);
+    // Zotero said a typed key is the account's (its new key): the owner is proved; misses forgotten.
+    void keyProved(int64_t userId);
     // Hashes and keeps the PIN (Lock on sleep turned on when it had none); false if it can't.
     bool setPin(int64_t userId, const std::string& pin);
     bool removePin(int64_t userId);

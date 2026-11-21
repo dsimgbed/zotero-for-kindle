@@ -151,13 +151,16 @@ void PinPadScreen::onTick(Nav& nav) {
     const Config c = *checking_;
     checking_.reset();
     if (verdict.kind == ErrorKind::None) {
-        // Zotero says the key is this user's: it is the account's key from now on, and the proof.
+        // Zotero says the key is this user's: the account's new key, kept, and the proof (the wrong
+        // try it was counted as is forgiven).
         if (deps_.keepKey) deps_.keepKey(c);
-        if (deps_.pins->tryKey(deps_.userId, c, c.apiKey) == AccountPins::Result::Ok) return to(Stage::Reset, nav);
+        deps_.pins->keyProved(deps_.userId);
+        keyAccepted();
+        return to(Stage::Reset, nav);
     }
-    const bool notTheirs = verdict.kind == ErrorKind::ApiKeyRejected && verdict.details.rfind("access.", 0) != 0;
-    if (notTheirs) deps_.pins->miss(deps_.userId);
-    message_ = notTheirs ? kNotThisAccount : verdict.message;
+    // Not this user's, or no answer: the wrong try counted already stands.
+    message_ = kNotThisAccount;
+    if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) message_ += ". Try again in " + waitText(wait);
     messageIsError_ = true;
     waitShownS_ = -1;
     refreshWait(nav);
@@ -416,14 +419,14 @@ void PinPadScreen::submit(Nav& nav) {
 
 void PinPadScreen::checkFile(Nav& nav) {
     messageIsError_ = true;
-    if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) {  // the file stays for then
-        message_ = "Wrong tries: try again in " + waitText(wait);
+    const std::optional<std::string> key = takeResetKey(deps_.resetFile);  // gone now, match or not, wait or not
+    if (!key) {
+        message_ = "There's no reset-pin.txt in the zotero folder.";
         nav.redrawAll(Waveform::Ui);
         return;
     }
-    const std::optional<std::string> key = takeResetKey(deps_.resetFile);  // gone now, match or not
-    if (!key) {
-        message_ = "There's no reset-pin.txt in the zotero folder.";
+    if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) {  // not even looked at
+        message_ = "Wrong tries: put reset-pin.txt back and try again in " + waitText(wait);
         nav.redrawAll(Waveform::Ui);
         return;
     }
@@ -451,24 +454,26 @@ void PinPadScreen::checkTypedKey(Nav& nav) {
         return;
     }
     const Config stored = deps_.credentials ? deps_.credentials().value_or(Config{}) : Config{};
-    if (keyMatches(stored, typed) || !deps_.checkKey) {
-        if (deps_.pins->tryKey(deps_.userId, stored, typed) == AccountPins::Result::Ok) {
-            keyAccepted();
-            return to(Stage::Reset, nav);
-        }
-        message_ = kNotThisAccount;
-        if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) message_ += ". Try again in " + waitText(wait);
+    // Not the key on the Kindle: a wrong try, counted now whatever Zotero says (or doesn't) later.
+    if (deps_.pins->tryKey(deps_.userId, stored, typed) == AccountPins::Result::Ok) {
+        keyAccepted();
+        return to(Stage::Reset, nav);
+    }
+    message_ = kNotThisAccount;
+    if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) message_ += ". Try again in " + waitText(wait);
+    if (!deps_.checkKey || (deps_.online && !deps_.online())) {
         nav.redrawAll(Waveform::Ui);
         return;
     }
-    // Perhaps a key made new on zotero.org since: Zotero says whose it is.
+    // Perhaps a key made new on zotero.org since: Zotero says whose it is (only that rescues it).
+    message_ = "Not the key on this Kindle: asking Zotero whether it's a new key of " + deps_.name + "…";
+    messageIsError_ = false;
     Config c = stored;
     c.userId = deps_.userId;
     c.apiKey = typed;
     checking_ = c;
     auto check = std::make_shared<Check>();
     pending_ = check;
-    message_.clear();
     std::thread([check, checker = deps_.checkKey, c] {
         UserError r = checker(c);
         {

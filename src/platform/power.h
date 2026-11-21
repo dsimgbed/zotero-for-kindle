@@ -4,6 +4,7 @@
 
 #include "platform/lipc.h"
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 
@@ -28,6 +29,13 @@ struct KeepAwakeScope {
     KeepAwakeScope& operator=(const KeepAwakeScope&) = delete;
     KeepAwake& keep;
 };
+
+// The Kindle is in its screensaver or going to sleep (powerd's state isn't "active"), as opposed
+// to a system dialog or the keyboard over the app. Desktop (no powerd answer): false.
+bool deviceAsleep(Lipc&);
+// How long the device has been suspended since it started (Linux: CLOCK_BOOTTIME minus
+// CLOCK_MONOTONIC, which stops while suspended; elsewhere 0): it grows only across a suspend.
+int64_t suspendedMs();
 
 // The directory exists, is writable and its filesystem answers (false once /mnt/us is gone).
 bool storageAvailable(const std::string& dir);

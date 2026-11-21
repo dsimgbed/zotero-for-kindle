@@ -492,7 +492,7 @@ TEST_CASE("switch: a target library that can't be opened shows why; its file is 
     CHECK(slurp(b.dbPath) == bytes);
 }
 
-TEST_CASE("switch: an account with a PIN opens only once unlocked") {
+TEST_CASE("switch: to an account with a PIN, the PIN is asked before anything of the open account is left; cancelled, it stays open") {
     Kindle k;
     {
         auto st = *readAccounts(k.paths.accountsFile());
@@ -511,10 +511,22 @@ TEST_CASE("switch: an account with a PIN opens only once unlocked") {
     k.steps(5);
     CHECK(asked == 22);
     CHECK(k.switcher->busy());
-    CHECK(k.session() == nullptr);  // A stopped, B not open before the PIN
-    CHECK(k.homeOf() == 0);
-    answer(true);
+    REQUIRE(k.session());  // A still open, its Home still there
+    CHECK(k.session()->userId() == 11);
+    CHECK(k.homeOf() == 11);
+    CHECK(k.leaves == 0);
+    answer(false);  // the PIN pad's Back
     CHECK_FALSE(k.switcher->busy());
+    CHECK(k.session()->userId() == 11);
+    CHECK(k.homeOf() == 11);
+    // Again, and the PIN is right: now the switch goes as any other, without asking twice.
+    asked = 0;
+    REQUIRE(k.switcher->switchTo(22, AccountSwitcher::Why::User));
+    CHECK(asked == 22);
+    asked = 0;
+    answer(true);
+    REQUIRE(k.settle());
+    CHECK(asked == 0);
     REQUIRE(k.session());
     CHECK(k.session()->userId() == 22);
     CHECK(k.homeOf() == 22);

@@ -82,6 +82,9 @@ std::optional<AccountsState> readAccounts(const std::string& file) {
                 e.pin = PinHash{p.value("salt", std::string{}), p.value("hash", std::string{}), p.value("iterations", 3),
                                 p.value("memoryKiB", 1024)};
             }
+            e.itemCount = a.value("itemCount", int64_t{0});
+            e.unsentCount = a.value("unsentCount", 0);
+            e.syncedWallMs = a.value("syncedWallMs", int64_t{0});
             if (a.contains("backoff") && a["backoff"].is_object()) {
                 e.backoff.misses = a["backoff"].value("misses", 0);
                 e.backoff.waitUntilMs = a["backoff"].value("waitUntilMs", int64_t{0});
@@ -115,7 +118,8 @@ bool writeAccounts(const std::string& file, const AccountsState& s) {
                           {"memoryKiB", e.pin->memoryKiB}};
         list.push_back({{"userId", e.userId}, {"name", e.name}, {"order", e.order}, {"pin", pin},
                         {"lockOnSleep", e.lockOnSleep},
-                        {"backoff", {{"misses", e.backoff.misses}, {"waitUntilMs", e.backoff.waitUntilMs}}}});
+                        {"backoff", {{"misses", e.backoff.misses}, {"waitUntilMs", e.backoff.waitUntilMs}}},
+                        {"itemCount", e.itemCount}, {"unsentCount", e.unsentCount}, {"syncedWallMs", e.syncedWallMs}});
     }
     const std::string text = json{{"version", s.version}, {"active", s.active}, {"accounts", list}}.dump(2) + "\n";
     std::error_code ec;
@@ -218,11 +222,27 @@ bool removeAccount(const Paths& paths, int64_t userId) {
         fs::rename(aside, root, ec);  // still listed: its library back where the list says
         return false;
     }
-    fs::remove(paths.credentialsFile(userId), ec);
+    if (!fs::remove(paths.credentialsFile(userId), ec) && ec)
+        log(LogLevel::Warn, "accounts: credentials of %lld not deleted: %s", static_cast<long long>(userId), ec.message().c_str());
+    ec.clear();
     fs::remove_all(aside, ec);
     if (ec) log(LogLevel::Warn, "accounts: %s not deleted entirely: %s", aside.c_str(), ec.message().c_str());
     log(LogLevel::Info, "accounts: %lld removed from this Kindle", static_cast<long long>(userId));
     return true;
+}
+
+bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs) {
+    auto st = readAccounts(accountsFile);
+    if (!st) return false;
+    for (auto& e : st->accounts)
+        if (e.userId == userId) {
+            if (e.itemCount == items && e.unsentCount == unsent && (syncedWallMs <= 0 || e.syncedWallMs == syncedWallMs)) return true;
+            e.itemCount = items;
+            e.unsentCount = unsent;
+            if (syncedWallMs > 0) e.syncedWallMs = syncedWallMs;
+            return writeAccounts(accountsFile, *st);
+        }
+    return false;
 }
 
 }  // namespace zk
