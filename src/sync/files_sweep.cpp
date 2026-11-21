@@ -1,6 +1,7 @@
 #include "sync/files_sweep.h"
 
 #include "core/log.h"
+#include "core/open_guard.h"
 
 #include <filesystem>
 
@@ -33,6 +34,7 @@ std::string partKey(const std::string& name) {
 }  // namespace
 
 FilesSweep sweepFiles(const std::string& filesDir, const std::unordered_set<std::string>& attachmentKeys) {
+    ZK_NOTE_OPEN(filesDir);
     FilesSweep out;
     std::error_code ec;
     fs::directory_iterator it(filesDir, ec), end;

@@ -45,13 +45,15 @@ std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry& e, const EngineE
         flashEvery, lipc);
 }
 
-PluginEvents::PreviewOpener previewOpener(PreviewCache& cache, std::function<PluginHost*()> host,
+PluginEvents::PreviewOpener previewOpener(std::function<PreviewCache*()> cache, std::function<PluginHost*()> host,
                                           std::function<std::unique_ptr<ReaderScreen>(const PreviewEntry&)> makeReader) {
-    return [&cache, host = std::move(host), makeReader = std::move(makeReader)](
+    return [cache = std::move(cache), host = std::move(host), makeReader = std::move(makeReader)](
                App& app, const PluginHostEvent& ev, std::function<void(const std::string&)> answer, std::function<void()> closed) {
+        PreviewCache* c = cache();
+        if (!c) return answer("The reader can't open this right now");  // no account open
         PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""), ev.value.value("baseUrl", "")};
         PreviewScreen::Deps d;
-        d.cache = &cache;
+        d.cache = c;
         PluginHost* h = host();
         d.download = [h, id = ev.pluginId](HttpRequest req) {
             if (!h) throw std::runtime_error("Plugins aren't running");

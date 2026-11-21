@@ -6,10 +6,11 @@
 
 namespace zk {
 
-std::optional<int64_t> openAccountLayout(Paths& p) {
+std::optional<int64_t> openAccountLayout(Paths& p, std::string* whyOut) {
     std::string why;
     if (migrateToAccounts(p, &why) == MigrateResult::Failed) {
         log(LogLevel::Error, "migration to the account layout failed (%s); resumed at the next start", why.c_str());
+        if (whyOut) *whyOut = why;
         return std::nullopt;
     }
     const auto accounts = readAccounts(p.accountsFile());

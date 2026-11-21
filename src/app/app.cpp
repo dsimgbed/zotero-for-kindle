@@ -4,6 +4,7 @@
 #include <chrono>
 #include <climits>
 
+#include "app/session.h"
 #include "core/log.h"
 #include "ui/metrics.h"
 #include "store/db.h"
@@ -49,6 +50,14 @@ void App::close(Screen& s) {
 void App::retire(std::unique_ptr<Screen> s) {
     close(*s);
     graveyard_.push_back(std::move(s));
+}
+
+Library& App::library() { return session_ ? session_->library() : lib_; }
+
+SyncControl& App::sync() {
+    if (session_)
+        if (SyncService* s = session_->sync()) return *s;
+    return *sync_;
 }
 
 void App::setRoot(int tab, std::unique_ptr<Screen> s) {

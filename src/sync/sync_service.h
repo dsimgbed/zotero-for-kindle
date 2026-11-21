@@ -57,6 +57,9 @@ public:
     SyncService& operator=(const SyncService&) = delete;
 
     void start();
+    // Cuts what runs short (a download, its .part removed as on any failure; a request) and asks
+    // the worker to end, without waiting for it; stop() then joins it. Nothing more runs after it.
+    void requestStop();
     void stop();
 
     void syncNow() override;

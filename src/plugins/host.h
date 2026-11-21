@@ -195,7 +195,8 @@ public:
     // nothing); the library connection is closed. Returns within 2 s. Calls cut short by stop() are
     // not counted as failures. Commands asked while stopped are dropped, remove() and resetData()
     // included (they were for the account before; before the first start() they wait for it).
-    // Idempotent; start() again after it.
+    // Events queued for poll() and not taken yet are dropped too (a background round stopped
+    // midway reports nothing: the app abandons its hold). Idempotent; start() again after it.
     void stop();
     // Unloads and rescans; plugins that were loaded are loaded again at once.
     void reload();

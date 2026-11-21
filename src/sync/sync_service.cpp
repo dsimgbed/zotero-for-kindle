@@ -7,6 +7,7 @@
 
 #include "core/free_space.h"
 #include "core/log.h"
+#include "core/open_guard.h"
 #include <nlohmann/json.hpp>
 #include "core/wake.h"
 #include "net/write_guard.h"
@@ -108,7 +109,7 @@ void SyncService::start() {
     thread_ = std::thread([this] { run(); });
 }
 
-void SyncService::stop() {
+void SyncService::requestStop() {
     if (!thread_.joinable()) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -117,6 +118,11 @@ void SyncService::stop() {
         commands_.clear();
     }
     cv_.notify_all();
+}
+
+void SyncService::stop() {
+    if (!thread_.joinable()) return;
+    requestStop();
     thread_.join();
 }
 
@@ -537,6 +543,7 @@ bool SyncService::download(Worker& w, const std::string& itemKey, const Attachme
         e.total = t;
         emit(std::move(e));
     });
+    ZK_NOTE_OPEN(deps_.filesDir + "/" + att.key);
     bool ok = w.files->download(att, deps_.filesDir, err);
     w.files->setProgress(nullptr);
     w.files->setOnRateWait(nullptr);

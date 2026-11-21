@@ -6,6 +6,7 @@
 #include <sstream>
 #include <vector>
 
+#include "core/open_guard.h"
 #include "docs/engine_factory.h"
 
 namespace zk {
@@ -89,6 +90,7 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
 
     // Without a checksum there is nothing to tell a changed file by: no cache.
     const bool cacheable = !cacheDir.empty() && safeName(a.key) && safeName(a.md5);
+    if (cacheable) ZK_NOTE_OPEN(cacheDir);
     const fs::path dir = cacheDir;
     const fs::path entry = dir / (a.key + "-" + a.md5 + ".txt");
     if (cacheable) {

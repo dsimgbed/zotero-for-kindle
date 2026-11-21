@@ -22,6 +22,7 @@
 #include <system_error>
 
 #include "core/free_space.h"
+#include "core/open_guard.h"
 #include "plugins/plugin_ctx.h"
 #include "store/db.h"
 
@@ -328,6 +329,7 @@ bool resolveInData(JSContext* c, PluginCtx& p, const std::string& rel, bool allo
         return false;
     }
     std::error_code ec;
+    ZK_NOTE_OPEN(p.dataDir);
     const fs::path base = fs::weakly_canonical(p.dataDir, ec);
     if (ec) {
         fail(c, "zk.files: the data folder can't be reached: " + ec.message());

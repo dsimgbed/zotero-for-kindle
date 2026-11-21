@@ -22,9 +22,16 @@ endif
 
 inc = include_directories('src')
 
+# The isolation checks' file-open guard (src/core/open_guard.h): in builds with the tests only,
+# never in the Kindle's (built with -Dtests=false).
+if get_option('tests')
+  add_project_arguments('-DZK_OPEN_GUARD=1', language : 'cpp')
+endif
+
 core_lib = static_library('zk-core',
   'src/core/log.cpp',
   'src/core/wake.cpp',
+  'src/core/open_guard.cpp',
   'src/platform/pen_decoder.cpp',
   include_directories : inc)
 
@@ -223,6 +230,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/book.cpp',
   'src/screens/notes.cpp',
   'src/screens/setup.cpp',
+  'src/screens/account_error.cpp',
   'src/screens/settings.cpp',
   'src/screens/settings_home.cpp',
   'src/screens/update_screen.cpp',
@@ -265,6 +273,7 @@ app_lib = static_library('zk-app',
   'src/app/plugin_background.cpp',
   'src/app/plugin_watch.cpp',
   'src/app/previews.cpp',
+  'src/app/session.cpp',
   include_directories : ui_incs,
   dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
 app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])

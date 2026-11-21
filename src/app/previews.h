@@ -23,10 +23,11 @@ class PluginHost;
 // a web snapshot.
 std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry&, const EngineEnv&, int flashEvery, Lipc*);
 
-// Opens a ReaderOpen over what shows (PreviewScreen::show): `cache` keeps the documents, `host()`
-// downloads under the plugin's net rules (the current host: nullptr when plugins aren't running),
-// `makeReader` makes the reader.
-PluginEvents::PreviewOpener previewOpener(PreviewCache& cache, std::function<PluginHost*()> host,
+// Opens a ReaderOpen over what shows (PreviewScreen::show): `cache()` keeps the documents (the
+// current account's; nullptr: no account, the preview is refused), `host()` downloads under the
+// plugin's net rules (the current host: nullptr when plugins aren't running), `makeReader` makes
+// the reader.
+PluginEvents::PreviewOpener previewOpener(std::function<PreviewCache*()> cache, std::function<PluginHost*()> host,
                                           std::function<std::unique_ptr<ReaderScreen>(const PreviewEntry&)> makeReader);
 
 // Dev only (desktop --screenshot plugin:ID:SCREEN[:page]): loads the plugins in `pluginsDir` with

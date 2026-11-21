@@ -2058,6 +2058,13 @@ void PluginHost::stop() {
     h.net.reset();
     h.fullText.reset();  // joins the full-text worker
     h.library.reset();   // closes the library connection
+    {
+        // What was queued for the screen thread belongs to the account served (a background
+        // round's report, a screen's tree): nothing of it reaches the next one. The app abandons
+        // the round's keep-awake hold itself (BackgroundRound::abandon).
+        std::lock_guard<std::mutex> lock(h.mu);
+        h.events.clear();
+    }
     h.threadRunning = false;
 }
 

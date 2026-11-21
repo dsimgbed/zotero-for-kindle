@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "test_paths.h"
+#include "open_guard.h"
 #include "fake_engine.h"
 #include "fake_plugins.h"
 #include "plugins/fulltext.h"
@@ -1026,23 +1027,6 @@ TEST_CASE("library open: without an annotation, the item or the file asked for, 
 // ---- Accounts: full text and the library are the account's; the host restarts cleanly -----------
 
 namespace {
-
-// Threads of this process now (macOS: the Mach task's; Linux: /proc/self/task).
-size_t threadCount() {
-#if defined(__APPLE__)
-    thread_act_array_t list = nullptr;
-    mach_msg_type_number_t n = 0;
-    if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return 0;
-    for (mach_msg_type_number_t i = 0; i < n; ++i) mach_port_deallocate(mach_task_self(), list[i]);
-    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), n * sizeof(thread_act_t));
-    return n;
-#else
-    size_t n = 0;
-    std::error_code ec;
-    for (std::filesystem::directory_iterator it("/proc/self/task", ec), end; !ec && it != end; it.increment(ec)) ++n;
-    return n;
-#endif
-}
 
 PluginAccount accountOf(const Env& env, const std::string& user, const std::string& dbPath) {
     PluginAccount a;

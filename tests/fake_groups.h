@@ -16,6 +16,7 @@ public:
     using json = nlohmann::json;
 
     FakeZotero user;
+    int64_t userId = 1;  // the key's user (another: also set user.libraryPath = "users/<id>/")
     struct Group {
         std::unique_ptr<FakeZotero> server = std::make_unique<FakeZotero>();
         std::string name;
@@ -54,9 +55,9 @@ public:
         if (req.method == "GET" && rest == "keys/current") {
             json access = {{"user", {{"library", true}, {"write", true}, {"files", true}}}};
             if (!groupAccess.is_null()) access["groups"] = groupAccess;
-            return ok(r, json{{"key", "k3y"}, {"userID", 1}, {"username", "pavel"}, {"access", access}});
+            return ok(r, json{{"key", "k3y"}, {"userID", userId}, {"username", "pavel"}, {"access", access}});
         }
-        if (req.method == "GET" && rest == "users/1/groups?format=versions") {
+        if (req.method == "GET" && rest == "users/" + std::to_string(userId) + "/groups?format=versions") {
             json out = json::object();
             for (const auto& [id, g] : groups)
                 if (g.listed) out[std::to_string(id)] = g.version;

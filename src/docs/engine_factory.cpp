@@ -13,6 +13,7 @@
 #endif
 
 #include "core/log.h"
+#include "core/open_guard.h"
 
 namespace zk {
 
@@ -36,6 +37,7 @@ fs::path exeDir() {
 }  // namespace
 
 std::unique_ptr<DocumentEngine> loadEngine(DocType type, const EngineEnv& env, UserError* err) {
+    if (!env.cacheDir.empty()) ZK_NOTE_OPEN(env.cacheDir);  // crengine's document cache
     const char* name = type == DocType::Epub ? "libzk-epub.so" : "libzk-pdf.so";
     const char* symbol = type == DocType::Epub ? "zk_epub_engine_create" : "zk_pdf_engine_create";
     std::vector<fs::path> dirs;

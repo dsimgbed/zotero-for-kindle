@@ -17,6 +17,8 @@
 
 namespace zk {
 
+class AccountSession;  // app/session.h
+
 class App final : public Nav {
 public:
     static constexpr int kTabs = 4;
@@ -62,7 +64,7 @@ public:
     // Ink reaches the screen at most once per frame, as one update for everything drawn since:
     // an e-ink update per pen sample queues hundreds of them and the line lags in pieces.
     static constexpr int64_t kInkFrameMs = 25;
-    SyncControl& sync() override { return *sync_; }
+    SyncControl& sync() override;
     void setSync(SyncControl& s) { sync_ = &s; }
     // Replace a tab's root and show it (e.g. Home after Setup).
     void replaceRoot(int tab, std::unique_ptr<Screen>);
@@ -84,7 +86,12 @@ public:
         watchdog_ = std::move(ok);
         watchdogPeriodMs_ = periodMs;
     }
-    Library& library() override { return lib_; }
+    // The library and the sync are the session's while there is one (app/session.h); without one,
+    // the library given to the constructor (main: an empty one, before Setup) and setSync's.
+    // Nothing here keeps the session's library: screens ask nav.library() each time.
+    Library& library() override;
+    void setSession(AccountSession* s) { session_ = s; }
+    AccountSession* session() const { return session_; }
     DeviceSettings& device() override { return *device_; }
     // Where the device settings are kept (default: in memory only, for tests).
     void setDeviceSettings(DeviceSettings& d) { device_ = &d; }
@@ -138,6 +145,7 @@ private:
 
     Display& display_;
     Library& lib_;
+    AccountSession* session_ = nullptr;
     DeviceSettings memoryDevice_{""};
     DeviceSettings* device_ = &memoryDevice_;
     SyncControl* sync_;

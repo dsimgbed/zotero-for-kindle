@@ -91,11 +91,16 @@ void initCrengine(const EngineEnv& env) {
         HyphMan::activateDictionary(U"English_US.pattern");  // books without a language
         TextLangMan::setHyphenationEnabled(true);
         TextLangMan::setEmbeddedLangsEnabled(true);
-        if (!env.cacheDir.empty()) {
-            ::mkdir(env.cacheDir.c_str(), 0755);
-            if (ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), kDocCacheBytes)) docCacheDir() = env.cacheDir;
-        }
     });
+    // The cache is the account's (AccountPaths::creDir): an engine for another account's session
+    // moves it there (that account's readers are all closed by then). An env without one (the
+    // plugins' full text, which reads with the cache off) leaves it where it is.
+    if (!env.cacheDir.empty() && env.cacheDir != docCacheDir()) {
+        if (ldomDocCache::enabled()) ldomDocCache::close();
+        docCacheDir().clear();
+        ::mkdir(env.cacheDir.c_str(), 0755);
+        if (ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), kDocCacheBytes)) docCacheDir() = env.cacheDir;
+    }
     registerFonts(env.fontDirs);
 }
 
