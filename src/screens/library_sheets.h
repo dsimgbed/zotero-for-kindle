@@ -60,6 +60,8 @@ std::vector<JumpGroup> jumpGroups(SortBy, const std::vector<ListSection>&);
 
 // Common to the three: fades `area`, draws a sheet `height` high at its bottom, titled.
 Rect sheetRectIn(Rect area, int height);
+// The sheet itself (also the account sheet's): `area` faded, the sheet `s` white under an ink edge, its title.
+void drawSheet(cairo_t*, Rect area, Rect s, const std::string& title);
 
 class FilterSheet {
 public:

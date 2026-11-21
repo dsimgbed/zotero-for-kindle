@@ -32,6 +32,10 @@ App::~App() { closeAll(); }
 void App::closeAll() {
     while (!graveyard_.empty()) graveyard_.pop_back();
     lastVisible_ = nullptr;
+    if (lock_) {
+        close(*lock_);
+        lock_.reset();
+    }
     for (int t = 0; t < kTabs; ++t) {
         const int tab = (tab_ + t) % kTabs;  // the visible tab first
         while (!stacks_[tab].empty()) {
@@ -65,7 +69,29 @@ void App::setRoot(int tab, std::unique_ptr<Screen> s) {
     stacks_[tab].push_back(std::move(s));
 }
 
-Screen* App::visibleTop() const { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
+Screen* App::visibleTop() const {
+    if (lock_) return lock_.get();
+    return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get();
+}
+
+void App::lock(std::unique_ptr<Screen> s) {
+    if (!s) return;
+    if (lock_) retire(std::move(lock_));
+    lock_ = std::move(s);
+    if (questionShown_) {  // shown again once unlocked
+        questionShown_ = false;
+        shownSince_ = -1;
+    }
+    showTop();
+    pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, Waveform::Full});
+}
+
+void App::unlock() {
+    if (!lock_) return;
+    retire(std::move(lock_));
+    showTop();
+    pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, Waveform::Full});
+}
 
 namespace {
 
@@ -100,7 +126,7 @@ const PluginConfirm* App::confirmShown() const {
 }
 
 void App::showQuestion() {
-    if (questionShown_ || answeredThisStep_ || questions_.empty() || background_ || !visibleTop()) return;
+    if (questionShown_ || answeredThisStep_ || questions_.empty() || background_ || lock_ || !visibleTop()) return;
     Question& q = questions_.front();
     const int64_t now = clock_();
     // Never over a page turn or a pen on the glass: once it has landed or lifted (or seems stuck).
@@ -244,6 +270,7 @@ void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
 }
 
 void App::clearTo(std::unique_ptr<Screen> s) {
+    if (lock_) retire(std::move(lock_));
     for (int t = 0; t < kTabs; ++t) {
         const int tab = (tab_ + t) % kTabs;  // the visible tab first
         while (!stacks_[tab].empty()) {      // top first
@@ -696,7 +723,7 @@ void App::flush() {
     }
     guard([&] { visibleTop()->draw(canvas_); });
     if (visibleTop()->showsTabBar()) drawTabBar(canvas_.cr(), tabBar(), kTabNames, tab_);
-    if (!toast_.empty()) {
+    if (!toast_.empty() && !lock_) {
         drawToast(canvas_.cr(), toastRect(), toast_);
         toastShown_ = true;
     }

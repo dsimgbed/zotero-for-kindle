@@ -71,4 +71,14 @@ bool writeAccounts(const std::string& file, const AccountsState&);
 // log lines.
 std::vector<std::string> repairAccounts(const Paths&, AccountsState&);
 
+// A new account on this Kindle (Add account, once its key was checked): its folder made and its
+// entry listed last (`active` unchanged). False — nothing listed — when the user is already on
+// the Kindle, there are kMaxAccounts, or accounts.json can't be written.
+bool addAccount(const Paths&, int64_t userId, const std::string& name);
+// The account taken off this Kindle (Remove from this Kindle), and nothing of any other: its folder
+// accounts/<userId>/ is first renamed aside (accounts/.removing-<userId>, so the list never names a
+// half-deleted library), then its entry and its credentials go, then the folder is deleted.
+// `active` moves to the first account left (0: none). The account must not be open.
+bool removeAccount(const Paths&, int64_t userId);
+
 }  // namespace zk

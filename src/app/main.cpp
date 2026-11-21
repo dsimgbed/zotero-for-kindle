@@ -27,6 +27,7 @@
 #include "app/accounts.h"
 #include "app/app.h"
 #include "app/account_switch.h"
+#include "app/account_ui.h"
 #include "app/session.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
@@ -480,11 +481,16 @@ int main(int argc, char** argv) {
     switcherDeps.paths = paths;
     switcherDeps.device = &device;
     switcherDeps.session = sessionDeps;
-    switcherDeps.credentials = [&paths, &config](int64_t userId) -> std::optional<Config> {
+    auto credentialsOf = [&paths, &config](int64_t userId) -> std::optional<Config> {
         if (auto c = loadCredentials(paths, userId)) return c;
         if (config && config->userId == userId) return config;  // (desktop) local/credentials.env
         return std::nullopt;
     };
+    switcherDeps.credentials = credentialsOf;
+    // The account screens' side (Settings → Accounts, Home's chip, the PIN pad and the lock), made
+    // just below: an account with a PIN opens only once its PIN pad says so.
+    std::unique_ptr<AccountsUi> accountsUi;
+    switcherDeps.unlock = [&accountsUi](int64_t userId, std::function<void(bool)> done) { accountsUi->unlock(userId, std::move(done)); };
     AccountSwitcher switcher(app, switcherDeps);
     // The open account's engines (its crengine cache), for the readers made from now on.
     auto readerEnv = [&switcher] {
@@ -645,8 +651,9 @@ int main(int argc, char** argv) {
         if (AccountSession* s = switcher.session()) s->startServices(app, pluginsOff ? nullptr : plugins.get(), pluginsListening);
     };
 
-    app.setEventHook([&flow, &updateNotice, &pluginSink, &backgroundRound, &app](const SyncEvent& e, Nav& nav) {
+    app.setEventHook([&flow, &updateNotice, &pluginSink, &backgroundRound, &app, &accountsUi](const SyncEvent& e, Nav& nav) {
         flow.onSyncEvent(e, nav);
+        accountsUi->onSyncEvent(e);  // when the open account last synced (the account sheet)
         forwardSyncToPlugins(e, pluginSink);
         backgroundRound.onSyncEvent(e, !app.inBackground(), app.nowMs());  // after syncFinished is queued
         updateNotice.poll(nav.device());
@@ -739,7 +746,8 @@ int main(int argc, char** argv) {
     const PluginsOff pluginsOffInfo{pluginsOffReason, [&safeNotice] { safeNotice = false; }};
     auto makeSettings = [&]() -> std::unique_ptr<Screen> {
         return std::make_unique<SettingsScreen>(
-            *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, pushUpdateScreen,
+            config.value_or(Config{}), [&](Nav& nav) { nav.push(std::make_unique<AccountsScreen>(*accountsUi)); }, &updater,
+            pushUpdateScreen,
             pendingUpdate,
             // Settings → Plugins: the host of the moment (none while an update installs; a failed
             // install makes a new one, so the screens ask each time instead of keeping a pointer).
@@ -774,6 +782,9 @@ int main(int argc, char** argv) {
         home.openItem = openItem;
         home.status = flow.statusFn();
         home.body = [&pluginHome]() -> HomeBodyLink* { return pluginHome.get(); };
+        home.accountChip = [&] { return accountsUi->chip(); };
+        home.accountSheet = [&] { return accountsUi->sheet(); };
+        home.accountChoice = [&](AccountSheet::Action a, int64_t userId) { accountsUi->sheetChoice(a, userId); };
         return std::make_unique<HomeScreen>(status, home, wallMs);
     };
     // A key Setup confirmed: the open account's new key, the key of the active account (dropped over
@@ -800,9 +811,9 @@ int main(int argc, char** argv) {
         backgroundRound.abandon();  // a round of the account left ends unreported
         unbindSession();
     });
-    switcher.onSetup([&] {  // the only account can't be opened: its key, or another account's, again
+    switcher.onSetup([&] {  // the only account can't be opened: a key again, typed afresh (not the old one prefilled)
         setTabRoots();
-        app.replaceRoot(0, makeSetup(config.value_or(Config{}), false, false));
+        app.replaceRoot(0, makeSetup(Config{}, false, false));
     });
     switcher.onOpened([&](AccountSession& s) {
         config = s.config();
@@ -811,6 +822,7 @@ int main(int argc, char** argv) {
         setTabRoots();
         app.replaceRoot(0, makeHome());
         if (appStarted) startServices();
+        accountsUi->opened(s);  // a removal waiting for this switch ends; an account just added syncs
     });
     // A key Setup confirmed: the open account's new key, the key of the active account (dropped over
     // USB, or asked for), or the first account (Setup saved its config.json, which moves into the
@@ -847,6 +859,28 @@ int main(int argc, char** argv) {
         config = c;
         switcher.switchTo(c.userId, AccountSwitcher::Why::Startup);  // Home, or why it can't be opened
     };
+    AccountsUiDeps accountsDeps;
+    accountsDeps.paths = paths;
+    accountsDeps.resetFile = std::filesystem::path(paths.accountsRoot).parent_path().string() + "/reset-pin.txt";  // the USB zotero folder
+    accountsDeps.wallMs = wallMs;
+    accountsDeps.credentials = credentialsOf;
+    accountsDeps.checkKey = [](const Config& c, std::string* name) {
+        CurlHttp http(kCaBundle);
+        return checkAccount(http, c, name);
+    };
+    accountsDeps.keyChanged = [&](const Config& c) {
+        config = c;
+        status.reset();
+        flow.reset();
+        if (AccountSession* s = switcher.session()) s->restartSync(c);
+    };
+    accountsDeps.noAccount = [&](std::unique_ptr<Screen> setup) {  // the last account was removed
+        activeAccount = 0;
+        config.reset();
+        setTabRoots();
+        app.replaceRoot(0, std::move(setup));
+    };
+    accountsUi = std::make_unique<AccountsUi>(app, switcher, accountsDeps);
     makeSetup = [&](const Config& initial, bool imported, bool canGoBack) -> std::unique_ptr<Screen> {
         auto check = [](const Config& c) {
             CurlHttp http(kCaBundle);
@@ -876,6 +910,7 @@ int main(int argc, char** argv) {
                             return storageAvailable(s ? s->paths().filesDir : usbDir);  // the USB storage
                         });
     lifecycle.attach(app);
+    lifecycle.setLock([&] { accountsUi->lockNow(); });  // Lock on sleep: the PIN pad is what the Kindle wakes to
     lifecycle.setOnBackground([&] {
         backgroundRound.onSleep();  // sleeping cuts background tasks short
         if (plugins) plugins->setBackground(true);  // and plugins' timers wait for the foreground

@@ -23,6 +23,9 @@ public:
     // Also called when the Kindle goes to the background (plugins' background tasks stop).
     void setOnBackground(std::function<void()> f) { onBackgroundExtra_ = std::move(f); }
     void setOnForeground(std::function<void()> f) { onForegroundExtra_ = std::move(f); }
+    // Lock on sleep (spec: multiple accounts, PIN): asked first thing as the Kindle goes to the
+    // background, so the screen it wakes to — repainted from what was last drawn — is the PIN pad.
+    void setLock(std::function<void()> f) { lock_ = std::move(f); }
     void onBackground();
     void onForeground(int64_t nowMs);
     void onReading(bool reading);  // the reader (or one of its panels) shows, or stopped showing
@@ -35,6 +38,7 @@ private:
     std::function<bool()> storage_;
     std::function<void()> onBackgroundExtra_;
     std::function<void()> onForegroundExtra_;
+    std::function<void()> lock_;
     bool background_ = false, reading_ = false;
     void applyInterval();  // the setting's, unless asleep or reading (then none)
 };

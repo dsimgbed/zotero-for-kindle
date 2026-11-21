@@ -80,6 +80,7 @@ test_sources = files(
   'test_session.cpp',
   'test_isolation.cpp',
   'test_account_switch.cpp',
+  'test_account_screens.cpp',
   'test_power.cpp',
   'test_keysym.cpp',
   'test_library_screens.cpp',

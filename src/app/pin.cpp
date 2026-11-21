@@ -12,6 +12,8 @@ extern "C" {
 #include "monocypher.h"
 }
 
+#include "core/log.h"
+
 namespace zk {
 
 namespace {
@@ -160,6 +162,101 @@ std::optional<std::string> takeResetKey(const std::string& dropFile) {
     std::string key = trim(content);
     if (key.empty()) return std::nullopt;
     return key;
+}
+
+// ---- AccountPins -------------------------------------------------------------------------------
+
+AccountPins::AccountPins(std::string accountsFile, std::function<int64_t()> wallMs, std::function<int64_t()> monoMs)
+    : file_(std::move(accountsFile)), wall_(std::move(wallMs)), mono_(std::move(monoMs)) {}
+
+std::optional<AccountEntry> AccountPins::entry(int64_t userId) const {
+    if (const auto st = readAccounts(file_))
+        for (const auto& e : st->accounts)
+            if (e.userId == userId) return e;
+    return std::nullopt;
+}
+
+int64_t AccountPins::waitMs(int64_t userId) const {
+    // A wait begun in this run runs on the monotonic clock, whatever the wall clock does meanwhile.
+    if (const auto it = monoUntil_.find(userId); it != monoUntil_.end())
+        return std::clamp<int64_t>(it->second - mono_(), 0, kMaxWaitMs);
+    const auto e = entry(userId);
+    return e ? pinWaitMs(e->backoff, wall_()) : 0;
+}
+
+bool AccountPins::update(int64_t userId, const std::function<void(AccountEntry&)>& change) {
+    auto st = readAccounts(file_);
+    if (!st) return false;
+    for (auto& e : st->accounts)
+        if (e.userId == userId) {
+            change(e);
+            return writeAccounts(file_, *st);
+        }
+    return false;
+}
+
+void AccountPins::missed(int64_t userId) {
+    int64_t wait = 0;
+    const bool kept = update(userId, [&](AccountEntry& e) {
+        const int64_t now = wall_();
+        recordMiss(e.backoff, now);
+        wait = pinWaitMs(e.backoff, now);
+    });
+    if (!kept) log(LogLevel::Error, "accounts: can't keep a wrong try of account %lld", static_cast<long long>(userId));
+    // Within this run the wait holds whatever the wall clock does (and even if it couldn't be written).
+    if (wait > 0) monoUntil_[userId] = mono_() + wait;
+}
+
+void AccountPins::miss(int64_t userId) { missed(userId); }
+
+AccountPins::Result AccountPins::tryPin(int64_t userId, const std::string& pin) {
+    const auto e = entry(userId);
+    if (!e) return Result::Failed;
+    if (!e->pin) return Result::Ok;
+    if (waitMs(userId) > 0) return Result::Waiting;
+    if (!checkPin(*e->pin, pin)) {
+        missed(userId);
+        return Result::Wrong;
+    }
+    if (e->backoff.misses > 0) update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); });
+    monoUntil_.erase(userId);
+    return Result::Ok;
+}
+
+AccountPins::Result AccountPins::tryKey(int64_t userId, const Config& stored, const std::string& key) {
+    if (!entry(userId)) return Result::Failed;
+    if (waitMs(userId) > 0) return Result::Waiting;
+    if (stored.userId != userId || !keyMatches(stored, key)) {
+        missed(userId);
+        return Result::Wrong;
+    }
+    update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); });
+    monoUntil_.erase(userId);
+    return Result::Ok;
+}
+
+bool AccountPins::setPin(int64_t userId, const std::string& pin) {
+    if (!validPinFormat(pin)) return false;
+    const auto hash = hashPin(pin);
+    if (!hash) return false;
+    return update(userId, [&](AccountEntry& e) {
+        if (!e.pin) e.lockOnSleep = true;  // on by default once there is a PIN
+        e.pin = *hash;
+        recordSuccess(e.backoff);
+    });
+}
+
+bool AccountPins::removePin(int64_t userId) {
+    monoUntil_.erase(userId);
+    return update(userId, [](AccountEntry& e) {
+        e.pin.reset();
+        e.lockOnSleep = false;
+        recordSuccess(e.backoff);
+    });
+}
+
+bool AccountPins::setLockOnSleep(int64_t userId, bool on) {
+    return update(userId, [&](AccountEntry& e) { e.lockOnSleep = on && e.pin.has_value(); });
 }
 
 }  // namespace zk

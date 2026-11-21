@@ -6,6 +6,8 @@
 #include "sync/config.h"
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -30,5 +32,40 @@ void recordSuccess(PinBackoff&);
 bool keyMatches(const Config& stored, const std::string& typedKey);
 // Reads (at most 4 KB of) the dropped reset-pin.txt, trims it and always deletes it, readable or not; nullopt when absent or empty.
 std::optional<std::string> takeResetKey(const std::string& dropFile);
+
+// The PINs of the accounts in accounts.json as the screens ask them: every check goes through the
+// backoff, and a miss is written to accounts.json at once (a restart doesn't reset it). The wait is
+// on the wall clock (it survives a restart) and, within a run, also on a monotonic one: moving the
+// clock back shortens no wait begun in this run (moving it back across a restart is accepted as a
+// limit of a lock on the screens).
+class AccountPins {
+public:
+    AccountPins(std::string accountsFile, std::function<int64_t()> wallMs, std::function<int64_t()> monoMs);
+
+    enum class Result {
+        Ok,       // the PIN (or the key) is right: the misses are forgotten
+        Wrong,    // counted as a miss
+        Waiting,  // not tried: a wait is still running (waitMs)
+        Failed,   // no such account, or accounts.json can't be read or written
+    };
+    std::optional<AccountEntry> entry(int64_t userId) const;
+    int64_t waitMs(int64_t userId) const;
+    Result tryPin(int64_t userId, const std::string& pin);
+    // The forgotten-PIN proof: `key` is the account's API key (`stored`: its credentials).
+    Result tryKey(int64_t userId, const Config& stored, const std::string& key);
+    // A miss of another kind (a typed key Zotero said isn't this account's).
+    void miss(int64_t userId);
+    // Hashes and keeps the PIN (Lock on sleep turned on when it had none); false if it can't.
+    bool setPin(int64_t userId, const std::string& pin);
+    bool removePin(int64_t userId);
+    bool setLockOnSleep(int64_t userId, bool on);
+
+private:
+    bool update(int64_t userId, const std::function<void(AccountEntry&)>&);
+    void missed(int64_t userId);
+    std::string file_;
+    std::function<int64_t()> wall_, mono_;
+    std::map<int64_t, int64_t> monoUntil_;  // per account: the end of its wait on the monotonic clock
+};
 
 }  // namespace zk

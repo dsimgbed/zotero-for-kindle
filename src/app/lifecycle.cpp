@@ -27,6 +27,7 @@ bool Lifecycle::watch() {
 void Lifecycle::applyInterval() { sync_.setIntervalMinutes(background_ || reading_ ? 0 : interval_()); }
 
 void Lifecycle::onBackground() {
+    if (lock_) lock_();
     background_ = true;
     applyInterval();
     if (onBackgroundExtra_) onBackgroundExtra_();

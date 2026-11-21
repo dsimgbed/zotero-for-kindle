@@ -169,9 +169,9 @@ void SettingsScreen::draw(Canvas& canvas) {
     const TextStyle label{kSans, 8.5, 500}, value{kSans, 7.5, 400, false, kSecondary};
     const int w = W() - 2 * kMargin;
 
-    drawText(cr, "Zotero account", label, {kMargin, rows(homeRow_).account, w, 50}, 1);
+    drawText(cr, "Accounts", label, {kMargin, rows(homeRow_).account, w, 50}, 1);
     drawText(cr, accountLine(), value, {kMargin, rows(homeRow_).account + 54, w - 260, 50}, 1);
-    drawButton(cr, accountRect(), "Change…", false);
+    drawButton(cr, accountRect(), "Manage…", false);
     hRule(cr, rows(homeRow_).webDav - rows(homeRow_).rule, kMargin, W() - kMargin);
 
     if (groupsRow_) {  // in WebDAV's place (the account row names it): the whole row opens the list

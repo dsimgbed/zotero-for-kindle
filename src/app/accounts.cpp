@@ -170,4 +170,59 @@ std::vector<std::string> repairAccounts(const Paths& paths, AccountsState& s) {
     return lines;
 }
 
+bool addAccount(const Paths& paths, int64_t userId, const std::string& name) {
+    AccountsState st = readAccounts(paths.accountsFile()).value_or(AccountsState{});
+    if (userId <= 0 || st.accounts.size() >= kMaxAccounts) return false;
+    int order = 0;
+    for (const auto& e : st.accounts) {
+        if (e.userId == userId) return false;
+        order = std::max(order, e.order + 1);
+    }
+    std::error_code ec;
+    fs::create_directories(accountPaths(paths, userId).root, ec);
+    if (ec) {
+        log(LogLevel::Error, "accounts: can't make the folder of %lld: %s", static_cast<long long>(userId), ec.message().c_str());
+        return false;
+    }
+    AccountEntry e;
+    e.userId = userId;
+    e.name = name;
+    e.order = order;
+    st.accounts.push_back(std::move(e));
+    if (st.active == 0) st.active = userId;
+    return writeAccounts(paths.accountsFile(), st);
+}
+
+bool removeAccount(const Paths& paths, int64_t userId) {
+    auto st = readAccounts(paths.accountsFile());
+    if (!st || userId <= 0) return false;
+    const std::string root = accountPaths(paths, userId).root;
+    const std::string aside = paths.accountsRoot + "/.removing-" + std::to_string(userId);
+    std::error_code ec;
+    fs::remove_all(aside, ec);  // an earlier removal cut short
+    if (fs::exists(root, ec)) {
+        fs::rename(root, aside, ec);
+        if (ec) {
+            log(LogLevel::Error, "accounts: can't put %s aside: %s", root.c_str(), ec.message().c_str());
+            return false;
+        }
+    }
+    st->accounts.erase(std::remove_if(st->accounts.begin(), st->accounts.end(), [&](const AccountEntry& e) { return e.userId == userId; }),
+                       st->accounts.end());
+    if (st->active == userId) {
+        std::vector<AccountEntry> byOrder = st->accounts;
+        std::stable_sort(byOrder.begin(), byOrder.end(), [](const AccountEntry& a, const AccountEntry& b) { return a.order < b.order; });
+        st->active = byOrder.empty() ? 0 : byOrder.front().userId;
+    }
+    if (!writeAccounts(paths.accountsFile(), *st)) {
+        fs::rename(aside, root, ec);  // still listed: its library back where the list says
+        return false;
+    }
+    fs::remove(paths.credentialsFile(userId), ec);
+    fs::remove_all(aside, ec);
+    if (ec) log(LogLevel::Warn, "accounts: %s not deleted entirely: %s", aside.c_str(), ec.message().c_str());
+    log(LogLevel::Info, "accounts: %lld removed from this Kindle", static_cast<long long>(userId));
+    return true;
+}
+
 }  // namespace zk

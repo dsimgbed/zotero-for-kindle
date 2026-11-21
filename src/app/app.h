@@ -72,6 +72,14 @@ public:
     // the only one, Home's root: leaving an account, no screen keeps anything of it. Questions
     // waiting go unanswered. The other tabs stay empty until setRoot.
     void clearTo(std::unique_ptr<Screen> s);
+    // The lock (spec: multiple accounts, PIN): `s` (the PIN pad) covers whatever shows, every tab
+    // and the app's own questions, and takes every gesture, key and pen stroke; nothing under it is
+    // closed (the reader keeps its page), and what is pushed meanwhile goes under it. Toasts wait.
+    // A second lock() replaces the first. unlock() shows what was under it again; clearTo() (a
+    // switch) ends the lock too.
+    void lock(std::unique_ptr<Screen> s);
+    void unlock();
+    bool locked() const { return lock_ != nullptr; }
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
@@ -158,6 +166,7 @@ private:
     Canvas canvas_;
     GestureRecognizer gestures_;
     std::array<std::vector<std::unique_ptr<Screen>>, kTabs> stacks_;
+    std::unique_ptr<Screen> lock_;  // over everything while set (lock())
     int tab_ = 0;
     const Screen* caller_ = nullptr;  // screen currently handling a callback, for damage()
     std::vector<std::pair<Rect, Waveform>> pending_;

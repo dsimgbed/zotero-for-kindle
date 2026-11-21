@@ -14,6 +14,7 @@
 #include <optional>
 #include <vector>
 
+#include "screens/account_sheet.h"
 #include "screens/item_sheet.h"
 #include "screens/screen.h"
 #include "screens/sync_status.h"
@@ -57,6 +58,12 @@ struct HomeActions {
     std::function<void()> openPlugins;
     // Home's body written by a plugin; unset or null: the built-in body only.
     std::function<HomeBodyLink*()> body;
+    // Two accounts or more (spec: multiple accounts, Screens): the open account's name, a chip
+    // after the title that opens the account sheet ("" or unset: no chip, Home as with one).
+    std::function<std::string()> accountChip;
+    std::function<AccountSheet()> accountSheet;
+    // A choice in the sheet (Switch: to `userId`; Add; Manage).
+    std::function<void(AccountSheet::Action, int64_t userId)> accountChoice;
 };
 
 class HomeScreen final : public Screen {
@@ -87,6 +94,10 @@ public:
     bool pluginsIcon() const { return pluginsIcon_; }
     bool pluginsDot() const { return pluginsDot_; }
     static Rect closeRect();  // "×": close Zotero, back to the Kindle
+    // The account chip after the title (empty without one): "Pavel ▾".
+    Rect chipRect() const;
+    const std::string& chip() const { return chip_; }
+    const AccountSheet* accountSheet() const { return accountSheet_ ? &*accountSheet_ : nullptr; }
     static Rect searchFieldRect();
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;
@@ -140,6 +151,8 @@ private:
     size_t cardHighlights_ = 0;
     std::vector<ItemRow> recent_;
     std::optional<ItemSheet> sheet_;  // long-press on the card or a Recent row
+    std::string chip_;                       // the open account's name (with two accounts or more)
+    std::optional<AccountSheet> accountSheet_;  // the chip tapped
     Rect sheetArea() const;
     int64_t total_ = 0;
     bool safe_ = false;                  // the safe-mode notice is wanted
