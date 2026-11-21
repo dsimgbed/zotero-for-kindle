@@ -48,6 +48,9 @@ screen of their own, work after a sync. *Settings → Plugins → Get plugins* l
 [Feed Riffle](https://github.com/ievlevpn/zk-feed-riffle), which deals the new papers from your Zotero feeds as cards
 to keep or discard. [More below](#plugins).
 
+**Up to three Zotero accounts**, each with its own library, downloads and plugin data, and an optional PIN.
+[More below](#accounts).
+
 **Easy on the battery.** The app rests while you read, never turns Wi-Fi on by itself, and updates itself from
 *Settings → Check for updates* (signed releases; a version that doesn't start is rolled back).
 
@@ -69,6 +72,33 @@ prompt:
 
 To do it yourself, see [INSTALL.md](INSTALL.md) — it amounts to copying two folders over USB. After that, updates come
 from *Settings → Check for updates* on the Kindle.
+
+## Accounts
+
+One Kindle can hold up to three Zotero accounts, for a family or a shared device. With one account nothing looks
+different: *Settings → Accounts* shows it, with *Add account*.
+
+- **Add account** opens the same screen as the first start: a user ID and API key (and WebDAV, if that account
+  uses it). Each Zotero user can be on the Kindle once. You can also add one over USB with a `config.json`
+  ([INSTALL.md](INSTALL.md#or-put-the-account-in-a-file)).
+- **Switching.** With two or more accounts, Home's header shows the open one; tap it to switch. Each account keeps
+  its own library, downloads, reading positions and plugin data; only the open account syncs. Changes not yet sent
+  go first (up to 15 seconds, or *Skip*: they wait in that account for its next sync).
+- **PIN** (optional): in *Settings → Accounts*, the account's *Set PIN…*, 4 to 6 digits. It is asked when you switch to the account,
+  when the app starts with it, and when the Kindle wakes up (*Lock on sleep*). After five wrong tries the PIN pad
+  waits 30 seconds, then twice as long after each further miss (up to 30 minutes). A PIN locks the app's screens;
+  the account's books and library sit on the Kindle's USB storage and can be read from a computer. Its API key
+  can't: it is kept in the Kindle's protected system storage.
+- **Forgot the PIN?** Tap *Forgot PIN?* on the PIN pad. Connect the Kindle by USB and put a text file named
+  `reset-pin.txt` into the `zotero` folder, containing that account's Zotero API key (from
+  [zotero.org/settings/keys](https://www.zotero.org/settings/keys)); eject, then tap *Check reset-pin.txt*. Or type
+  the key on the Kindle. If the key matches, you can set a new PIN or remove it. The file is deleted once read,
+  whether it matched or not. If you made a new key on zotero.org since, that one works too (with Wi-Fi).
+- **Update key** takes a new API key or WebDAV details for the same Zotero user. A key of another user is refused:
+  that's *Add account*.
+- **Remove from this Kindle** deletes the account's library, downloads and plugin data from the Kindle — nothing in
+  Zotero itself. It shows what it deletes and offers to send unsent changes first. A locked account can be removed
+  without its PIN, after a warning.
 
 ## Plugins
 

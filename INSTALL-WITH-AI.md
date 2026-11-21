@@ -16,8 +16,9 @@ about.
 - **Only add files.** Never delete, move or overwrite anything on the Kindle outside `zotero/` and
   `documents/Zotero.sh` (an older version's `documents/Zotero-no-plugins.sh` and `.sdr` folder may go: the app
   no longer has it). Never format or "replace" the `documents` folder: it holds the user's books.
-- **On an update**, keep `zotero/zotero.db`, `zotero/files/`, `zotero/cache/` and `zotero/log/`. Replace only what
-  the release contains.
+- **On an update**, keep `zotero/accounts/` (each account's library, downloads and plugin data), `zotero/device.json`,
+  and — from versions before 0.13.0 — `zotero/zotero.db`, `zotero/files/`, `zotero/cache/` and `zotero/state/`, as
+  well as `zotero/plugins/` and `zotero/log/`. Replace only what the release contains.
 - **Credentials:** the user's Zotero API key and WebDAV password go only into `zotero/config.json` on the Kindle.
   Don't echo them back, log them, or save them anywhere else on this computer. Delete any temporary copy you made.
 - Don't install a jailbreak or change system files. If the Kindle isn't jailbroken, stop and point the user to
@@ -95,13 +96,16 @@ Write `zotero/config.json` on the Kindle (`userId` is a number):
 }
 ```
 
-At its next start the app moves this file into protected system storage and deletes it from the USB drive.
+At its next start the app moves this file into protected system storage and deletes it from the USB drive. On a
+Kindle that already has accounts, the same file updates the key of the account with that `userId`, or adds a new
+account (up to three); with three accounts it is left in place and nothing changes.
 
 ## Updating an existing install
 
 If `zotero/bin/zotero` is already on the Kindle, this is an update. From 0.2.0 on, the app updates itself: tell the
 user *Settings → Check for updates* is enough, unless they want you to copy the new release anyway. When copying,
-follow the rules above: keep `zotero.db`, `files/`, `cache/` and `log/`, and remove any `zotero/update/` folder.
+follow the rules above: keep `accounts/`, `device.json`, `zotero.db`, `files/`, `cache/`, `state/`, `plugins/` and
+`log/`, and remove any `zotero/update/` folder. Never copy a release that is older than 0.13.0 over 0.13.0 or later.
 
 ## 6. Finish
 

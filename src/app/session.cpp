@@ -149,7 +149,8 @@ int AccountSession::unsentCount() {
 void AccountSession::keepSummary(bool synced) {
     if (!lib_) return;
     try {
-        if (!keepAccountSummary(accountsFile_, entry_.userId, itemCount(), unsentCount(), synced ? deps_.wallMs() : 0))
+        if (!keepAccountSummary(accountsFile_, entry_.userId, itemCount(), unsentCount(), synced ? deps_.wallMs() : 0,
+                                lib_->userName()))
             log(LogLevel::Warn, "account %lld: its summary isn't kept in the account list", static_cast<long long>(entry_.userId));
     } catch (const DbError& e) {
         log(LogLevel::Warn, "account %lld: no summary kept: %s", static_cast<long long>(entry_.userId), e.what());

@@ -434,14 +434,16 @@ TEST_CASE("startup: the account layout is prepared first; the app then opens the
     CHECK(s.config->userId == kUser);
     CHECK(s.config->apiKey == "secret-key");
     CHECK_FALSE(s.imported);
-    // A config.json dropped over USB is imported after the migration (Setup confirms it), never
-    // taken for the migrated account's.
+    // A config.json dropped over USB is imported after the migration — another user's as a new
+    // account beside it — never taken for the migrated account's.
     writeFile(p.droppedConfig, dropped);
     const Startup d = startupConfig(p);
     REQUIRE(d.config);
-    CHECK(d.imported);
-    CHECK(d.config->userId == 999);
+    CHECK(d.dropped == Startup::Dropped::Added);
+    CHECK(d.droppedUser == 999);
+    CHECK(d.config->userId == kUser);
     CHECK(loadCredentials(p, kUser)->apiKey == "secret-key");
+    CHECK(loadCredentials(p, 999)->apiKey == "dropped");
 }
 
 TEST_CASE("startup: no account keeps the old places; a migration that failed opens nothing") {

@@ -241,3 +241,53 @@ TEST_CASE("accounts: every account's plugin data root, listed or not; dot-dirs a
     std::sort(roots.begin(), roots.end());
     CHECK(roots == std::vector<std::string>{accountPaths(p, 111).pluginDataRoot, accountPaths(p, 222).pluginDataRoot});
 }
+
+TEST_CASE("accounts: a tool's account (zk-sync --account) — the active one by default, else the one asked for") {
+    Root r;
+    Paths p = r.paths();
+    p.dbPath = (r.path / "zotero.db").string();
+    for (int64_t id : {111, 222}) {
+        REQUIRE(saveCredentials(p, cred(id)));
+        REQUIRE(addAccount(p, id, "user" + std::to_string(id)));
+    }
+    AccountTarget t = accountTarget(p, 0);
+    CHECK(t.userId == 111);
+    CHECK(t.dbPath == accountPaths(p, 111).dbPath);
+    REQUIRE(t.config);
+    CHECK(t.config->apiKey == "key111");
+    t = accountTarget(p, 222);
+    CHECK(t.userId == 222);
+    CHECK(t.dbPath == accountPaths(p, 222).dbPath);
+    REQUIRE(t.config);
+    CHECK(t.config->apiKey == "key222");
+    t = accountTarget(p, 999);  // not on this Kindle: nothing to open
+    CHECK_FALSE(t.config);
+    CHECK(t.dbPath.empty());
+    CHECK(t.error.find("999") != std::string::npos);
+}
+
+TEST_CASE("accounts: a tool's account before the account layout is the old library and config.json") {
+    Root r;
+    Paths p = r.paths();
+    p.dbPath = (r.path / "zotero.db").string();
+    REQUIRE(saveConfig(p.configDir, cred(5)));
+    AccountTarget t = accountTarget(p, 0);
+    CHECK(t.userId == 5);
+    CHECK(t.dbPath == p.dbPath);
+    REQUIRE(t.config);
+    CHECK(t.config->apiKey == "key5");
+    CHECK_FALSE(accountTarget(p, 5).config);  // --account needs the account layout
+}
+
+TEST_CASE("accounts: the summary fills a name the account didn't have, and never replaces one") {
+    Root r;
+    const Paths p = r.paths();
+    REQUIRE(addAccount(p, 1, ""));  // added from a dropped config.json: no name known yet
+    REQUIRE(addAccount(p, 2, "anna"));
+    CHECK(keepAccountSummary(p.accountsFile(), 1, 10, 0, 0, "pavel"));
+    CHECK(keepAccountSummary(p.accountsFile(), 2, 10, 0, 0, "someone else"));
+    const auto st = readAccounts(p.accountsFile());
+    REQUIRE(st);
+    CHECK(st->accounts[0].name == "pavel");
+    CHECK(st->accounts[1].name == "anna");
+}

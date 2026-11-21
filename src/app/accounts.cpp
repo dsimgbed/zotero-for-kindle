@@ -231,18 +231,48 @@ bool removeAccount(const Paths& paths, int64_t userId) {
     return true;
 }
 
-bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs) {
+bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs,
+                        const std::string& name) {
     auto st = readAccounts(accountsFile);
     if (!st) return false;
     for (auto& e : st->accounts)
         if (e.userId == userId) {
-            if (e.itemCount == items && e.unsentCount == unsent && (syncedWallMs <= 0 || e.syncedWallMs == syncedWallMs)) return true;
+            const bool named = e.name.empty() && !name.empty();
+            if (!named && e.itemCount == items && e.unsentCount == unsent && (syncedWallMs <= 0 || e.syncedWallMs == syncedWallMs))
+                return true;
             e.itemCount = items;
             e.unsentCount = unsent;
             if (syncedWallMs > 0) e.syncedWallMs = syncedWallMs;
+            if (named) e.name = name;
             return writeAccounts(accountsFile, *st);
         }
     return false;
+}
+
+AccountTarget accountTarget(const Paths& p, int64_t userId) {
+    AccountTarget t;
+    const auto st = readAccounts(p.accountsFile());
+    if (!st) {  // before the account layout
+        if (userId > 0) {
+            t.error = "no account list in " + p.configDir + " (--account needs the account layout)";
+            return t;
+        }
+        t.config = loadConfig(p.configDir);
+        t.dbPath = p.dbPath;
+        if (t.config) t.userId = t.config->userId;
+        else t.error = "no config.json in " + p.configDir;
+        return t;
+    }
+    t.userId = userId > 0 ? userId : st->active;
+    const bool listed = std::any_of(st->accounts.begin(), st->accounts.end(), [&](const AccountEntry& e) { return e.userId == t.userId; });
+    if (t.userId <= 0 || !listed) {
+        t.error = t.userId > 0 ? "account " + std::to_string(t.userId) + " isn't on this Kindle" : "no active account";
+        return t;
+    }
+    t.config = loadCredentials(p, t.userId);
+    t.dbPath = accountPaths(p, t.userId).dbPath;
+    if (!t.config) t.error = "no key for account " + std::to_string(t.userId) + " in " + p.credentialsFile(t.userId);
+    return t;
 }
 
 }  // namespace zk

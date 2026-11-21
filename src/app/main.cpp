@@ -444,7 +444,9 @@ int main(int argc, char** argv) {
     auto keyboard = makeKeyboard(*lipc);
 
     Startup startup;
-    if (startError.empty()) startup = startupConfig(paths);  // (it imports a dropped config.json)
+    if (startError.empty()) startup = startupConfig(paths);  // (it takes in a dropped config.json)
+    if (startup.dropped == Startup::Dropped::Added && activeAccount)  // opened if none else could be
+        if (const auto st = readAccounts(paths.accountsFile())) activeAccount = st->active;
 #ifndef ZK_KINDLE
     if (!startup.config)
         if (auto c = configFromEnvFile("local/credentials.env"); c && c->userId > 0 && !c->apiKey.empty()) startup.config = c;
@@ -503,9 +505,25 @@ int main(int argc, char** argv) {
     SyncStatus status;
     OpenFlow flow(wallMs);
     // Updates (Plan 7): only when the user asks, from Settings. <appDir>/update-feed (one URL)
-    // points at a test feed instead of GitHub. The backup is the active account's library (paths
-    // points there since openAccountLayout).
-    const InstallPaths installPaths{paths.appDir, paths.launcherPath, paths.configFile(), paths.dbPath};
+    // points at a test feed instead of GitHub. The backup: the account list and every account's
+    // library, the open one first (only it when space is short); a library still in the old place
+    // (no account yet) too.
+    InstallPaths installPaths;
+    installPaths.appDir = paths.appDir;
+    installPaths.launcherPath = paths.launcherPath;
+    installPaths.configFile = paths.configFile();
+    installPaths.dbPath = defaultPaths().dbPath;  // before accounts: paths.dbPath is the active account's
+    installPaths.accountsFile = paths.accountsFile();
+    installPaths.libraries = [paths] {
+        std::vector<AccountLibrary> out;
+        const auto st = readAccounts(paths.accountsFile());
+        if (!st) return out;
+        std::vector<AccountEntry> list = st->accounts;
+        std::stable_sort(list.begin(), list.end(), [](const AccountEntry& a, const AccountEntry& b) { return a.order < b.order; });
+        std::stable_partition(list.begin(), list.end(), [&](const AccountEntry& e) { return e.userId == st->active; });
+        for (const AccountEntry& e : list) out.push_back({e.userId, accountPaths(paths, e.userId).dbPath});
+        return out;
+    };
     // An update counts as good after 60 s in front (confirmed at the next background) or a clean
     // end; until then the launcher can go back, also after a Kindle shutdown or restart (install.h).
     UpdateConfirm updateConfirm(installPaths, appVersion());
@@ -902,6 +920,11 @@ int main(int argc, char** argv) {
         app.setRoot(0, std::make_unique<AccountErrorScreen>(startErrorTitle, startError));
     } else if (*activeAccount > 0 && config && !startup.imported) {
         switcher.switchTo(*activeAccount, AccountSwitcher::Why::Startup);  // its Home, or why it can't be opened
+    } else if (*activeAccount == 0 && std::filesystem::exists(paths.accountsFile())) {
+        // Every account was removed: a first one again, as Add account makes it (a config.json
+        // dropped over USB fills it in; Setup checks it first).
+        setTabRoots();
+        app.setRoot(0, accountsUi->firstAccountSetup(config.value_or(Config{}), startup.imported));
     } else {
         // No account yet, or one just dropped over USB: confirm it on the Setup screen first.
         setTabRoots();
@@ -941,6 +964,23 @@ int main(int argc, char** argv) {
             app.toast("The update to " + c.to.str() + " didn't start, so Zotero went back to " + c.from.str() + ".");
             break;
         case StartupNote::None: break;
+    }
+    // A config.json dropped over USB (startup.h): what became of it.
+    auto accountName = [&paths](int64_t userId) {
+        if (const auto st = readAccounts(paths.accountsFile()))
+            for (const AccountEntry& e : st->accounts)
+                if (e.userId == userId && !e.name.empty()) return e.name;
+        return "account " + std::to_string(userId);
+    };
+    switch (startup.dropped) {
+        case Startup::Dropped::KeyUpdated: app.toast("The key of " + accountName(startup.droppedUser) + " from config.json is kept"); break;
+        case Startup::Dropped::Added:
+            if (activeAccount != startup.droppedUser) app.toast("Added " + accountName(startup.droppedUser));
+            break;
+        case Startup::Dropped::Refused:
+            app.toast("config.json wasn't added: this Kindle has three accounts already");
+            break;
+        default: break;
     }
     if (std::getenv("ZK_DEBUG_STALL")) {  // proves the escape path on the device: freeze the UI on purpose
         const int64_t at = app.nowMs() + 5000;

@@ -86,7 +86,21 @@ bool addAccount(const Paths&, int64_t userId, const std::string& name);
 // `active` moves to the first account left (0: none). The account must not be open.
 bool removeAccount(const Paths&, int64_t userId);
 // The account's summary (itemCount, unsentCount, and syncedWallMs when `syncedWallMs` > 0) written
-// into its entry; false when it isn't listed or the list can't be written.
-bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs);
+// into its entry; `name` (its library's Zotero username) only where the entry has none (an account
+// added from a dropped config.json, before its first sync). False when it isn't listed or the
+// list can't be written.
+bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs,
+                        const std::string& name = {});
+
+// The account a tool works on (zk-sync --account): `userId`, or 0 for the active one; its key and
+// its library. Before the account layout (no accounts.json): config.json and the old library, for
+// 0 only. No config: `error` says why.
+struct AccountTarget {
+    int64_t userId = 0;
+    std::optional<Config> config;
+    std::string dbPath;
+    std::string error;
+};
+AccountTarget accountTarget(const Paths&, int64_t userId);
 
 }  // namespace zk

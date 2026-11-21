@@ -78,8 +78,9 @@ public:
     std::string chip();
     AccountSheet sheet();
     void sheetChoice(AccountSheet::Action, int64_t userId);
-    // Setup for a first account (no account left; Add account's flow without a way back).
-    std::unique_ptr<Screen> firstAccountSetup();
+    // Setup for a first account (no account left; Add account's flow without a way back), filled
+    // with `initial` (`imported`: a config.json dropped over USB).
+    std::unique_ptr<Screen> firstAccountSetup(const Config& initial = {}, bool imported = false);
 
     AccountPins& pins() { return pins_; }
 

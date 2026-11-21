@@ -17,6 +17,8 @@ struct Config {
 };
 
 std::optional<Config> loadConfig(const std::string& dir);
+// A config file anywhere (the one dropped over USB); nullopt if absent or without userId and apiKey.
+std::optional<Config> readConfigFile(const std::string& path);
 bool saveConfig(const std::string& dir, const Config&);
 // Per account: <configDir>/accounts/<userId>.json, mode 0600.
 std::optional<Config> loadCredentials(const Paths&, int64_t userId);

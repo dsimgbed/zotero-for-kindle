@@ -61,6 +61,19 @@ Leave out the three `webdav` lines if you use Zotero storage.
 The app reads it at the next start and stores it in a protected place inside the Kindle's system storage. It then
 deletes the file from the USB drive.
 
+The same file works later too:
+
+- **For an account already on the Kindle** (the same `userId`), it replaces that account's key and WebDAV details.
+- **For another Zotero user**, it adds an account (up to three; see [Accounts](README.md#accounts)). The account
+  you have open stays open; the new one is in *Settings → Accounts* and on Home's account switch.
+- **With three accounts already**, the file is left on the USB drive and nothing changes; the app says so. Remove
+  an account in *Settings → Accounts* first.
+
+### Forgot an account's PIN
+
+Put a text file named `reset-pin.txt` into the `zotero` folder over USB, containing that account's Zotero API key,
+then tap *Forgot PIN?* → *Check reset-pin.txt* on the PIN pad. See [Accounts](README.md#accounts).
+
 ## Updating
 
 From 0.2.0 on, open *Settings → Check for updates* on the Kindle. The app shows what's new, downloads the update,
@@ -68,8 +81,15 @@ checks its signature and restarts into it. If the new version doesn't start, it 
 The new version counts as started after a minute on screen (or when you quit it); if the Kindle is switched off or
 restarted before that, it goes back too, and you can install the update again.
 
+Before installing, the app backs up the account list and every account's library (not the downloaded books); if
+the Kindle is short of space, only the open account's. A rollback puts them back.
+
 From 0.1.0, or to update by hand: copy the new `zotero` and `documents` folders the same way, merging and replacing
-files. Your library, downloads and account stay.
+files. Your library, downloads and accounts stay.
+
+From 0.13.0 on, each account's data is in `zotero/accounts/<userID>/` (the app moves an older single library there
+at its first start). Going back by hand to a version before 0.13.0 after that isn't supported: it would find no
+library and ask to sign in again. (An update that doesn't start is still rolled back safely.)
 
 ## Uninstalling
 

@@ -59,6 +59,11 @@ std::optional<Config> loadConfig(const std::string& dir) {
     return text ? parse(*text) : std::nullopt;
 }
 
+std::optional<Config> readConfigFile(const std::string& path) {
+    auto text = readFile(path);
+    return text ? parse(*text) : std::nullopt;
+}
+
 std::optional<Config> loadCredentials(const Paths& p, int64_t userId) {
     auto text = readFile(p.credentialsFile(userId));
     auto c = text ? parse(*text) : std::nullopt;

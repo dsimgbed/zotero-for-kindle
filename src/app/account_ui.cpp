@@ -127,11 +127,11 @@ std::unique_ptr<Screen> AccountsUi::addSetup(bool canGoBack) {
     return setup;
 }
 
-std::unique_ptr<Screen> AccountsUi::firstAccountSetup() {
+std::unique_ptr<Screen> AccountsUi::firstAccountSetup(const Config& initial, bool imported) {
     auto name = std::make_shared<std::string>();
     auto check = [check = deps_.checkKey, name](const Config& c) { return check ? check(c, name.get()) : UserError{}; };
     auto connected = [this, name](const Config& c, Nav&) { app_.defer([this, c, n = *name] { added(c, n); }); };
-    auto setup = std::make_unique<SetupScreen>(Config{}, false, deps_.paths.configDir, check, connected, false);
+    auto setup = std::make_unique<SetupScreen>(initial, imported, deps_.paths.configDir, check, connected, false);
     SetupPurpose p;  // as at first: no account on the Kindle; no config.json (the account list is there)
     p.keepsConfigFile = false;
     setup->setPurpose(std::move(p));
