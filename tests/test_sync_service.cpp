@@ -1007,3 +1007,59 @@ TEST_CASE("kept: a stalled file no longer kept, or gone, is off the stalled list
     Library ui(db);
     CHECK(ui.metaValue("keptStalled") == "{}");
 }
+
+TEST_CASE("sync service: pushNow cuts what runs short, sends what is unsent first, and says when it is through") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.markRead("BOOK0001", true);
+    }
+    // A sync that hangs on its first read; writes go through.
+    std::atomic<bool> hangReads{true};
+    rig.route = [&rig, &hangReads](const HttpRequest& r) {
+        if (r.method == "GET" && hangReads) {
+            while (!(r.cancel && *r.cancel)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            HttpResponse resp;
+            resp.curlCode = 42;
+            resp.curlError = "cancelled";
+            return resp;
+        }
+        std::lock_guard<std::mutex> lock(rig.serverMutex);
+        return rig.zotero.send(r);
+    };
+    rig.service->syncNow();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(rig.service->busy());  // the sync hangs
+    const uint64_t req = rig.service->pushNow(Clock::now() + std::chrono::seconds(10));
+    CHECK(req > 0);
+    const auto t0 = Clock::now();
+    while (!rig.service->pushDone(req) && msSince(t0) < 5000) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    hangReads = false;
+    REQUIRE(rig.service->pushDone(req));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.readMarks().empty());  // sent
+}
+
+TEST_CASE("sync service: pushNow past its deadline begins no push; what is unsent stays queued") {
+    Rig rig;
+    rig.start();
+    rig.service->syncNow();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    {
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        ui.markRead("BOOK0001", true);
+    }
+    const uint64_t req = rig.service->pushNow(Clock::now() - std::chrono::seconds(1));
+    const auto t0 = Clock::now();
+    while (!rig.service->pushDone(req) && msSince(t0) < 5000) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(rig.service->pushDone(req));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.readMarks().size() == 1);
+}

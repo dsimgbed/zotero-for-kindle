@@ -182,6 +182,24 @@ void SyncService::removeLibrary(int64_t lib, bool evenUnsent) {
     enqueue({Command::Kind::RemoveLibrary, {}, {}, evenUnsent, lib});
 }
 
+uint64_t SyncService::pushNow(Clock::time_point deadline) {
+    Command c{Command::Kind::Push, {}, {}, false};
+    c.deadline = deadline;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        c.request = ++nextRequest_;
+        *cancel_ = true;  // what runs ends now (the worker clears it as it takes this push)
+        commands_.push_front(c);
+    }
+    cv_.notify_all();
+    return c.request;
+}
+
+bool SyncService::pushDone(uint64_t request) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pushedRequest_ >= request;
+}
+
 std::optional<KeptStatus> SyncService::keptStatus(const std::string& collectionKey) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = kept_.find(collectionKey);
@@ -314,6 +332,8 @@ void SyncService::run() {
             } else {
                 cmd = std::move(commands_.front());
                 commands_.pop_front();
+                // pushNow() cut short what ran before it; the push itself must not be.
+                if (cmd.kind == Command::Kind::Push && cmd.request != 0 && !stopping_) *cancel_ = false;
             }
         }
         busy_ = cmd.kind != Command::Kind::KeepDownloads;  // a book opened meanwhile goes first: not "waiting"
@@ -352,7 +372,7 @@ void SyncService::run() {
                         break;
                     }
                     std::vector<int64_t> passed;
-                    const SyncReport pushed = pushChanges(w, &passed);
+                    const SyncReport pushed = pushChanges(w, &passed, cmd.deadline);
                     recordGroupErrors(*w.lib, passed, pushed);
                     break;
                 }
@@ -496,6 +516,13 @@ void SyncService::run() {
             ev.attachmentKey = cmd.attachmentKey;
             ev.error = w.lib->lastError();
             emit(std::move(ev));
+        }
+        if (cmd.kind == Command::Kind::Push && cmd.request != 0) {  // pushNow(): through with it, however it went
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                pushedRequest_ = std::max(pushedRequest_, cmd.request);
+            }
+            wakeUi();
         }
         busy_ = false;
     }
@@ -766,7 +793,7 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
     return stop({});  // network, server, login: not file after file; the next sync tries again
 }
 
-SyncReport SyncService::pushChanges(Worker& w, std::vector<int64_t>* passed) {
+SyncReport SyncService::pushChanges(Worker& w, std::vector<int64_t>* passed, std::optional<Clock::time_point> deadline) {
     // Plugin changes aimed at groups they can never go to (read-only, switched off, gone,
     // unreadable) are refused first, whatever else is pending: the plugin hears it now.
     const int refused = w.lib->refuseUnsendablePluginChanges();
@@ -786,7 +813,7 @@ SyncReport SyncService::pushChanges(Worker& w, std::vector<int64_t>* passed) {
     start.kind = SyncEvent::Kind::PushStarted;
     start.total = pending;
     emit(start);
-    for (size_t i = 0; i < libs.size() && !stopping_; ++i) {
+    for (size_t i = 0; i < libs.size() && !stopping_ && !(deadline && Clock::now() >= *deadline); ++i) {
         SyncReport one = w.engineFor(libs[i], deps_.pluginEventsWanted).push();
         if (libs[i] != kMyLibrary) {
             scopeGroupError(one, libs[i], *w.lib);  // a group's refusal is the group's, not the account's

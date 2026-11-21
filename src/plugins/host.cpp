@@ -651,7 +651,8 @@ struct PluginHost::Impl {
         return (fs::path(account.storageRoot.empty() ? deps.pluginsDir : account.storageRoot) / id).string();
     }
 
-    void unload(const std::string& id) {
+    // `id` by value: callers pass the loaded map's own key, which erasing it below frees.
+    void unload(const std::string id) {
         auto it = loaded.find(id);
         if (it == loaded.end()) return;
         for (auto& [wid, w] : it->second->run->work) w.cancel->store(true);

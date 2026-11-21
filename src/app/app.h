@@ -68,6 +68,10 @@ public:
     void setSync(SyncControl& s) { sync_ = &s; }
     // Replace a tab's root and show it (e.g. Home after Setup).
     void replaceRoot(int tab, std::unique_ptr<Screen>);
+    // Every screen of every tab closed (top first; destroyed after the step, as a pop), and `s`
+    // the only one, Home's root: leaving an account, no screen keeps anything of it. Questions
+    // waiting go unanswered. The other tabs stay empty until setRoot.
+    void clearTo(std::unique_ptr<Screen> s);
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }

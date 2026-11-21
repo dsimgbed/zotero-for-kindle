@@ -243,6 +243,28 @@ void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
     showTop();
 }
 
+void App::clearTo(std::unique_ptr<Screen> s) {
+    for (int t = 0; t < kTabs; ++t) {
+        const int tab = (tab_ + t) % kTabs;  // the visible tab first
+        while (!stacks_[tab].empty()) {      // top first
+            auto old = std::move(stacks_[tab].back());
+            stacks_[tab].pop_back();
+            retire(std::move(old));
+        }
+    }
+    held_.clear();
+    // Questions asked for what was shown go with it, unanswered.
+    if (questionShown_) {
+        questionShown_ = false;
+        shownSince_ = -1;
+    }
+    questions_.clear();
+    stacks_[0].push_back(std::move(s));
+    tab_ = 0;
+    showTop();
+    pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, Waveform::Full});
+}
+
 void App::push(std::unique_ptr<Screen> s) {
     stacks_[tab_].push_back(std::move(s));
     showTop();
@@ -592,7 +614,7 @@ void App::step(int timeout_ms) {
 
     beat("sync events");
     SyncEvent ev;
-    while (sync_->poll(ev)) {
+    while (sync().poll(ev)) {  // the open account's worker (none: the constructor's)
         if (hook_) {
             caller_ = nullptr;
             guard([&] { hook_(ev, *this); });

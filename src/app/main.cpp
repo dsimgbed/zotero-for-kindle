@@ -26,6 +26,7 @@
 
 #include "app/accounts.h"
 #include "app/app.h"
+#include "app/account_switch.h"
 #include "app/session.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
@@ -433,15 +434,6 @@ int main(int argc, char** argv) {
         startErrorTitle = "Can't move the library";
         startError = "Moving the library to its new place on the Kindle stopped part-way: " + why;
     }
-    std::optional<AccountsState> accounts = readAccounts(paths.accountsFile());
-    auto entryFor = [&accounts](int64_t userId) {  // the account's entry in accounts.json
-        AccountEntry e;
-        e.userId = userId;
-        if (accounts)
-            for (const auto& a : accounts->accounts)
-                if (a.userId == userId) e = a;
-        return e;
-    };
     DeviceSettings device(paths.deviceSettingsFile);  // the Kindle's settings, whichever account is open
     // The app's library while no account is open (Setup, the error screen): empty, in memory.
     Db noAccountDb = Db::open(":memory:");
@@ -458,24 +450,12 @@ int main(int argc, char** argv) {
 #endif
     std::optional<Config> config = startup.config;
 
-    // The open account (spec: multiple accounts, The account session): its library, sync, plugin
-    // data and caches. Declared before the app and everything bound to it, so it outlives them.
+    // What each account's session (its library, sync, plugin data and caches) is opened with.
     SessionDeps sessionDeps;
     sessionDeps.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
     sessionDeps.keepAwake = &keepAwake;
     sessionDeps.wallMs = wallMs;
     sessionDeps.pluginDataInPluginsDir = gPluginDevLoop;  // the developer loop: the author's own folder
-    std::unique_ptr<AccountSession> session;
-    if (startError.empty() && *activeAccount > 0 && config && !startup.imported) {
-        session = AccountSession::open(paths, entryFor(*activeAccount), *config, device, &why, sessionDeps);
-        if (!session) {
-            const AccountEntry e = entryFor(*activeAccount);
-            startErrorTitle = "Can't open the library";
-            startError = "The library of " + (e.name.empty() ? "account " + std::to_string(e.userId) : e.name) +
-                         " can't be opened: " + why;
-        }
-    }
-
     std::unique_ptr<Display> display = makeDisplay();
     {
         // The window, device and ppi everything lays out from (Plan 6).
@@ -494,9 +474,23 @@ int main(int argc, char** argv) {
     NullSync nullSync;
     App app(*display, noAccountLib, nullSync, *keyboard);
     app.setDeviceSettings(device);
-    app.setSession(session.get());
+    // The open account (spec: multiple accounts, The account session): opened, left and closed only
+    // by the switcher — at startup, on a switch, at exit. App reaches it through setSession.
+    SwitcherDeps switcherDeps;
+    switcherDeps.paths = paths;
+    switcherDeps.device = &device;
+    switcherDeps.session = sessionDeps;
+    switcherDeps.credentials = [&paths, &config](int64_t userId) -> std::optional<Config> {
+        if (auto c = loadCredentials(paths, userId)) return c;
+        if (config && config->userId == userId) return config;  // (desktop) local/credentials.env
+        return std::nullopt;
+    };
+    AccountSwitcher switcher(app, switcherDeps);
     // The open account's engines (its crengine cache), for the readers made from now on.
-    auto readerEnv = [&session] { return session ? session->engineEnv(kEngineEnv) : kEngineEnv; };
+    auto readerEnv = [&switcher] {
+        const AccountSession* s = switcher.session();
+        return s ? s->engineEnv(kEngineEnv) : kEngineEnv;
+    };
     // Some plugin is on and running: only then do the screens and the sync worker build events for
     // plugins (kept by the poll hook; read on both threads). Outlives the sync service.
     std::atomic<bool> pluginsListening{false};
@@ -534,7 +528,7 @@ int main(int argc, char** argv) {
     if (pluginsOff)
         log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
     catalog::repairInterrupted(paths.pluginsDir);  // a swap the app was killed in: before the host scans
-    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, session ? session->pluginAccount() : PluginAccount{}));
+    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, PluginAccount{}));  // bound to an account as it opens
     if (gPluginDevLoop) {  // say what is on, and why each other plugin won't run
         for (const auto& line : enablePluginsForDev(*plugins, gEnablePlugins)) std::fprintf(stderr, "%s\n", line.c_str());
         for (const auto& line : devLoopNotes(plugins->status(), appVersion())) std::fprintf(stderr, "%s\n", line.c_str());
@@ -577,7 +571,10 @@ int main(int argc, char** argv) {
     // zk.reader.open: a document read as a preview, kept in the account's cache/preview, downloaded
     // through the plugin's own net rules (the app's HTTP stack, on the download screen's thread).
     pluginEvents.setPreviewOpener(previewOpener(
-        [&session]() -> PreviewCache* { return session ? &session->previews() : nullptr; },
+        [&switcher]() -> PreviewCache* {
+            AccountSession* s = switcher.session();
+            return s ? &s->previews() : nullptr;
+        },
         [&] { return plugins && pluginsRunning && !pluginsOff ? plugins.get() : nullptr; },
         [&app, &device, &lipc, readerEnv](const PreviewEntry& e) {
             return previewReader(e, readerEnv(), loadSettings(app.library(), device).flashEvery, lipc.get());
@@ -643,7 +640,7 @@ int main(int argc, char** argv) {
     auto startServices = [&] {
         status.reset();
         flow.reset();
-        session->startServices(app, pluginsOff ? nullptr : plugins.get(), pluginsListening);
+        if (AccountSession* s = switcher.session()) s->startServices(app, pluginsOff ? nullptr : plugins.get(), pluginsListening);
     };
 
     app.setEventHook([&flow, &updateNotice, &pluginSink, &backgroundRound, &app](const SyncEvent& e, Nav& nav) {
@@ -677,18 +674,21 @@ int main(int argc, char** argv) {
     // the first frame of the next start shows it (plugins load after the first screen).
     std::unique_ptr<LibraryItemSource> pluginItems;
     std::unique_ptr<PluginHome> pluginHome;
-    auto bindSession = [&] {
-        pluginHome.reset();
+    auto unbindSession = [&] {
+        pluginHome.reset();  // Home's body writes its last tree into the account's state
         pluginItems.reset();
         pluginEvents.setItemUi(nullptr, itemTap);
-        if (!session) return;
-        pluginItems = std::make_unique<LibraryItemSource>(session->library(), flow.statusFn(), wallMs);
+    };
+    auto bindSession = [&] {
+        unbindSession();
+        AccountSession* s = switcher.session();
+        if (!s) return;
+        pluginItems = std::make_unique<LibraryItemSource>(s->library(), flow.statusFn(), wallMs);
         pluginEvents.setItemUi(pluginItems.get(), itemTap);
-        pluginHome = std::make_unique<PluginHome>(pluginEvents, session->homeTree(),
+        pluginHome = std::make_unique<PluginHome>(pluginEvents, s->homeTree(),
                                                   [&app, &device] { return loadSettings(app.library(), device).homeScreen; },
                                                   pluginItems.get(), itemTap);
     };
-    bindSession();
     // zk.library.open: the item, the file asked for, or the file an annotation is in, opened at it
     // (itemToOpen). The promise follows OpenFlow's outcome.
     pluginEvents.setItemOpener([&flow](App& a, const ItemRef& ref, std::optional<std::string> attachment,
@@ -706,7 +706,7 @@ int main(int argc, char** argv) {
                 pluginsRunning = false;
                 pluginEvents.setRunning(false);
                 backgroundRound.abandon();
-                if (session) session->stopServices();  // the host and the sync worker (the library stays open)
+                if (AccountSession* s = switcher.session()) s->stopServices();  // the host and the sync worker (the library stays open)
                 if (plugins) plugins->stop();
                 pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
             },
@@ -715,11 +715,12 @@ int main(int argc, char** argv) {
                 catalogService.cancel();  // a plugin download in flight ends now...
                 catalogService.wait();    // ...and its worker may still use the old host
                 plugins.reset();
-                plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, session ? session->pluginAccount() : PluginAccount{}));
+                const AccountSession* s = switcher.session();
+                plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, s ? s->pluginAccount() : PluginAccount{}));
                 pluginEvents.rebind(plugins.get(), app);
                 pluginsRunning = true;
                 pluginEvents.setRunning(!pluginsOff);
-                if (session) startServices();  // the sync worker, and the new host for the account
+                startServices();  // the sync worker, and the new host for the account
             }));
     };
     auto pendingUpdate = [&]() -> std::optional<std::string> {
@@ -777,44 +778,68 @@ int main(int argc, char** argv) {
     // USB, or asked for), or the first account (Setup saved its config.json, which moves into the
     // account layout as an install from before accounts would). A key of another user isn't taken
     // here (adding an account is the account screens' job). True when the account is open and runs.
-    auto useKey = [&](const Config& c) -> bool {
-        if (session) {
-            if (c.userId != session->userId()) {
+    // The tabs other than Home, made afresh for each account (a switch clears them all).
+    auto setTabRoots = [&] {
+        app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
+        app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
+        app.setRoot(3, std::make_unique<NotesScreen>(
+                           [&flow, &app](const ItemRow& r, std::optional<AnnotationRecord> at) {
+                               if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty() &&
+                                   (r.files <= 1 || r.exactFile))  // not before "Open which file?"
+                                   app.toast("Downloading the book…");  // Notes has no row to show progress in
+                               flow.open(r, app, std::move(at));
+                           }));
+    };
+    // The switcher's steps 1 and 5 for this app: what is bound to the account outside its session
+    // goes as the account is left; the next one is bound, its screens made and its services
+    // started (at startup: after the first screen, below; plugins load lazily, at the first event).
+    bool appStarted = false;
+    switcher.onLeave([&] {
+        backgroundRound.abandon();  // a round of the account left ends unreported
+        unbindSession();
+    });
+    switcher.onOpened([&](AccountSession& s) {
+        config = s.config();
+        activeAccount = s.userId();
+        bindSession();
+        setTabRoots();
+        app.replaceRoot(0, makeHome());
+        if (appStarted) startServices();
+    });
+    // A key Setup confirmed: the open account's new key, the key of the active account (dropped over
+    // USB, or asked for), or the first account (Setup saved its config.json, which moves into the
+    // account layout as an install from before accounts would). A key of another user isn't taken
+    // here (adding an account is the account screens' job). Home shows once the account is open.
+    auto useKey = [&](const Config& c) {
+        if (AccountSession* s = switcher.session()) {
+            if (c.userId != s->userId()) {
                 app.toast("This key is for another account");
-                return false;
+                return;
             }
             saveCredentials(paths, c);
             config = c;
             status.reset();
             flow.reset();
-            session->restartSync(c);
-            return true;
+            s->restartSync(c);
+            app.replaceRoot(0, makeHome());
+            return;
         }
         if (*activeAccount == 0) {
             const auto first = openAccountLayout(paths, &why);
             if (!first || *first == 0) {
                 log(LogLevel::Error, "account: the first account can't be set up (%s)", first ? "no userID" : why.c_str());
                 app.toast("Can't set up the account on the Kindle");
-                return false;
+                return;
             }
             activeAccount = first;
-            accounts = readAccounts(paths.accountsFile());
         }
         if (c.userId != *activeAccount) {
             app.toast("This key is for another account");
-            return false;
+            return;
         }
         saveCredentials(paths, c);
         config = c;
-        session = AccountSession::open(paths, entryFor(c.userId), c, device, &why, sessionDeps);
-        if (!session) {
-            app.replaceRoot(0, std::make_unique<AccountErrorScreen>("Can't open the library", "The library can't be opened: " + why));
-            return false;
-        }
-        app.setSession(session.get());
-        bindSession();
-        startServices();
-        return true;
+        switcher.switchTo(c.userId, AccountSwitcher::Why::Startup);  // Home, or why it can't be opened
     };
     makeSetup = [&](const Config& initial, bool imported, bool canGoBack) -> std::unique_ptr<Screen> {
         auto check = [](const Config& c) {
@@ -822,35 +847,27 @@ int main(int argc, char** argv) {
             return checkAccount(http, c);
         };
         auto connected = [&](const Config& c, Nav&) {
-            app.defer([&, c] {
-                if (useKey(c)) app.replaceRoot(0, makeHome());
-            });
+            app.defer([&, c] { useKey(c); });
         };
         return std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected, canGoBack);
     };
 
-    app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
-    app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
-    app.setRoot(3, std::make_unique<NotesScreen>(
-                       [&flow, &app](const ItemRow& r, std::optional<AnnotationRecord> at) {
-                           if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty() &&
-                               (r.files <= 1 || r.exactFile))  // not before "Open which file?"
-                               app.toast("Downloading the book…");  // Notes has no row to show progress in
-                           flow.open(r, app, std::move(at));
-                       }));
     if (!startError.empty()) {
-        // The migration or the account's library failed: why, and nothing more (no account opened).
+        // The move into the account layout failed: why, and nothing more (no account opened).
+        setTabRoots();
         app.setRoot(0, std::make_unique<AccountErrorScreen>(startErrorTitle, startError));
-    } else if (session) {
-        app.setRoot(0, makeHome());
+    } else if (*activeAccount > 0 && config && !startup.imported) {
+        switcher.switchTo(*activeAccount, AccountSwitcher::Why::Startup);  // its Home, or why it can't be opened
     } else {
         // No account yet, or one just dropped over USB: confirm it on the Setup screen first.
+        setTabRoots();
         app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported, false));
     }
     CurrentSync current(app);
     Lifecycle lifecycle(current, status, [&app, &device] { return loadSettings(app.library(), device).syncIntervalMinutes; },
-                        [&session, usbDir = std::filesystem::path(paths.accountsRoot).parent_path().string()] {
-                            return storageAvailable(session ? session->paths().filesDir : usbDir);  // the USB storage
+                        [&switcher, usbDir = std::filesystem::path(paths.accountsRoot).parent_path().string()] {
+                            const AccountSession* s = switcher.session();
+                            return storageAvailable(s ? s->paths().filesDir : usbDir);  // the USB storage
                         });
     lifecycle.attach(app);
     lifecycle.setOnBackground([&] {
@@ -870,8 +887,9 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    appStarted = true;
     plugins->setBackground(app.inBackground());
-    if (session) startServices();  // after the first screen: plugins load lazily, at the first event
+    startServices();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = updateConfirm.atFirstScreen(); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
         case StartupNote::RolledBack:
@@ -887,7 +905,7 @@ int main(int argc, char** argv) {
         }, 1000);
     }
     for (int i = 1; i + 1 < argc; ++i)  // --open <attachmentKey>: open a book at start (device checks)
-        if (!std::strcmp(argv[i], "--open") && session)
+        if (!std::strcmp(argv[i], "--open") && switcher.session())
             if (auto att = app.library().attachment(argv[i + 1]))
                 if (auto row = app.library().rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key)) flow.open(*row, app);
     const int rc = app.run();
@@ -895,18 +913,15 @@ int main(int argc, char** argv) {
     if (rc == 0) updateConfirm.cleanEnd();                          // for an update too
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
-    watchdog.beat("stopping plugins");
-    backgroundRound.abandon();
-    if (session) session->stopServices();  // the plugin host (interrupted: within 2 s), then the sync worker
-    if (plugins) plugins->stop();
+    // As a switch leaves an account (account_switch.h), without the push: every screen first...
     keyboard->hide();
     watchdog.beat("closing books");  // a reader may wait for its handwriting (ReaderScreen::kInkFlushMs)
-    app.closeAll();                  // readers go first, so their render workers stop...
-    RenderWorker::waitForAll(3000);  // ...and their engines close before static destructors run
-    watchdog.beat("closing the library");
-    pluginHome.reset();  // Home's body writes its last tree into the account's state
-    pluginItems.reset();
-    app.setSession(nullptr);
-    if (session) session->stop();  // its caches dropped, the library closed
+    app.closeAll();                  // (readers go, so their render workers stop)
+    // ...then the account: downloads cancelled, plugin host (interrupted: within 2 s), sync worker,
+    // render workers, caches, library.
+    watchdog.beat("closing the account");
+    switcher.close();
+    if (plugins) plugins->stop();    // (never started with no account open)
+    RenderWorker::waitForAll(3000);  // engines closed before static destructors run
     return rc;
 }
