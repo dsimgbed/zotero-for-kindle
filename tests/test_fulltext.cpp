@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -35,6 +37,9 @@ AttachmentRecord local(const std::string& key, const std::string& type, const st
     return a;
 }
 
+// The cache folder given to extractFullText (an account's cache/fulltext in the app).
+std::string cacheIn(const std::string& d) { return d + "/.cache/fulltext"; }
+
 bool has(const std::string& hay, const std::string& needle) { return hay.find(needle) != std::string::npos; }
 
 }  // namespace
@@ -42,7 +47,7 @@ bool has(const std::string& hay, const std::string& needle) { return hay.find(ne
 TEST_CASE("fulltext: an EPUB fixture's text in reading order") {
     const std::string plugins = freshDir("epub");
     UserError err;
-    auto text = extractFullText(local("BOOK0001", "application/epub+zip", "tests/data/epub/pride-and-prejudice.epub"), plugins, env(), &err);
+    auto text = extractFullText(local("BOOK0001", "application/epub+zip", "tests/data/epub/pride-and-prejudice.epub"), cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(text, err.message);
     const size_t first = text->find("It is a truth universally acknowledged");
     REQUIRE(first != std::string::npos);
@@ -57,7 +62,7 @@ TEST_CASE("fulltext: an EPUB fixture's text in reading order") {
 TEST_CASE("fulltext: a PDF fixture's text page by page") {
     const std::string plugins = freshDir("pdf");
     UserError err;
-    auto text = extractFullText(local("PAPER001", "application/pdf", "tests/data/pdf/sample.pdf"), plugins, env(), &err);
+    auto text = extractFullText(local("PAPER001", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(text, err.message);
     std::vector<std::string> pages;
     std::stringstream ss(*text);
@@ -72,27 +77,27 @@ TEST_CASE("fulltext: a file not on the Kindle is an error, not empty text") {
     UserError err;
     AttachmentRecord remote = local("REMOTE01", "application/pdf", "tests/data/pdf/sample.pdf");
     remote.state = AttachmentRecord::State::Remote;
-    CHECK_FALSE(extractFullText(remote, plugins, env(), &err));
+    CHECK_FALSE(extractFullText(remote, cacheIn(plugins), env(), &err));
     CHECK(has(err.message, "isn't on the Kindle"));
 
     err = {};
-    CHECK_FALSE(extractFullText(local("GONE0001", "application/pdf", "/tmp/zk-fulltext-nope.pdf"), plugins, env(), &err));
+    CHECK_FALSE(extractFullText(local("GONE0001", "application/pdf", "/tmp/zk-fulltext-nope.pdf"), cacheIn(plugins), env(), &err));
     CHECK(has(err.message, "isn't on the Kindle"));
 
     err = {};
     AttachmentRecord linked = local("LINK0001", "application/pdf", "tests/data/pdf/sample.pdf");
     linked.linkMode = "linked_file";
-    CHECK_FALSE(extractFullText(linked, plugins, env(), &err));
+    CHECK_FALSE(extractFullText(linked, cacheIn(plugins), env(), &err));
     CHECK(has(err.message, "linked"));
 
     err = {};
-    CHECK_FALSE(extractFullText(local("HTML0001", "text/html", "tests/data/pdf/sample.pdf"), plugins, env(), &err));
+    CHECK_FALSE(extractFullText(local("HTML0001", "text/html", "tests/data/pdf/sample.pdf"), cacheIn(plugins), env(), &err));
     CHECK(has(err.message, "only for EPUB and PDF"));
 
     err = {};  // a damaged file: the engine's own message
     const std::string bad = plugins + "/bad.pdf";
     std::ofstream(bad) << "not a pdf";
-    CHECK_FALSE(extractFullText(local("BAD00001", "application/pdf", bad), plugins, env(), &err));
+    CHECK_FALSE(extractFullText(local("BAD00001", "application/pdf", bad), cacheIn(plugins), env(), &err));
     CHECK_FALSE(err.message.empty());
 }
 
@@ -102,21 +107,21 @@ TEST_CASE("fulltext: a second call is served from the cache") {
     fs::copy_file("tests/data/pdf/sample.pdf", copy);
     UserError err;
     auto a = local("CACHE001", "application/pdf", copy, "md5one");
-    auto first = extractFullText(a, plugins, env(), &err);
+    auto first = extractFullText(a, cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(first, err.message);
     CHECK(fs::exists(plugins + "/.cache/fulltext/CACHE001-md5one.txt"));
     CHECK_FALSE(fs::exists(plugins + "/.cache/fulltext/CACHE001-md5one.txt.tmp"));
 
     // The file is now unreadable as a PDF: only the cache can answer.
     std::ofstream(copy, std::ios::trunc) << "garbage";
-    auto second = extractFullText(a, plugins, env(), &err);
+    auto second = extractFullText(a, cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(second, err.message);
     CHECK(*second == *first);
 
     // A new md5 for the same attachment: the stale entry goes when the new one is written.
     fs::copy_file("tests/data/pdf/single-column.pdf", copy, fs::copy_options::overwrite_existing);
     a.md5 = "md5two";
-    auto third = extractFullText(a, plugins, env(), &err);
+    auto third = extractFullText(a, cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(third, err.message);
     CHECK(*third != *first);
     CHECK(fs::exists(plugins + "/.cache/fulltext/CACHE001-md5two.txt"));
@@ -125,7 +130,7 @@ TEST_CASE("fulltext: a second call is served from the cache") {
     // Another attachment's entry is left alone.
     std::ofstream(plugins + "/.cache/fulltext/OTHER001-x.txt") << "x";
     a.md5 = "md5three";
-    REQUIRE(extractFullText(a, plugins, env(), &err));
+    REQUIRE(extractFullText(a, cacheIn(plugins), env(), &err));
     CHECK(fs::exists(plugins + "/.cache/fulltext/OTHER001-x.txt"));
 }
 
@@ -133,7 +138,7 @@ namespace {
 
 struct FailingEngine : test::FakeEngine {
     bool throws = false;
-    bool fullText(std::string& out, UserError* err) override {
+    bool fullText(std::string& out, UserError* err, const std::atomic<bool>*) override {
         out = "partial";
         if (throws) throw std::bad_alloc();
         if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "fake"};
@@ -161,18 +166,18 @@ TEST_CASE("fulltext: an engine failure is an error and is never cached") {
         const std::string plugins = freshDir("fail");
         UserError err;
         auto a = local("FAIL0001", "application/pdf", "tests/data/pdf/sample.pdf");
-        CHECK_FALSE(extractFullText(a, plugins, env(), &err, failing(throws)));
+        CHECK_FALSE(extractFullText(a, cacheIn(plugins), env(), &err, failing(throws)));
         CHECK_FALSE(err.message.empty());
         CHECK(cacheEmpty(plugins));
         // The real engine still works afterwards: nothing wrong was left behind.
-        CHECK(extractFullText(a, plugins, env(), &err));
+        CHECK(extractFullText(a, cacheIn(plugins), env(), &err));
     }
 }
 
 TEST_CASE("fulltext: no checksum, no cache") {
     const std::string plugins = freshDir("nomd5");
     UserError err;
-    auto text = extractFullText(local("NOSUM001", "application/pdf", "tests/data/pdf/sample.pdf", ""), plugins, env(), &err);
+    auto text = extractFullText(local("NOSUM001", "application/pdf", "tests/data/pdf/sample.pdf", ""), cacheIn(plugins), env(), &err);
     REQUIRE_MESSAGE(text, err.message);
     CHECK(cacheEmpty(plugins));
 }
@@ -181,7 +186,7 @@ TEST_CASE("fulltext: an unreadable cache folder doesn't make extraction throw") 
     const std::string plugins = freshDir("badcache");
     std::ofstream(plugins + "/.cache") << "a file where the folder should be";
     UserError err;
-    auto text = extractFullText(local("NODIR001", "application/pdf", "tests/data/pdf/sample.pdf"), plugins, env(), &err);
+    auto text = extractFullText(local("NODIR001", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(plugins), env(), &err);
     CHECK(text);
 }
 
@@ -202,12 +207,12 @@ TEST_CASE("fulltext: the cache keeps at most 64 MB, dropping the least recently 
     // A hit on the oldest makes it the most recently used.
     const std::string copyA = plugins + "/a.pdf";
     fs::copy_file("tests/data/pdf/sample.pdf", copyA);
-    REQUIRE(extractFullText(local("KEYA", "application/pdf", copyA, "ma"), plugins, env(), &err));
+    REQUIRE(extractFullText(local("KEYA", "application/pdf", copyA, "ma"), cacheIn(plugins), env(), &err));
     CHECK(fs::last_write_time(dir / "KEYA-ma.txt") > now - std::chrono::minutes(1));
     // A new entry takes the cache over 64 MB: the least recently used go until it fits.
     const std::string copy = plugins + "/copy.pdf";
     fs::copy_file("tests/data/pdf/sample.pdf", copy);
-    REQUIRE_MESSAGE(extractFullText(local("NEW1", "application/pdf", copy, "mn"), plugins, env(), &err), err.message);
+    REQUIRE_MESSAGE(extractFullText(local("NEW1", "application/pdf", copy, "mn"), cacheIn(plugins), env(), &err), err.message);
     CHECK(fs::exists(dir / "NEW1-mn.txt"));
     CHECK(fs::exists(dir / "KEYA-ma.txt"));
     CHECK(fs::exists(dir / "KEYC-mc.txt"));
@@ -215,4 +220,74 @@ TEST_CASE("fulltext: the cache keeps at most 64 MB, dropping the least recently 
     uint64_t total = 0;
     for (const auto& e : fs::directory_iterator(dir)) total += fs::file_size(e.path());
     CHECK(total <= kMaxFullTextCacheBytes);
+}
+
+TEST_CASE("fulltext: the cache is the folder it is given (each account's own); another folder never sees the entry") {
+    const std::string root = freshDir("accounts");
+    const std::string a = root + "/accounts/1/cache/fulltext", b = root + "/accounts/2/cache/fulltext";
+    UserError err;
+    const auto pdf = local("ACCT0001", "application/pdf", "tests/data/pdf/sample.pdf");
+    REQUIRE_MESSAGE(extractFullText(pdf, a, env(), &err), err.message);
+    CHECK(fs::exists(a + "/ACCT0001-abc123.txt"));
+    CHECK_FALSE(fs::exists(b));
+    CHECK_FALSE(fs::exists(root + "/.cache"));
+    // B reads the same attachment: its own entry, extracted (A's isn't a hit for B).
+    REQUIRE(extractFullText(pdf, b, env(), &err, failing(false)) == std::nullopt);
+    CHECK_FALSE(fs::exists(b + "/ACCT0001-abc123.txt"));
+}
+
+namespace {
+
+// A book whose text takes `pages` × 10 ms, page by page, and stops at the cancel flag.
+struct SlowEngine : test::FakeEngine {
+    std::atomic<bool>* started = nullptr;
+    int slowPages = 3000;
+    bool fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) override {
+        if (started) *started = true;
+        out.clear();
+        for (int p = 0; p < slowPages; ++p) {
+            if (cancel && cancel->load()) {
+                out.clear();
+                if (err) *err = UserError{ErrorKind::Other, "Cancelled", "fake"};
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            out += "page\f";
+        }
+        return true;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("fulltext: a cancelled extraction stops at once and leaves nothing in the cache") {
+    const std::string dir = freshDir("cancel");
+    std::atomic<bool> started{false}, cancel{false};
+    EngineLoader slow = [&](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        auto e = std::make_unique<SlowEngine>();
+        e->started = &started;
+        return e;
+    };
+    std::optional<std::string> text = "unset";
+    UserError err;
+    std::thread t([&] { text = extractFullText(local("SLOW0001", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(dir), env(), &err, slow, &cancel); });
+    for (int i = 0; i < 500 && !started; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    REQUIRE(started);
+    const auto t0 = std::chrono::steady_clock::now();
+    cancel = true;
+    t.join();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 200);
+    CHECK_FALSE(text);
+    CHECK(cacheEmpty(dir));
+
+    // Cancelled before it starts: no engine is even loaded.
+    bool loaded = false;
+    EngineLoader counting = [&](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        loaded = true;
+        return std::make_unique<SlowEngine>();
+    };
+    CHECK_FALSE(extractFullText(local("SLOW0002", "application/pdf", "tests/data/pdf/sample.pdf"), cacheIn(dir), env(), &err, counting, &cancel));
+    CHECK_FALSE(loaded);
+    CHECK(cacheEmpty(dir));
 }

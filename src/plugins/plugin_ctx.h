@@ -50,15 +50,16 @@ class PluginNet;   // plugin_http.h
 struct PluginRun;  // the host's bookkeeping for one loaded plugin (host.cpp)
 
 struct PluginCtx {
-    PluginCtx(PluginHost::Impl& host, PluginManifest manifest, std::string dir, size_t memoryLimit);
+    PluginCtx(PluginHost::Impl& host, PluginManifest manifest, std::string dir, std::string storageDir, size_t memoryLimit);
     ~PluginCtx();
     PluginCtx(const PluginCtx&) = delete;
     PluginCtx& operator=(const PluginCtx&) = delete;
 
     PluginHost::Impl& host;
     const PluginManifest manifest;
-    const std::string dir;      // <pluginsDir>/<id>
-    const std::string dataDir;  // <dir>/data (zk.plugin.dataDir; zk.files works inside it)
+    const std::string dir;         // <pluginsDir>/<id>: the device's (code, settings.json)
+    const std::string storageDir;  // <account's storageRoot>/<id>: storage.db, data/
+    const std::string dataDir;     // <storageDir>/data (zk.plugin.dataDir; zk.files works inside it)
     nlohmann::json settings = nlohmann::json::object();  // settings.json, or {}
     // Destruction order matters: every Value dies before its Context, the Context before the
     // Runtime (members are destroyed bottom-up).
@@ -157,13 +158,20 @@ std::shared_ptr<Work> startWork(PluginCtx&, JSValue* promise);
 // The host's network workers (zk.fetch), made at the first use; nullptr if the host has no makeHttp.
 PluginNet* netOf(PluginCtx&);
 
-// The host's settings (database path, engine environment, plugins folder).
+// The host's settings (engine environment, plugins folder).
 const PluginHostDeps& depsOf(PluginCtx&);
+// The account the host serves now (library database, storage root, full-text cache).
+const PluginAccount& accountOf(PluginCtx&);
+// The WebDAV server zk.fetch refuses now (the account's, or what setWebdavHost said since).
+std::string webdavHostOf(PluginCtx&);
 // What the user and the app remember about the plugins (on/off, failures, badge, last background run).
 PluginState& pluginStateOf(PluginCtx&);
 // One slot per host for state shared by its plugins (all on the plugin thread): zk.library's
 // database connection and identifier index.
 std::shared_ptr<void>& librarySlot(PluginCtx&);
+// zk.library.fullText's worker thread (bindings_library.cpp), made at the first use; dropped (its
+// thread joined) by PluginHost::stop() after the plugin thread.
+std::shared_ptr<void>& fullTextSlot(PluginCtx&);
 // The plugin thread's Library on that connection (bindings_library.cpp), opened at the first use;
 // nullptr with the reason in *why if there is no library database.
 Library* sharedLibrary(PluginCtx&, std::string* why);
@@ -260,8 +268,8 @@ void installEntry(PluginCtx&);
 void installReader(PluginCtx&);
 // zk.screen and zk.ui (bindings_ui.cpp). Throws std::runtime_error on an internal error.
 void installUi(PluginCtx&);
-// Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
+// Empties <storageDir>/data/ and storage.db (an account's, see PluginCtx::storageDir). `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
-void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);
+void resetPluginData(const std::string& storageDir, PluginCtx* loaded);
 
 }  // namespace zk::plugins

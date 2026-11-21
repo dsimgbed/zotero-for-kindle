@@ -841,7 +841,7 @@ int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
 
 // Pages in order, "\f" between them. This engine has its own MuPDF context, so nothing is shared
 // with the reader's engine.
-bool PdfEngine::fullText(std::string& out, UserError* err) {
+bool PdfEngine::fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) {
     out.clear();
     if (!doc_) {
         if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "no document"};
@@ -849,6 +849,7 @@ bool PdfEngine::fullText(std::string& out, UserError* err) {
     }
     const int pages = pdfPages();
     for (int p = 0; p < pages && out.size() <= kMaxFullTextBytes; ++p) {
+        if (cancel && cancel->load()) return cancelledText(out, err);
         if (p) out += '\f';
         bool failed = false;
         out += pageText(p, &failed);

@@ -14,6 +14,8 @@ extern "C" {
 #include <md5.h>
 }
 
+#include "core/open_guard.h"
+
 namespace zk {
 
 namespace fs = std::filesystem;
@@ -151,7 +153,10 @@ std::string previewHtmlPage(const std::string& html, const std::string& title, c
 
 // ---- The cache ----------------------------------------------------------------------------------
 
-PreviewCache::PreviewCache(std::string dir, std::function<int64_t()> clock) : dir_(std::move(dir)), clock_(std::move(clock)) { load(); }
+PreviewCache::PreviewCache(std::string dir, std::function<int64_t()> clock) : dir_(std::move(dir)), clock_(std::move(clock)) {
+    ZK_NOTE_OPEN(dir_);
+    load();
+}
 
 std::string PreviewCache::keyForUrl(const std::string& url) { return "u" + md5Hex(url); }
 std::string PreviewCache::keyForHtml(const std::string& html) { return "h" + md5Hex(html); }

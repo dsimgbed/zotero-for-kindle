@@ -386,3 +386,95 @@ TEST_CASE("launcher: a log of 1 MB or less is kept as it is") {
     CHECK_FALSE(fs::exists(k.home / "log/zotero.log.1"));
     CHECK(k.file("zotero/log/zotero.log").substr(0, small.size()) == small);
 }
+
+TEST_CASE("launcher: with accounts, a rollback puts back accounts.json and each account's library it backed up") {
+    Kindle k;
+    k.installed("tried", app("0.3.0", 0));
+    // The account layout: no library or config.json in the old places, none in the backup.
+    for (const fs::path& p : {k.home / "zotero.db", k.home / "zotero.db-wal", k.home / "update/old/zotero.db",
+                              k.root / "var/config.json", k.root / "var/config.json.old"})
+        fs::remove(p);
+    writeFile(k.home / "update/old/accounts/111/zotero.db", "db111 0.2.0");
+    writeFile(k.home / "update/old/accounts/222/zotero.db", "db222 0.2.0");
+    writeFile(k.home / "accounts/111/zotero.db", "db111 0.3.0");
+    writeFile(k.home / "accounts/111/zotero.db-wal", "wal111 0.3.0");
+    writeFile(k.home / "accounts/111/zotero.db-shm", "shm111 0.3.0");
+    writeFile(k.home / "accounts/222/zotero.db", "db222 0.3.0");
+    writeFile(k.home / "accounts/222/files/K/book.pdf", "a pdf");
+    writeFile(k.home / "accounts/333/zotero.db", "db333 0.3.0");  // not backed up (short of space): stays
+    writeFile(k.root / "var/accounts.json", "list 0.3.0");
+    writeFile(k.root / "var/accounts.json.old", "list 0.2.0");
+    k.launch();
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(k.file("zotero/bin/zotero") == app("0.2.0", 0));
+    CHECK(k.file("zotero/accounts/111/zotero.db") == "db111 0.2.0");
+    CHECK_FALSE(fs::exists(k.home / "accounts/111/zotero.db-wal"));
+    CHECK_FALSE(fs::exists(k.home / "accounts/111/zotero.db-shm"));
+    CHECK(k.file("zotero/accounts/222/zotero.db") == "db222 0.2.0");
+    CHECK(k.file("zotero/accounts/222/files/K/book.pdf") == "a pdf");
+    CHECK(k.file("zotero/accounts/333/zotero.db") == "db333 0.3.0");
+    CHECK(k.file("var/accounts.json") == "list 0.2.0");
+    CHECK((fs::status(k.root / "var/accounts.json").permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
+          fs::perms::none);
+    CHECK_FALSE(fs::exists(k.root / "var/accounts.json.old"));
+    CHECK_FALSE(fs::exists(k.home / "zotero.db"));  // nothing made in the old place
+    CHECK_FALSE(fs::exists(k.root / "var/config.json"));
+    CHECK_FALSE(fs::exists(k.home / "update/old"));
+    CHECK(k.file("zotero/update/rolled-back") == "0.2.0 0.3.0\n");
+}
+
+TEST_CASE("launcher: a rollback to a version before accounts undoes the new version's move into the account layout") {
+    Kindle k;
+    k.installed("tried", app("0.3.0", 0));  // backed up by the version before accounts: update/old/zotero.db
+    writeFile(k.root / "var/config.json.old", "{\n  \"apiKey\": \"k\",\n  \"userId\": 111\n}\n");
+    // What the new version's first start did: the library, the downloads, the plugin data and the
+    // credentials moved into account 111.
+    for (const fs::path& p : {k.home / "zotero.db", k.home / "zotero.db-wal", k.root / "var/config.json"}) fs::remove(p);
+    writeFile(k.home / "plugins/desk/plugin.json", "{}");
+    writeFile(k.home / "accounts/111/zotero.db", "db 0.3.0 moved");
+    writeFile(k.home / "accounts/111/zotero.db-wal", "wal moved");
+    writeFile(k.home / "accounts/111/files/K/book.pdf", "a pdf");
+    writeFile(k.home / "accounts/111/plugins/desk/storage.db", "pins");
+    writeFile(k.home / "accounts/111/plugins/desk/data/x", "x");
+    writeFile(k.home / "accounts/111/plugins/gone/storage.db", "of a plugin since removed");
+    writeFile(k.root / "var/accounts.json", "list");
+    writeFile(k.root / "var/accounts/111.json", "credentials");
+    k.launch();
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(k.file("zotero/zotero.db") == "db 0.2.0");
+    CHECK(k.file("var/config.json") == "{\n  \"apiKey\": \"k\",\n  \"userId\": 111\n}\n");
+    // The old version's places again, so it finds its downloads and plugin data...
+    CHECK(k.file("zotero/files/K/book.pdf") == "a pdf");
+    CHECK(k.file("zotero/plugins/desk/storage.db") == "pins");
+    CHECK(k.file("zotero/plugins/desk/data/x") == "x");
+    CHECK_FALSE(fs::exists(k.home / "plugins/gone"));
+    // ...and the next update moves them again from here: no account list, the moved library put
+    // aside (never deleted), so the restored one is the one moved next time.
+    CHECK_FALSE(fs::exists(k.root / "var/accounts.json"));
+    CHECK_FALSE(fs::exists(k.home / "accounts/111/zotero.db"));
+    CHECK_FALSE(fs::exists(k.home / "accounts/111/zotero.db-wal"));
+    bool kept = false;
+    for (const auto& e : fs::recursive_directory_iterator(k.home / "accounts/.leftovers"))
+        if (e.path().filename() == "zotero.db" && readFile(e.path()) == "db 0.3.0 moved") kept = true;
+    CHECK(kept);
+    CHECK(k.file("zotero/update/rolled-back") == "0.2.0 0.3.0\n");
+    CHECK_FALSE(fs::exists(k.home / "update/old"));
+}
+
+TEST_CASE("launcher: a rollback to a version with accounts keeps them, a library left in the old place or not") {
+    Kindle k;
+    k.installed("tried", app("0.3.0", 0));  // update/old/zotero.db: a library 0.2.0 never moved
+    writeFile(k.home / "update/old/accounts/111/zotero.db", "db111 0.2.0");
+    writeFile(k.home / "accounts/111/zotero.db", "db111 0.3.0");
+    writeFile(k.home / "accounts/111/files/K/book.pdf", "a pdf");
+    writeFile(k.root / "var/accounts.json", "list 0.3.0");
+    writeFile(k.root / "var/accounts.json.old", "list 0.2.0");
+    writeFile(k.root / "var/config.json.old", "{\"userId\": 111}");
+    k.launch();
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(k.file("zotero/accounts/111/zotero.db") == "db111 0.2.0");
+    CHECK(k.file("zotero/accounts/111/files/K/book.pdf") == "a pdf");
+    CHECK_FALSE(fs::exists(k.home / "files"));
+    CHECK(k.file("var/accounts.json") == "list 0.2.0");
+    CHECK(k.file("zotero/zotero.db") == "db 0.2.0");
+}

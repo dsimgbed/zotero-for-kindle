@@ -12,10 +12,16 @@ A folder with a manifest and one JavaScript file:
   plugin.json      the manifest
   main.js          the plugin: one ES module, everything bundled into it
   settings.json    the user's settings for it (optional; edited over USB)
+  plugin.log       its log, made by the app (plugin.log.1 is the one before)
+
+/mnt/us/zotero/accounts/<userID>/plugins/<id>/   what it keeps for one Zotero account
   data/            its files (zk.files), made by the app
   storage.db       its key-value store (zk.storage), made by the app
-  plugin.log       its log, made by the app (plugin.log.1 is the one before)
 ```
+
+A plugin is installed for the Kindle, but what it keeps is per account: with two accounts on the
+Kindle, each has its own `zk.storage` and `zk.files`, and a plugin only sees the active account's.
+(In the desktop developer loop, `--plugins-dir`, they stay in the plugin's own folder.)
 
 The plugins folder is outside the app's own folders: app updates and rollbacks never touch it.
 

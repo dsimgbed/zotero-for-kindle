@@ -139,7 +139,7 @@ TEST_CASE("landscape: the Display panel's Orientation row saves the choice and a
     Library lib{db};
     FakeNav nav{lib};
     fillFixtureLibrary(lib, 10);
-    CHECK_FALSE(loadSettings(lib).landscapeReading);
+    CHECK_FALSE(loadSettings(lib, nav.device()).landscapeReading);
     ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
         return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
     }, 6);
@@ -152,9 +152,9 @@ TEST_CASE("landscape: the Display panel's Orientation row saves the choice and a
     reader.onGesture(tapAt({618, 700}), nav);                              // menus
     reader.onGesture(tapAt(ReaderMenus::buttonRect(2).center()), nav);     // Display
     reader.onGesture(tapAt(ReaderMenus::orientationRect(1).center()), nav);  // Landscape
-    CHECK(loadSettings(lib).landscapeReading);
+    CHECK(loadSettings(lib, nav.device()).landscapeReading);
     CHECK(nav.orientationChanges == 1);
     reader.onGesture(tapAt(ReaderMenus::orientationRect(0).center()), nav);  // Portrait
-    CHECK_FALSE(loadSettings(lib).landscapeReading);
+    CHECK_FALSE(loadSettings(lib, nav.device()).landscapeReading);
     CHECK(nav.orientationChanges == 2);
 }

@@ -12,6 +12,7 @@
 
 #include "app/plugin_events.h"
 #include "core/log.h"
+#include "core/open_guard.h"
 #include "plugins/ui_tree.h"
 
 namespace zk {
@@ -20,6 +21,7 @@ using json = nlohmann::json;
 namespace fs = std::filesystem;
 
 std::optional<json> HomeTreeStore::load(const std::string& pluginId, const std::string& screenId) const {
+    ZK_NOTE_OPEN(file_);
     std::ifstream in(file_, std::ios::binary);
     if (!in) return std::nullopt;
     std::stringstream text;
@@ -32,6 +34,7 @@ std::optional<json> HomeTreeStore::load(const std::string& pluginId, const std::
 }
 
 void HomeTreeStore::save(const std::string& pluginId, const std::string& screenId, const json& tree) const {
+    ZK_NOTE_OPEN(file_);
     const std::string tmp = file_ + ".tmp";
     std::error_code ec;
     if (const fs::path dir = fs::path(file_).parent_path(); !dir.empty()) fs::create_directories(dir, ec);

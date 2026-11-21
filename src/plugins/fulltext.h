@@ -11,12 +11,14 @@
 //    split them (text.split("\f")[n] is page n+1); lines within a page end in "\n".
 // Limit: kMaxFullTextBytes (32 MB) of text; a larger file is an error, never a truncation.
 //
-// Cache: <pluginsDir>/.cache/fulltext/<attachmentKey>-<md5>.txt, written atomically (temp file,
+// Cache: <cacheDir>/<attachmentKey>-<md5>.txt (cacheDir: the account's cache/fulltext, so one
+// account's texts are never another's), written atomically (temp file,
 // then rename). A hit doesn't open the engine. No md5 (or an odd key) means no cache; a failed
 // extraction is never cached. Writing a new entry removes the attachment's older
 // entries (same key, another md5). The cache holds at most kMaxFullTextCacheBytes: a hit marks its
 // entry used (its time), and writing an entry drops the least recently used others until it fits.
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,13 +32,15 @@ constexpr uint64_t kMaxFullTextCacheBytes = 64u << 20;
 
 // nullopt with *err set: the file isn't on the Kindle (not downloaded, or its file is gone), it
 // is a linked file or not an EPUB/PDF, the engine can't open it, or its text is over the limit.
-// `loader` replaces loadEngine (tests); never throws.
+// `loader` replaces loadEngine (tests); never throws. `cancel` (set from any thread) stops it at
+// the next page or chapter: nullopt, *err "Cancelled", and nothing written to the cache.
 using EngineLoader = std::function<std::unique_ptr<DocumentEngine>(DocType, const EngineEnv&, UserError*)>;
-std::optional<std::string> extractFullText(const AttachmentRecord&, const std::string& pluginsDir, const EngineEnv&,
-                                           UserError* err, const EngineLoader& loader = {});
+std::optional<std::string> extractFullText(const AttachmentRecord&, const std::string& cacheDir, const EngineEnv&,
+                                           UserError* err, const EngineLoader& loader = {},
+                                           const std::atomic<bool>* cancel = nullptr);
 
-// Tests: while held, zk.library.fullText's worker starts no job (they queue), so what a plugin
-// submits in one go is counted before any of it ends.
+// Tests: while held, zk.library.fullText's workers (one per running host) start no job (they
+// queue), so what a plugin submits in one go is counted before any of it ends.
 void holdFullTextWorker(bool held);
 
 }  // namespace zk

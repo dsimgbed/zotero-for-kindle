@@ -10,7 +10,12 @@ namespace zk {
 
 std::unique_ptr<DocumentEngine> loadEngine(DocType, const EngineEnv&, UserError*);
 
-// The factory each module exports (extern "C", the module's only exported symbol).
+// crengine's document cache closed (AccountSession::stop, once no engine of the account is left):
+// nothing is written to the account's cache/cre after it, until an engine names a cache again.
+// Nothing when the EPUB module was never loaded.
+void closeEngineDocCache();
+
+// The factory each module exports (extern "C"; libzk-epub.so also exports zk_epub_doc_cache_close).
 using EngineCreateFn = DocumentEngine* (*)(const EngineEnv*);
 
 }  // namespace zk

@@ -7,14 +7,18 @@
 # Starts the app, and keeps its updates safe: update protocol format 1 (src/update/install.h).
 # Every launcher from 0.2.0 on must understand it; a new format ships a launcher that knows both.
 #   update/state   "installing|installed|tried <from> <to>", written by the app while installing
-#   update/old/    bin lib share Zotero.sh zotero.db: what a rollback restores, with the account's
-#                  backup beside it, $ZK_CONFIG.old (kept off the USB drive, mode 0600)
+#   update/old/    bin lib share Zotero.sh, and the libraries: what a rollback restores.
+#                  accounts/<userId>/zotero.db: each account's (0.13 on), with the account list's
+#                  backup beside it, $ZK_ACCOUNTS.old; zotero.db: the one library of a version
+#                  before accounts, with its account's backup beside it, $ZK_CONFIG.old (both
+#                  kept off the USB drive, mode 0600)
 #   exit code 75   the app installed an update: start it again
 # installing: the swap was interrupted. tried: the new version ran and never confirmed (the app
 # confirms by deleting update/state after 60 s in front, or at a clean exit). Both: roll back.
 ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
 ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
+ZK_ACCOUNTS=${ZK_ACCOUNTS:-$(dirname "$ZK_CONFIG")/accounts.json}
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
 ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
 ZK_PIDFILE=${ZK_PIDFILE:-/tmp/zotero.pid}  # the running app's pid; /tmp is emptied at boot
@@ -105,6 +109,38 @@ rotate_log() {
     return 0
 }
 
+# A file or folder moved back to the old version's place, unless one is there already.
+move_back() {
+    if [ -e "$1" ] && [ ! -e "$2" ]; then
+        mkdir -p "$(dirname "$2")" && mv "$1" "$2" || return 1
+    fi
+}
+
+# Going back to a version from before accounts (its backup holds the library in the old place and
+# no account list): what the new version moved into its account's folder goes back where the old
+# one keeps it (the downloads, each plugin's data), and the moved library is put aside (never
+# deleted), with the account list gone, so the next update moves everything again from the library
+# restored here.
+unmove_account() {
+    id=$(sed -n 's/.*"userId"[^0-9]*\([0-9][0-9]*\).*/\1/p' "$ZK_CONFIG" 2>/dev/null | head -n 1)
+    a=accounts/$id
+    if [ -n "$id" ] && [ -d "$a" ]; then
+        aside=accounts/.leftovers/rollback-$(date +%Y%m%d-%H%M%S)/$id
+        for f in zotero.db zotero.db-wal zotero.db-shm zotero.db-journal; do
+            move_back "$a/$f" "$aside/$f" || return 1
+        done
+        move_back "$a/files" files || return 1
+        for p in "$a"/plugins/*; do
+            pid=$(basename "$p")
+            [ -d "plugins/$pid" ] || continue  # removed since: its data stays in the account
+            for f in storage.db storage.db-wal storage.db-shm storage.db-journal data; do
+                move_back "$p/$f" "plugins/$pid/$f" || return 1
+            done
+        done
+    fi
+    rm -f accounts/.migrating-* "$ZK_ACCOUNTS"
+}
+
 # Puts update/old back. Every step can be repeated, so an interrupted rollback finishes later.
 restore() {
     for d in bin lib share; do
@@ -115,17 +151,29 @@ restore() {
     if [ -f "$U/old/Zotero.sh" ]; then
         cp "$U/old/Zotero.sh" "$ZK_LAUNCHER.tmp" && mv "$ZK_LAUNCHER.tmp" "$ZK_LAUNCHER" || return 1
     fi
+    for b in "$U"/old/accounts/*/zotero.db; do
+        [ -f "$b" ] || continue
+        a=accounts/$(basename "$(dirname "$b")")
+        mkdir -p "$a" && cp "$b" "$a/zotero.db.tmp" && rm -f "$a/zotero.db-wal" "$a/zotero.db-shm" &&
+            mv "$a/zotero.db.tmp" "$a/zotero.db" || return 1
+    done
+    if [ -f "$ZK_ACCOUNTS.old" ]; then
+        cp "$ZK_ACCOUNTS.old" "$ZK_ACCOUNTS.tmp" && chmod 600 "$ZK_ACCOUNTS.tmp" && mv "$ZK_ACCOUNTS.tmp" "$ZK_ACCOUNTS" || return 1
+    fi
     if [ -f "$U/old/zotero.db" ]; then
         cp "$U/old/zotero.db" zotero.db.tmp && rm -f zotero.db-wal zotero.db-shm && mv zotero.db.tmp zotero.db || return 1
     fi
     if [ -f "$ZK_CONFIG.old" ]; then
         cp "$ZK_CONFIG.old" "$ZK_CONFIG.tmp" && chmod 600 "$ZK_CONFIG.tmp" && mv "$ZK_CONFIG.tmp" "$ZK_CONFIG" || return 1
     fi
+    if [ -f "$U/old/zotero.db" ] && [ ! -f "$ZK_ACCOUNTS.old" ]; then  # the old version had no accounts
+        unmove_account || return 1
+    fi
     echo "$1 $2" > "$U/rolled-back"
     sync  # the restored files reach the disk before the state that asked for them goes
     rm -f "$U/state"
     rm -rf "$U/old" "$U/new" "$U/trash"
-    rm -f "$ZK_CONFIG.old"
+    rm -f "$ZK_CONFIG.old" "$ZK_ACCOUNTS.old"
     note "rolled back from $2 to $1"
 }
 

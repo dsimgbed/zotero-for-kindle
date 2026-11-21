@@ -137,7 +137,7 @@ struct Rig {
             });
         )", {"library:read", "zotero:remove"}, "Feed Riffle");
         PluginHostDeps d = fp.deps();
-        d.dbPath = dbPath;
+        d.account.dbPath = dbPath;
         host = std::make_unique<PluginHost>(d);
         host->setEnabled("riffle", true);
         host->start();
@@ -448,7 +448,7 @@ TEST_CASE("confirm: a host stopped for an install takes its questions away; a ne
     rig.events->poll(rig.app);  // no host: nothing
 
     PluginHostDeps d = rig.fp.deps();
-    d.dbPath = rig.dbPath;
+    d.account.dbPath = rig.dbPath;
     rig.host = std::make_unique<PluginHost>(d);
     rig.events->rebind(rig.host.get(), rig.app);
     rig.host->start();

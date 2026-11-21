@@ -1,8 +1,11 @@
 #pragma once
-// User settings kept in the library database (meta key "settings", JSON).
+// User settings. The device's (sync interval, refresh, landscape, columns) are in device.json
+// (app/device_settings.h); the account's (the rest) are in its library database (meta key
+// "settings", JSON).
 
 #include <string>
 
+#include "app/device_settings.h"
 #include "store/library.h"
 
 namespace zk {
@@ -15,7 +18,11 @@ struct AppSettings {
     std::string homeScreen;         // Home's body (Settings → Home): "" built-in, else "<pluginId>/<screenId>"
 };
 
-AppSettings loadSettings(Library&);
-void saveSettings(Library&, const AppSettings&);
+AppSettings loadSettings(Library&, const DeviceSettings&);
+void saveSettings(Library&, DeviceSettings&, const AppSettings&);
+
+// Copies the device keys found in the library's meta and "settings" JSON into `device` (a value
+// already there wins), then removes them from the library. For a library from before the split.
+void moveDeviceKeys(Library&, DeviceSettings&);
 
 }  // namespace zk

@@ -696,7 +696,7 @@ TEST_CASE("fetch: the WebDAV host is read per request (changing it takes effect 
     )"),
            {"net:dav.a.example.org", "net:dav.b.example.org"});
     auto deps = fp.deps();
-    deps.webdavHost = "dav.a.example.org";
+    deps.account.webdavHost = "dav.a.example.org";
     deps.makeHttp = net.maker();
     PluginHost host(deps);
     host.setEnabled("a", true);

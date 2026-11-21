@@ -57,6 +57,9 @@ public:
     SyncService& operator=(const SyncService&) = delete;
 
     void start();
+    // Cuts what runs short (a download, its .part removed as on any failure; a request) and asks
+    // the worker to end, without waiting for it; stop() then joins it. Nothing more runs after it.
+    void requestStop();
     void stop();
 
     void syncNow() override;
@@ -73,6 +76,14 @@ public:
     std::optional<KeptStatus> keptStatus(const std::string& collectionKey) const override;
     void removeLibrary(int64_t lib, bool evenUnsent) override;
 
+    // Leaving the account (a switch): what is unsent is sent now, ahead of anything queued; what
+    // runs (a sync, a download: its .part removed) is cut short first. No library's push begins
+    // after `deadline`, and stop() cuts a request under way: whatever isn't sent stays queued in
+    // the library. pushDone(request) is true once the worker is through with it (sent, failed, or
+    // nothing to send); the UI loop is woken then.
+    uint64_t pushNow(std::chrono::steady_clock::time_point deadline);
+    bool pushDone(uint64_t request) const;
+
     // When the idle worker must look again without being told (a command, pushSoon, a new interval
     // and stop() all wake it): the interval's due time, a pending push's; nullopt: neither.
     using TimePoint = std::chrono::steady_clock::time_point;
@@ -86,6 +97,7 @@ private:
         bool flag = false;
         int64_t lib = 0;  // RemoveLibrary's (flag: even with unsent changes)
         uint64_t request = 0;  // syncNowTracked(), removeLibrary(): told back on SyncStarted/SyncFinished
+        std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt;  // pushNow()'s
     };
     struct Worker;
 
@@ -97,7 +109,9 @@ private:
     // PushStarted/PushFinished around SyncEngine::push, if anything is unsent; first the refusal of
     // plugin changes no group can take. Returns the merged report (groups' errors scoped to them);
     // `passed` gains the groups pushed to.
-    SyncReport pushChanges(Worker&, std::vector<int64_t>* passed = nullptr);
+    // `deadline`: no library's push begins after it.
+    SyncReport pushChanges(Worker&, std::vector<int64_t>* passed = nullptr,
+                           std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
     // onTotal: once, when the size is known. *started: whether any of the file arrived. capped: a
     // book being opened, which has its time (SyncDeps::openCapFloorMs) to arrive.
@@ -125,6 +139,7 @@ private:
     // Guarded by mutex_: a kept file is downloading; openBook() cancels it (yield), as it goes first.
     bool keptRunning_ = false, keptYield_ = false;
     uint64_t nextRequest_ = 0;  // guarded by mutex_
+    uint64_t pushedRequest_ = 0;  // guarded by mutex_: the last pushNow() request the worker is through with
 };
 
 }  // namespace zk

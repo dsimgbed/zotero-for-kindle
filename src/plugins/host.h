@@ -34,18 +34,36 @@ struct PluginCtx;
 void lowerThreadPriority();
 }
 
+// The account the host serves while it runs (spec: multiple accounts, Plugins): the library its
+// plugins read, where their zk.storage and zk.files live (<storageRoot>/<pluginId>/storage.db and
+// data/; AccountPaths::pluginDataRoot), the full-text cache (<fullTextDir>/<attKey>-<md5>.txt) and
+// the WebDAV server zk.fetch refuses. Plugins themselves (code, on/off, state, logs) are the device's.
+struct PluginAccount {
+    std::string dbPath;       // "" or missing: zk.library isn't available
+    // <storageRoot>/<pluginId>/storage.db and data/; "": <pluginsDir>/<pluginId>/ (no account: the
+    // desktop's screenshot tools, tests, before Setup)
+    std::string storageRoot;
+    std::string fullTextDir;  // "": <pluginsDir>/.cache/fulltext (as storageRoot)
+    std::string webdavHost;   // the account's WebDAV server (host or URL), "" for none; later: setWebdavHost
+};
+
 struct PluginHostDeps {
-    std::string pluginsDir;
-    // The library database. Plugins open their own connection (on the plugin thread), like the sync worker.
-    std::string dbPath;
+    std::string pluginsDir;  // the device's plugins: <pluginsDir>/<id>/ (code, settings.json, plugin.log), .state.json
+    // The account start() serves (start(PluginAccount) replaces it). Plugins open their own
+    // connection to its library database (on the plugin thread), like the sync worker.
+    PluginAccount account;
     // Where the engines find their data (zk.library.fullText opens its own engine).
     EngineEnv engineEnv;
+    // Tests: makes zk.library.fullText's engine instead of loadEngine (plugins/fulltext.h's EngineLoader).
+    std::function<std::unique_ptr<DocumentEngine>(DocType, const EngineEnv&, UserError*)> fullTextLoader;
+    // Every account's plugin data root (AccountPaths::pluginDataRoot): remove() deletes the plugin's
+    // <root>/<id> in each (removePluginData). Empty: only the account served.
+    std::function<std::vector<std::string>()> pluginDataRoots;
     // Names the plugin whose code is running (written before a plugin's code runs, removed when
     // the plugin thread goes idle). Empty: no marker.
     std::string crashMarker;
     Version appVersion;
     std::function<std::unique_ptr<Http>()> makeHttp;
-    std::string webdavHost;  // the configured WebDAV server (host or URL); later: setWebdavHost
     std::function<int64_t()> clock;  // wall clock, ms since the epoch (log times); default: system
     // The desktop developer loop (--plugins-dir): start() loads every enabled plugin at once, and
     // reload(id) loads an enabled plugin that wasn't loaded yet. Off: plugins load lazily, at their
@@ -151,6 +169,11 @@ struct PluginStatus {
     std::string withdrawn;  // the catalog withdrew it: why ("" when it didn't); it is off and can't be turned on
 };
 
+// Removing a plugin: deletes <root>/<id> (its storage.db and data/) under each root. Ignored for an
+// id that isn't a plain plugin folder name ("", ".", "..", a path, a dot-name): nothing else in a
+// root is ever touched.
+void removePluginData(const std::vector<std::string>& roots, const std::string& id);
+
 class PluginHost {
 public:
     // Scans the plugins folder (nothing runs yet). If the crash marker names a plugin, the app
@@ -160,11 +183,20 @@ public:
     PluginHost(const PluginHost&) = delete;
     PluginHost& operator=(const PluginHost&) = delete;
 
-    // Starts the plugin thread (with deps.loadEagerly, loading every enabled plugin). Plugins load lazily: each enabled plugin when the first event or
-    // background run is due. Commands queued before start() wait for it.
+    // Starts the plugin thread for the account it served last (deps.account at first), with
+    // deps.loadEagerly loading every enabled plugin. Plugins load lazily: each enabled plugin when
+    // the first event or background run is due. Commands queued before the first start() wait for it.
     void start();
-    // Interrupts whatever plugin code is running and joins the thread; returns within 2 s. Calls
-    // cut short by stop() are not counted as failures.
+    // Starts it for `account` (a running host is stopped first): the switch of accounts. Plugins
+    // load afresh, so nothing of the account before is in them.
+    void start(const PluginAccount& account);
+    // Interrupts whatever plugin code is running and joins the thread, then zk.fetch's workers and
+    // the full-text worker (a text being extracted is cancelled at its next page or chapter, caching
+    // nothing); the library connection is closed. Returns within 2 s. Calls cut short by stop() are
+    // not counted as failures. Commands asked while stopped are dropped, remove() and resetData()
+    // included (they were for the account before; before the first start() they wait for it).
+    // Events queued for poll() and not taken yet are dropped too (a background round stopped
+    // midway reports nothing: the app abandons its hold). Idempotent; start() again after it.
     void stop();
     // Unloads and rescans; plugins that were loaded are loaded again at once.
     void reload();
@@ -242,7 +274,8 @@ public:
     // isn't a listed folder, and turning on for a folder with a problem (broken, incompatible).
     void setEnabled(const std::string& id, bool);
     // Settings → Plugins → Remove: off at once and no longer listed by status(); then, on the plugin
-    // thread, unloaded and its folder deleted (data, settings and all). What it remembered goes
+    // thread, unloaded and its folder deleted (settings and all), and its data in every account
+    // (deps.pluginDataRoots). What it remembered goes
     // too, so a copy put back is new again. Its changes for Zotero stay (pending ones are sent).
     void remove(const std::string& id);
     // Off at once and no longer listed, its state forgotten and its log closed; its files are left

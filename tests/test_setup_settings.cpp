@@ -177,11 +177,11 @@ TEST_CASE("settings: interval, highlights toggle and removing downloads") {
     Db db = Db::open(":memory:");
     Library lib(db);
     FakeNav nav(lib);
-    CHECK(loadSettings(lib).syncIntervalMinutes == 10);
+    CHECK(loadSettings(lib, nav.device()).syncIntervalMinutes == 10);
     SettingsScreen settings(good(), [](Nav&) {});
     settings.onShow(nav);
     settings.onGesture(tapAt(settings.intervalRect(3).center()), nav);  // 30 min
-    CHECK(loadSettings(lib).syncIntervalMinutes == 30);
+    CHECK(loadSettings(lib, nav.device()).syncIntervalMinutes == 30);
     CHECK(nav.syncFake.interval == 30);
     settings.onGesture(tapAt(settings.toggleRect().center()), nav);
     REQUIRE(nav.syncFake.allOffline.size() == 1);
@@ -225,16 +225,17 @@ TEST_CASE("setup, setup error and settings match the reviewed goldens") {
 TEST_CASE("settings: the Home choice is kept with the other settings") {
     Db db = Db::open(":memory:");
     Library lib(db);
-    CHECK(loadSettings(lib).homeScreen.empty());  // built-in
-    AppSettings s = loadSettings(lib);
+    FakeNav nav(lib);
+    CHECK(loadSettings(lib, nav.device()).homeScreen.empty());  // built-in
+    AppSettings s = loadSettings(lib, nav.device());
     s.homeScreen = "desk/home";
     s.flashEvery = 3;
-    saveSettings(lib, s);
-    CHECK(loadSettings(lib).homeScreen == "desk/home");
-    CHECK(loadSettings(lib).flashEvery == 3);
+    saveSettings(lib, nav.device(), s);
+    CHECK(loadSettings(lib, nav.device()).homeScreen == "desk/home");
+    CHECK(loadSettings(lib, nav.device()).flashEvery == 3);
     s.homeScreen = "";
-    saveSettings(lib, s);
-    CHECK(loadSettings(lib).homeScreen.empty());
+    saveSettings(lib, nav.device(), s);
+    CHECK(loadSettings(lib, nav.device()).homeScreen.empty());
 }
 
 TEST_CASE("settings: the Home row shows with a home screen to pick; Settings → Home lists Built-in and them; a tap keeps one") {
@@ -275,14 +276,14 @@ TEST_CASE("settings: the Home row shows with a home screen to pick; Settings →
     CHECK(home->choices().chosen() == 0);
     CHECK(home->choices().unavailable.empty());
     home->onGesture(tapAt(home->optionRects().at(1).center()), nav);
-    CHECK(loadSettings(lib).homeScreen == "desk/home");
+    CHECK(loadSettings(lib, nav.device()).homeScreen == "desk/home");
     CHECK(home->choices().chosen() == 1);
     home->onGesture(tapAt(headerBackRect().center()), nav);
     CHECK(nav.pops == 1);
     plain.onShow(nav);
     CHECK(plain.homeLine() == "Reading Desk — Desk");
     home->onGesture(tapAt(home->optionRects().at(0).center()), nav);
-    CHECK(loadSettings(lib).homeScreen.empty());
+    CHECK(loadSettings(lib, nav.device()).homeScreen.empty());
 }
 
 TEST_CASE("settings: [Review Focus] a chosen Home no longer offered shows \"<Plugin> — not available\"; the row stays") {
@@ -291,9 +292,9 @@ TEST_CASE("settings: [Review Focus] a chosen Home no longer offered shows \"<Plu
     FakeNav nav(lib);
     FakeEntries entries;  // the plugin turned off: none of its screens offered
     nav.entries = &entries;
-    AppSettings s = loadSettings(lib);
+    AppSettings s = loadSettings(lib, nav.device());
     s.homeScreen = "feed/desk";
-    saveSettings(lib, s);
+    saveSettings(lib, nav.device(), s);
     FakePlugins plugins;
     addShowcasePlugins(plugins);  // "feed" is Feed Riffle
     PluginHost host(plugins.deps());
@@ -306,10 +307,10 @@ TEST_CASE("settings: [Review Focus] a chosen Home no longer offered shows \"<Plu
     REQUIRE(home.choices().options.size() == 1);
     CHECK(home.choices().chosen() == -1);
     CHECK(home.choices().unavailable == "Feed Riffle — not available");
-    CHECK(loadSettings(lib).homeScreen == "feed/desk");  // kept: it comes back with the plugin
+    CHECK(loadSettings(lib, nav.device()).homeScreen == "feed/desk");  // kept: it comes back with the plugin
 
     s.homeScreen = "gone/desk";  // removed: only its id is left to name it
-    saveSettings(lib, s);
+    saveSettings(lib, nav.device(), s);
     home.onShow(nav);
     CHECK(home.choices().unavailable == "gone — not available");
     entries.home = {{"gone", "Gone", "desk", "Desk", ""}};  // back again
@@ -329,9 +330,9 @@ TEST_CASE("settings: Settings and Settings → Home with the Home row match thei
     FakeEntries entries;
     entries.home = {{"desk", "Desk", "home", "Reading Desk", ""}};
     nav.entries = &entries;
-    AppSettings s = loadSettings(lib);
+    AppSettings s = loadSettings(lib, nav.device());
     s.homeScreen = "feed/desk";
-    saveSettings(lib, s);
+    saveSettings(lib, nav.device(), s);
     FakePlugins plugins;
     addShowcasePlugins(plugins);
     PluginHost host(plugins.deps());

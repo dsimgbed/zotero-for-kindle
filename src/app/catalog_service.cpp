@@ -388,7 +388,8 @@ void CatalogService::startRemove(const std::string& id) {
         const bool ok = removeFiles(config_.pluginsDir, id, &e);
         if (!ok) error = e.message;
         if (ok) {
-            if (host) host->forget(id);  // its storage went with its folder; its state goes here
+            if (config_.pluginDataRoots) removePluginData(config_.pluginDataRoots(), id);  // in every account
+            if (host) host->forget(id);  // its state goes here
             else forgetState(nullptr, id);
         }
         if (host) host->release(id);

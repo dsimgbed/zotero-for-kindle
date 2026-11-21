@@ -51,7 +51,7 @@ public:
     std::vector<LinkBox> links(int page) override;
     std::optional<LinkInfo> link(int page, int index) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
-    bool fullText(std::string& out, UserError*) override;
+    bool fullText(std::string& out, UserError*, const std::atomic<bool>* cancel = nullptr) override;
 
 private:
     std::optional<InkPlacement> placeBox(int page, Rect r, std::optional<Point> note);  // an area, or a note at `note`

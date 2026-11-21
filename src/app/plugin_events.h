@@ -63,6 +63,12 @@ public:
 
     // Whether plugins run (not in safe mode, not stopped for an update's install); set by main.
     void setRunning(bool on) { running_ = on; }
+    // While this answers true (an account switch: nothing may cover the Switching screen), what a
+    // plugin would put on screen is refused: a screen it opens is closed, a question is answered
+    // no, zk.library.open and zk.reader.open are rejected with kRefusedWhileSwitching; the
+    // launcher opens nothing.
+    void setRefusing(std::function<bool()> f) { refusing_ = std::move(f); }
+    static constexpr const char* kRefusedWhileSwitching = "Switching accounts";
     // Previews (zk.reader.open, ReaderOpen): main opens the reader (PreviewScreen::show) with these
     // answers: `answer` settles the plugin's promise ("" opened, else why not); `closed` tells the
     // plugin's screen the reader closed (a {kind: "reader", closed: true} event). Unset: refused.
@@ -133,6 +139,8 @@ private:
     void openItem(App&, const PluginHostEvent&);
     std::set<uint64_t> itemOpened_;  // screens whose zk.library.open opened an item (see takeItemOpened)
     bool running_ = true;
+    std::function<bool()> refusing_;
+    bool refusing() const { return refusing_ && refusing_(); }
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
     void pushScreen(App&, uint64_t instance, const std::string& pluginId, const std::string& pluginName, const std::string& title);

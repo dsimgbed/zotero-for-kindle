@@ -118,9 +118,12 @@ struct Rig {
         c.makeHttp = [this] { return std::make_unique<FnHttp>([this](const HttpRequest& r) { return serve(r); }); };
         c.feedUrl = kFeed;
         c.publicKey = publicKeyFor(seed);
-        if (installable)
-            c.paths = {(root / "zotero").string(), (root / launcherDir / "Zotero.sh").string(),
-                       (root / "var/config.json").string(), (root / "zotero/zotero.db").string()};
+        if (installable) {
+            c.paths.appDir = (root / "zotero").string();
+            c.paths.launcherPath = (root / launcherDir / "Zotero.sh").string();
+            c.paths.configFile = (root / "var/config.json").string();
+            c.paths.dbPath = (root / "zotero/zotero.db").string();
+        }
         c.current = {0, 2, 0};
         c.hooks.freeSpace = [](const std::string&) { return int64_t{1} << 40; };
         c.hooks.probe = [] { return NetState{}; };

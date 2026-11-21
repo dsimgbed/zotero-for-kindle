@@ -1,6 +1,7 @@
 #pragma once
 // A Nav for screen tests: records damages, pushes and pops; owns a FakeSync and a keyboard.
 
+#include "app/device_settings.h"
 #include "fake_sync.h"
 #include "platform/device_profile.h"
 #include "platform/keyboard.h"
@@ -55,6 +56,8 @@ public:
     void redrawAll(Waveform w) override { damages.push_back({{0, 0, 1236, 1547}, w}); }
     SyncControl& sync() override { return syncFake; }
     Library& library() override { return lib_; }
+    DeviceSettings& device() override { return deviceSettings; }
+    DeviceSettings deviceSettings{""};  // in memory; a test may read what the screens wrote
     Keyboard& keyboard() override { return keyboardFake; }
     int64_t nowMs() const override { return now; }
     void quit() override { quitted = true; }

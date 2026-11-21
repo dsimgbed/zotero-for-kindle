@@ -62,17 +62,6 @@ template <class E, size_t N> E fromName(const E (&all)[N], const char* (*name)(E
     return fallback;
 }
 
-void drawSheet(cairo_t* cr, Rect area, Rect s, const std::string& title) {
-    cairo_save(cr);  // fade what's behind, so the sheet reads as on top
-    cairo_rectangle(cr, area.x, area.y, area.w, area.h);
-    cairo_set_source_rgba(cr, 1, 1, 1, 0.6);
-    cairo_fill(cr);
-    cairo_restore(cr);
-    fillRect(cr, s, 255);
-    fillRect(cr, {s.x, s.y, s.w, 4}, kInk);
-    drawText(cr, title, kSheetTitle, {s.x + kMargin, s.y + kPad, s.w - 2 * kMargin, kTitleH - 10}, 1);
-}
-
 int monthOf(const std::string& key) {  // "2025-03" -> 3; 0 if not a month
     if (key.size() < 7 || key[4] != '-') return 0;
     const int m = std::atoi(key.c_str() + 5);
@@ -212,6 +201,17 @@ std::vector<JumpGroup> jumpGroups(SortBy sort, const std::vector<ListSection>& s
         }
     }
     return out;
+}
+
+void drawSheet(cairo_t* cr, Rect area, Rect s, const std::string& title) {
+    cairo_save(cr);  // fade what's behind, so the sheet reads as on top
+    cairo_rectangle(cr, area.x, area.y, area.w, area.h);
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.6);
+    cairo_fill(cr);
+    cairo_restore(cr);
+    fillRect(cr, s, 255);
+    fillRect(cr, {s.x, s.y, s.w, 4}, kInk);
+    drawText(cr, title, kSheetTitle, {s.x + kMargin, s.y + kPad, s.w - 2 * kMargin, kTitleH - 10}, 1);
 }
 
 Rect sheetRectIn(Rect area, int height) {

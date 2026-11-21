@@ -11,10 +11,13 @@
 #include <memory>
 #include <vector>
 
+#include "app/device_settings.h"
 #include "screens/plugin_confirm.h"
 #include "screens/screen.h"
 
 namespace zk {
+
+class AccountSession;  // app/session.h
 
 class App final : public Nav {
 public:
@@ -61,10 +64,22 @@ public:
     // Ink reaches the screen at most once per frame, as one update for everything drawn since:
     // an e-ink update per pen sample queues hundreds of them and the line lags in pieces.
     static constexpr int64_t kInkFrameMs = 25;
-    SyncControl& sync() override { return *sync_; }
+    SyncControl& sync() override;
     void setSync(SyncControl& s) { sync_ = &s; }
     // Replace a tab's root and show it (e.g. Home after Setup).
     void replaceRoot(int tab, std::unique_ptr<Screen>);
+    // Every screen of every tab closed (top first; destroyed after the step, as a pop), and `s`
+    // the only one, Home's root: leaving an account, no screen keeps anything of it. Questions
+    // waiting go unanswered. The other tabs stay empty until setRoot.
+    void clearTo(std::unique_ptr<Screen> s);
+    // The lock (spec: multiple accounts, PIN): `s` (the PIN pad) covers whatever shows, every tab
+    // and the app's own questions, and takes every gesture, key and pen stroke; nothing under it is
+    // closed (the reader keeps its page), and what is pushed meanwhile goes under it. Toasts wait.
+    // A second lock() replaces the first. unlock() shows what was under it again; clearTo() (a
+    // switch) ends the lock too.
+    void lock(std::unique_ptr<Screen> s);
+    void unlock();
+    bool locked() const { return lock_ != nullptr; }
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
@@ -83,7 +98,15 @@ public:
         watchdog_ = std::move(ok);
         watchdogPeriodMs_ = periodMs;
     }
-    Library& library() override { return lib_; }
+    // The library and the sync are the session's while there is one (app/session.h); without one,
+    // the library given to the constructor (main: an empty one, before Setup) and setSync's.
+    // Nothing here keeps the session's library: screens ask nav.library() each time.
+    Library& library() override;
+    void setSession(AccountSession* s) { session_ = s; }
+    AccountSession* session() const { return session_; }
+    DeviceSettings& device() override { return *device_; }
+    // Where the device settings are kept (default: in memory only, for tests).
+    void setDeviceSettings(DeviceSettings& d) { device_ = &d; }
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
     // A system dialog or the screensaver is over the app (the Kindle may be asleep).
@@ -134,12 +157,16 @@ private:
 
     Display& display_;
     Library& lib_;
+    AccountSession* session_ = nullptr;
+    DeviceSettings memoryDevice_{""};
+    DeviceSettings* device_ = &memoryDevice_;
     SyncControl* sync_;
     Keyboard& keyboard_;
     std::function<int64_t()> clock_;
     Canvas canvas_;
     GestureRecognizer gestures_;
     std::array<std::vector<std::unique_ptr<Screen>>, kTabs> stacks_;
+    std::unique_ptr<Screen> lock_;  // over everything while set (lock())
     int tab_ = 0;
     const Screen* caller_ = nullptr;  // screen currently handling a callback, for damage()
     std::vector<std::pair<Rect, Waveform>> pending_;

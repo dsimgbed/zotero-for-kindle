@@ -46,5 +46,8 @@ std::string groupErrorMessage(const UserError&);
 // Zotero couldn't be reached at all (no Wi-Fi, no DNS, no answer): the rest of the sync would only
 // fail the same way.
 bool unreachable(const UserError&);
+// Zotero says the key is another user's than the account's (discoverGroups): the account's sync
+// stops there, its data kept, until the key is updated.
+bool foreignKey(const UserError&);
 
 }  // namespace zk

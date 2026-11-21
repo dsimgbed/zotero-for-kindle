@@ -13,6 +13,7 @@
 #endif
 
 #include "core/log.h"
+#include "core/open_guard.h"
 
 namespace zk {
 
@@ -33,17 +34,35 @@ fs::path exeDir() {
 #endif
 }
 
-}  // namespace
-
-std::unique_ptr<DocumentEngine> loadEngine(DocType type, const EngineEnv& env, UserError* err) {
-    const char* name = type == DocType::Epub ? "libzk-epub.so" : "libzk-pdf.so";
-    const char* symbol = type == DocType::Epub ? "zk_epub_engine_create" : "zk_pdf_engine_create";
+// The module's folders, in the order they are looked in.
+std::vector<fs::path> moduleDirs() {
     std::vector<fs::path> dirs;
     if (const char* d = std::getenv("ZK_LIB_DIR")) dirs.emplace_back(d);
     const fs::path exe = exeDir();
     dirs.push_back(exe);
     dirs.push_back(exe / ".." / "lib");
     dirs.push_back(exe / "..");
+    return dirs;
+}
+
+}  // namespace
+
+void closeEngineDocCache() {
+    for (const auto& d : moduleDirs()) {
+        const fs::path p = d / "libzk-epub.so";
+        // Only a module already loaded: with none, no engine ever opened the cache.
+        void* h = dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
+        if (!h) continue;
+        if (auto close = reinterpret_cast<void (*)()>(dlsym(h, "zk_epub_doc_cache_close"))) close();
+        dlclose(h);  // (RTLD_NOLOAD took a reference)
+    }
+}
+
+std::unique_ptr<DocumentEngine> loadEngine(DocType type, const EngineEnv& env, UserError* err) {
+    if (!env.cacheDir.empty()) ZK_NOTE_OPEN(env.cacheDir);  // crengine's document cache
+    const char* name = type == DocType::Epub ? "libzk-epub.so" : "libzk-pdf.so";
+    const char* symbol = type == DocType::Epub ? "zk_epub_engine_create" : "zk_pdf_engine_create";
+    const std::vector<fs::path> dirs = moduleDirs();
     std::string why = std::string(name) + " not found";
     for (const auto& d : dirs) {
         const fs::path p = d / name;

@@ -1,5 +1,5 @@
 // zk-sync: the storage and sync layer without a UI, for real runs on the Mac and the Kindle.
-//   zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND
+//   zk-sync [--account USERID] [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND
 //   commands: pull | status | groups | search <words> | collections | annotations <attachmentKey>
 //             | fetch <attachmentKey> <dir> | highlights-offline on|off
 //             | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>
@@ -15,6 +15,10 @@
 // Every request goes through the WriteGuard, which allows annotation writes, the reading positions
 // of the library's own files, the read tag of its items and pending plugin changes in their exact
 // shape, and nothing else.
+// The account: --account USERID, else the active one — its key (in DIR/accounts/) and its library
+// (accounts/<userId>/zotero.db). Before the account layout: DIR/config.json and the old library.
+// --env and --db override the key and the library. A config.json dropped over USB is the app's to
+// take in, not this tool's.
 // Credentials are never printed.
 
 #include "docs/fonts.h"
@@ -24,6 +28,7 @@
 #include "net/write_guard.h"
 #include "store/db.h"
 #include "store/library.h"
+#include "app/accounts.h"
 #include "sync/config.h"
 #include "sync/libraries.h"
 #include "sync/sync_engine.h"
@@ -47,17 +52,11 @@ using namespace zk;
 namespace {
 
 #ifdef ZK_KINDLE
-const char* kDefaultConfigDir = "/var/local/zotero";
-const char* kDefaultDb = "/mnt/us/zotero/zotero.db";  // see research/spikes/s6-sqlite-fuse.md
 const char* kDefaultCa = "/mnt/us/zotero/share/cacert.pem";
-const char* kDroppedConfig = "/mnt/us/zotero/config.json";
-const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), "/mnt/us/zotero/cache/cre"};
+const char* kCrengineData = "/mnt/us/zotero/share/crengine";
 #else
-const char* kDefaultConfigDir = "local";
-const char* kDefaultDb = "local/zk.sqlite";
 const char* kDefaultCa = "";
-const char* kDroppedConfig = "";
-const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), "local/cache/cre"};
+const char* kCrengineData = "third_party/crengine/cr3gui/data";
 #endif
 
 constexpr const char* kTestTag = "zk-test";
@@ -65,7 +64,7 @@ constexpr const char* kTestComment = "[zk-test] made by zk-sync annotate-test";
 
 int usage() {
     std::fprintf(stderr,
-                 "usage: zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND\n"
+                 "usage: zk-sync [--account USERID] [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND\n"
                  "  pull | status | groups | search <words> | collections | annotations <attachmentKey>\n"
                  "  | fetch <attachmentKey> <dir> | highlights-offline on|off\n"
                  "  | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>\n"
@@ -116,32 +115,47 @@ void printCollections(const std::vector<CollectionRecord>& all, const std::strin
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string configDir = kDefaultConfigDir, envFile, dbPath = kDefaultDb, ca = kDefaultCa;
+    Paths paths = defaultPaths();
+    std::string envFile, dbPath, ca = kDefaultCa;
+    int64_t account = 0;
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string{}; };
-        if (a == "--config") configDir = next();
+        if (a == "--config") paths.configDir = next();
         else if (a == "--env") envFile = next();
         else if (a == "--db") dbPath = next();
         else if (a == "--ca") ca = next();
-        else args.push_back(a);
+        else if (a == "--account") {
+            account = std::atoll(next().c_str());
+            if (account <= 0) return usage();
+        } else args.push_back(a);
     }
     if (args.empty()) return usage();
     const std::string cmd = args[0];
 
-    std::optional<Config> cfg;
-    if (!envFile.empty()) {
-        cfg = configFromEnvFile(envFile);
-    } else {
-        if (*kDroppedConfig) importDroppedConfig(kDroppedConfig, configDir);
-        cfg = loadConfig(configDir);
-    }
-    if (!cfg || cfg->userId <= 0 || cfg->apiKey.empty()) {
-        std::printf("error: No Zotero account configured.\n  details: put config.json in %s or pass --env FILE\n",
-                    envFile.empty() ? configDir.c_str() : envFile.c_str());
+    // Without --env or --db, the account's own key and library; nothing of another's.
+    AccountTarget target;
+    if (envFile.empty() || dbPath.empty()) target = accountTarget(paths, account);
+    std::optional<Config> cfg = envFile.empty() ? target.config : configFromEnvFile(envFile);
+    if (dbPath.empty()) dbPath = target.dbPath;
+    if (!cfg || cfg->userId <= 0 || cfg->apiKey.empty() || dbPath.empty()) {
+        std::printf("error: No Zotero account configured.\n  details: %s\n",
+                    !envFile.empty() && !cfg ? ("no key in " + envFile).c_str()
+                    : !target.error.empty()  ? (target.error + (envFile.empty() ? "; or pass --env FILE" : "")).c_str()
+                                             : "no key or library");
         return 1;
     }
+    if (!envFile.empty() && target.userId > 0 && cfg->userId != target.userId) {  // never one account's key on another's library
+        std::printf("error: %s is user %lld's key, not account %lld's.\n  details: pass --account %lld, or --db\n",
+                    envFile.c_str(), static_cast<long long>(cfg->userId), static_cast<long long>(target.userId),
+                    static_cast<long long>(cfg->userId));
+        return 1;
+    }
+    // crengine's cache: the account's own (the app's place for it), else the old one.
+    const bool inAccount = target.userId > 0 && dbPath == accountPaths(paths, target.userId).dbPath;
+    const EngineEnv kEngineEnv{kCrengineData, readingFontDirs(),
+                               inAccount ? accountPaths(paths, target.userId).creDir : paths.cacheDir + "/cre"};
 
     std::optional<Db> db;
     try {
@@ -175,7 +189,7 @@ int main(int argc, char** argv) {
             const auto t0 = std::chrono::steady_clock::now();
             UserError discovery;
             if (!discoverGroups(api, lib, nowMs(), &discovery)) {
-                if (unreachable(discovery)) {  // nothing else would get through either
+                if (unreachable(discovery) || foreignKey(discovery)) {  // nothing else would get through, or may
                     printError(discovery);
                     return 1;
                 }

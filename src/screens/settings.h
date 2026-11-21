@@ -1,5 +1,5 @@
 #pragma once
-// Settings (spec §7.7): account, WebDAV, the read tag, sync interval, "Keep all highlights
+// Settings (spec §7.7): Accounts (Manage… opens Settings → Accounts), WebDAV, the read tag, sync interval, "Keep all highlights
 // offline", downloaded files, full refresh, plugins, Home (only when some running plugin has a
 // home screen, or one was chosen: settings_home.h), about. With group libraries (or a key that
 // can't read them), the account row also names where files come from, and WebDAV's place is the
@@ -27,6 +27,7 @@ public:
     // screen when the check finds a newer release. `pendingUpdate`: a newer version the weekly
     // check found (UpdateNotice), for the About row. `plugins` (may be null, or give null): the
     // current plugin host, for the Plugins row.
+    // `changeAccount`: Manage… on the Accounts row (Settings → Accounts).
     SettingsScreen(Config, std::function<void(Nav&)> changeAccount, Updater* updater = nullptr,
                    std::function<void(Nav&)> openUpdate = nullptr,
                    std::function<std::optional<std::string>()> pendingUpdate = nullptr, PluginHostFn plugins = nullptr,
@@ -65,7 +66,7 @@ public:
     Rect storageTextRect() const;
 
 private:
-    void load(Library&);
+    void load(Nav&);
     void loadHome(Nav&);
     Config config_;
     std::function<void(Nav&)> changeAccount_;

@@ -6,6 +6,7 @@
 #include <sstream>
 #include <vector>
 
+#include "core/open_guard.h"
 #include "docs/engine_factory.h"
 
 namespace zk {
@@ -67,8 +68,14 @@ void prune(const fs::path& dir, const fs::path& keep) {
 
 namespace {
 
-std::optional<std::string> extract(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
-                                   UserError* err, const EngineLoader& loader) {
+std::optional<std::string> extract(const AttachmentRecord& a, const std::string& cacheDir, const EngineEnv& env,
+                                   UserError* err, const EngineLoader& loader, const std::atomic<bool>* cancel) {
+    const auto cancelled = [&] {
+        if (!cancel || !cancel->load()) return false;
+        fail(err, "Cancelled", "fullText cancelled");
+        return true;
+    };
+    if (cancelled()) return std::nullopt;
     if (a.linkMode == "linked_file" || a.linkMode == "linked_url")
         return fail(err, "This is a linked file, which the Kindle doesn't have, so its text can't be read.", "linkMode " + a.linkMode),
                std::nullopt;
@@ -82,8 +89,9 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
         return fail(err, "This file isn't on the Kindle - open it once to download it.", "no local file for " + a.key), std::nullopt;
 
     // Without a checksum there is nothing to tell a changed file by: no cache.
-    const bool cacheable = safeName(a.key) && safeName(a.md5);
-    const fs::path dir = fs::path(pluginsDir) / ".cache" / "fulltext";
+    const bool cacheable = !cacheDir.empty() && safeName(a.key) && safeName(a.md5);
+    if (cacheable) ZK_NOTE_OPEN(cacheDir);
+    const fs::path dir = cacheDir;
     const fs::path entry = dir / (a.key + "-" + a.md5 + ".txt");
     if (cacheable) {
         if (auto hit = readAll(entry); hit && hit->size() <= kMaxFullTextBytes) {
@@ -92,19 +100,23 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
         }
     }
 
+    if (cancelled()) return std::nullopt;
     UserError e;
     auto engine = loader ? loader(type, env, &e) : loadEngine(type, env, &e);
     if (!engine) return fail(err, e.message.empty() ? "The reader for this file couldn't be started." : e.message, e.details), std::nullopt;
+    if (cancelled()) return std::nullopt;
     if (!engine->openForText(a.localPath, &e)) {
         if (err) *err = e;
         return std::nullopt;
     }
+    if (cancelled()) return std::nullopt;
     std::string text;
-    if (!engine->fullText(text, &e)) {
+    if (!engine->fullText(text, &e, cancel)) {
         if (err) *err = e.message.empty() ? UserError{ErrorKind::Other, "This file's text can't be read.", "fullText failed"} : e;
         return std::nullopt;
     }
     engine.reset();
+    if (cancelled()) return std::nullopt;  // never cached
     if (text.size() > kMaxFullTextBytes)
         return fail(err, "This file's text is larger than 32 MB.", "full text over limit"), std::nullopt;
 
@@ -138,10 +150,10 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
 
 }  // namespace
 
-std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
-                                           UserError* err, const EngineLoader& loader) {
+std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& cacheDir, const EngineEnv& env,
+                                           UserError* err, const EngineLoader& loader, const std::atomic<bool>* cancel) {
     try {
-        return extract(a, pluginsDir, env, err, loader);
+        return extract(a, cacheDir, env, err, loader, cancel);
     } catch (const std::exception& e) {
         fail(err, "The app failed reading this file's text.", e.what());
     } catch (...) {

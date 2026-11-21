@@ -4,6 +4,8 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 
 #include "app/plugin_background.h"
 #include "fake_lipc.h"
@@ -526,4 +528,50 @@ TEST_CASE("background: setBadge posts Badge and persists") {
     CHECK(ofKind(send(""), PluginHostEvent::Kind::Badge) == 0);  // clearing a cleared badge says nothing
     evs = send("");
     CHECK(ofKind(evs, PluginHostEvent::Kind::Badge) == 0);
+}
+
+// ---- Accounts: the host stopped for a switch (spec: multiple accounts, Switching 3) -----------
+
+TEST_CASE("background: stopped mid-round, the host returns at once; nothing of that round is polled after; the next round reports") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.background(async () => { console.log("task started"); await new Promise(r => setTimeout(r, 60000)); });)",
+           {"background"});
+    Clocked clk;
+    PluginHostDeps d = clk.deps(fp);
+    d.backgroundBudgetMs = 1500;  // the round would hold this long
+    PluginHost host(d);
+    host.setEnabled("a", true);
+    host.start(PluginAccount{});
+    host.runBackground(1);
+    for (int i = 0; i < 300 && !contains(fp.log("a"), "task started"); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    REQUIRE(contains(fp.log("a"), "task started"));
+    const auto t0 = std::chrono::steady_clock::now();
+    host.stop();
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1000));
+    CHECK(drain(host).empty());  // round 1's report (and anything else queued) went with the stop
+    host.start(PluginAccount{});
+    host.runBackground(2);
+    std::vector<uint64_t> ids;
+    for (int i = 0; i < 500 && ids.empty(); ++i) {
+        for (const auto& e : drain(host))
+            if (e.kind == PluginHostEvent::Kind::BackgroundDone) ids.push_back(e.requestId);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(ids.size() == 1);
+    CHECK(ids[0] == 2);
+}
+
+TEST_CASE("background: events the host queued before a stop aren't polled after it (they were the last account's)") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.on("syncFinished", () => zk.setBadge("3"));)");
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start(PluginAccount{});
+    host.dispatch(PluginEvent{"syncFinished", {{"origin", "zotero"}, {"initial", false}}, false});
+    REQUIRE(host.waitIdle(3000));
+    host.stop();
+    host.start(PluginAccount{});
+    REQUIRE(host.waitIdle(3000));
+    CHECK(ofKind(drain(host), PluginHostEvent::Kind::Badge) == 0);
 }

@@ -22,9 +22,16 @@ endif
 
 inc = include_directories('src')
 
+# The isolation checks' file-open guard (src/core/open_guard.h): in builds with the tests only,
+# never in the Kindle's (built with -Dtests=false).
+if get_option('tests')
+  add_project_arguments('-DZK_OPEN_GUARD=1', language : 'cpp')
+endif
+
 core_lib = static_library('zk-core',
   'src/core/log.cpp',
   'src/core/wake.cpp',
+  'src/core/open_guard.cpp',
   'src/platform/pen_decoder.cpp',
   include_directories : inc)
 
@@ -115,20 +122,23 @@ services_lib = static_library('zk-services',
   dependencies : [core_dep])
 services_dep = declare_dependency(link_with : services_lib, dependencies : [core_dep])
 
+# Monocypher: signatures (updates) and PIN hashing (accounts).
+monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
+  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp', 'src/sync/libraries.cpp',
   'src/sync/files_sweep.cpp',
   'src/sync/webdav.cpp', 'src/sync/zotero_storage.cpp', 'src/sync/snapshot_zip.cpp',
   'src/sync/config.cpp',
+  'src/app/accounts.cpp', 'src/app/pin.cpp',
   'src/sync/sync_service.cpp',
   'third_party/pugixml/pugixml.cpp',
-  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
-  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
-sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
+  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', 'third_party/monocypher', is_system : true)],
+  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep],
+  link_with : monocypher_lib)
+sync_dep = declare_dependency(link_with : [sync_lib, monocypher_lib], dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
 
 # Updates (Plan 7): versions, signatures (Monocypher), checking, downloading, installing.
-monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
-  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 update_lib = static_library('zk-update',
   'src/update/version.cpp', 'src/update/signature.cpp', 'src/update/manifest.cpp', 'src/update/release_check.cpp',
   'src/update/download.cpp', 'src/update/install.cpp', 'src/update/updater.cpp',
@@ -220,6 +230,12 @@ screens_lib = static_library('zk-screens',
   'src/screens/book.cpp',
   'src/screens/notes.cpp',
   'src/screens/setup.cpp',
+  'src/screens/account_error.cpp',
+  'src/screens/account_sheet.cpp',
+  'src/screens/accounts.cpp',
+  'src/screens/pin_pad.cpp',
+  'src/screens/remove_account.cpp',
+  'src/screens/switching.cpp',
   'src/screens/settings.cpp',
   'src/screens/settings_home.cpp',
   'src/screens/update_screen.cpp',
@@ -247,7 +263,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/catalog_list.cpp',
   'src/screens/catalog_page.cpp',
   'src/app/catalog_service.cpp',
-  'src/app/settings_store.cpp',
+  'src/app/settings_store.cpp', 'src/app/device_settings.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
   dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep])
 
@@ -255,13 +271,16 @@ screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep
 
 app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp',
-  'src/app/startup.cpp',
+  'src/app/startup.cpp', 'src/app/migrate_accounts.cpp',
   'src/app/lifecycle.cpp',
   'src/app/plugin_events.cpp',
   'src/app/home_tree.cpp',
   'src/app/plugin_background.cpp',
   'src/app/plugin_watch.cpp',
   'src/app/previews.cpp',
+  'src/app/session.cpp',
+  'src/app/account_switch.cpp',
+  'src/app/account_ui.cpp',
   include_directories : ui_incs,
   dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
 app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
@@ -283,11 +302,14 @@ endif
 
 # ---- Readers (Plan 4): each engine is a shared module loaded at runtime ---------------------
 # crengine and MuPDF bring their own static freetype/harfbuzz; inside a module linked
-# -Bsymbolic with a version script exporting only the factory, they never meet the firmware's
+# -Bsymbolic with a version script exporting only the factory (and the EPUB module's cache
+# close), they never meet the firmware's
 # copies that pango uses (spike README). The app links neither engine.
 module_link_args = []
+epub_link_args = []  # (the version script exports it on Linux)
 if host_machine.system() == 'darwin'
   module_link_args += ['-Wl,-exported_symbol,_zk_*_engine_create']
+  epub_link_args = ['-Wl,-exported_symbol,_zk_epub_doc_cache_close']  # the account session closes crengine's cache
 else
   module_link_args += ['-Wl,-Bsymbolic', '-Wl,--version-script=' + meson.project_source_root() / 'src/docs/zk-engine.map']
 endif
@@ -327,7 +349,7 @@ if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
     include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
     cpp_args : ['-fvisibility=hidden'],
     dependencies : [engine_crengine_dep],
-    link_args : module_link_args,
+    link_args : module_link_args + epub_link_args,
     install : true, install_dir : 'lib')
 endif
 

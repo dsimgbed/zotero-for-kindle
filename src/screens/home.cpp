@@ -43,6 +43,15 @@ Rect HomeScreen::closeRect() { return {W() - kMargin - 80, 34, 80, 96}; }
 Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 180, 34, 80, 96}; }
 Rect HomeScreen::settingsRect() { return {W() - kMargin - 280, 34, 80, 96}; }
 Rect HomeScreen::pluginsRect() { return {W() - kMargin - 380, 34, 80, 96}; }
+Rect HomeScreen::chipRect() const {
+    if (chip_.empty()) return {};
+    const TextStyle title{kSans, 17, 700}, chip{kSans, 8.5, 500};
+    const int x = kMargin + measureText("Zotero", title, 600, 1).width + 30;
+    const int right = pluginsRect().x - 20;
+    const int w = std::min(measureText(chip_ + " ▾", chip, 2000, 1).width + 60, right - x);
+    return {x, 46, std::max(0, w), 72};
+}
+
 Rect HomeScreen::searchFieldRect() { return {kMargin, 150, W() - 2 * kMargin, 92}; }
 Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCoverH}; }
 
@@ -165,6 +174,7 @@ bool HomeScreen::readPlugins(Nav& nav) {
 
 void HomeScreen::onShow(Nav& nav) {
     readPlugins(nav);
+    chip_ = actions_.accountChip ? actions_.accountChip() : "";
     nowMs_ = nav.nowMs();
     update_ = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     safe_ = actions_.safeModeNotice && actions_.safeModeNotice();
@@ -182,7 +192,7 @@ void HomeScreen::onShow(Nav& nav) {
             tickBody(nav);  // the kept tree (drawn in this first frame), or what came while Home was hidden
         }
     }
-    if (loadSettings(nav.library()).syncIntervalMinutes == 0) return;  // Sync every Off: only what the reader asks for
+    if (loadSettings(nav.library(), nav.device()).syncIntervalMinutes == 0) return;  // Sync every Off: only what the reader asks for
     if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
 }
 
@@ -209,6 +219,13 @@ void HomeScreen::draw(Canvas& canvas) {
 
     // Header: title, status line, settings, sync, close.
     drawText(cr, "Zotero", {kSans, 17, 700}, {kMargin, 18, contentW - 300, 100}, 1);
+    if (const Rect c = chipRect(); !c.empty()) {  // the open account, with two or more
+        gray(cr, 120);
+        cairo_set_line_width(cr, 3);
+        roundedRect(cr, c.x + 1.5, c.y + 1.5, c.w - 3, c.h - 3, c.h / 2.0);
+        cairo_stroke(cr);
+        centredText(cr, chip_ + " ▾", {kSans, 8.5, 500}, {c.x + 30, c.y, c.w - 60, c.h});
+    }
     const std::string line = status_.line(nowMs_);
     if (!line.empty()) drawText(cr, line, {kSans, 6.5, 400, false, kTertiary}, {kMargin + 4, 108, contentW - 300, 34}, 1);
     const Rect gear = settingsRect();
@@ -273,11 +290,28 @@ void HomeScreen::draw(Canvas& canvas) {
     }
     if (plugin) body()->draw(cr);
     if (sheet_) sheet_->draw(cr, sheetArea());
+    if (accountSheet_) accountSheet_->draw(cr, sheetArea());
 }
 
 Rect HomeScreen::sheetArea() const { return {0, 0, metrics().width, metrics().height - kTabBarH}; }
 
 void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (accountSheet_) {
+        const Rect area = sheetArea();
+        const AccountSheet::Action a = accountSheet_->onGesture(g, area);
+        if (a == AccountSheet::Action::None) return;
+        const int64_t chosen = accountSheet_->chosen();
+        accountSheet_.reset();
+        nav.damage(area, Waveform::Ui);
+        if (a != AccountSheet::Action::Close && actions_.accountChoice) actions_.accountChoice(a, chosen);
+        return;
+    }
+    if (g.type == GestureType::Tap && !sheet_ && actions_.accountSheet)
+        if (const Rect c = chipRect(); !c.empty() && c.contains(g.pos)) {
+            accountSheet_ = actions_.accountSheet();
+            nav.damage(sheetArea(), Waveform::Ui);
+            return;
+        }
     if (sheet_) {
         const Rect area = sheetArea();
         switch (sheet_->onGesture(g, area, nav)) {

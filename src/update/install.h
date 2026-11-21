@@ -1,8 +1,11 @@
 #pragma once
 // Putting a verified release in place, so that a failed update can always be undone.
 //
-// installRelease copies the current bin/lib/share, the launcher and the library database into
-// <appDir>/update/old/ (the account file to <configFile>.old, mode 0600, off the USB drive), writes update/state = "installing <from> <to>", swaps
+// installRelease copies the current bin/lib/share, the launcher and the libraries into
+// <appDir>/update/old/ — every account's database as update/old/accounts/<userId>/zotero.db (not
+// its files), and a library of the layout before accounts as update/old/zotero.db — and the
+// account list and an old config.json beside themselves (<file>.old, mode 0600, off the USB
+// drive). Short of space for every library, only the open account's. It writes update/state = "installing <from> <to>", swaps
 // the new folders in (current ones to update/trash/), then writes "installed <from> <to>". The
 // app then exits with 75 and the launcher (assets/launcher/Zotero.sh, protocol format 1) starts
 // the new version, marking it "tried"; if it never confirms, the launcher restores update/old/.
@@ -15,14 +18,23 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace zk {
+
+struct AccountLibrary {
+    int64_t userId = 0;
+    std::string dbPath;  // /mnt/us/zotero/accounts/<userId>/zotero.db
+};
 
 struct InstallPaths {
     std::string appDir;        // /mnt/us/zotero; empty = can't install (the desktop)
     std::string launcherPath;  // /mnt/us/documents/Zotero.sh
-    std::string configFile;    // /var/local/zotero/config.json
-    std::string dbPath;        // /mnt/us/zotero/zotero.db
+    std::string configFile;    // /var/local/zotero/config.json: the account before accounts (if there)
+    std::string dbPath;        // /mnt/us/zotero/zotero.db: the library before accounts (if there)
+    std::string accountsFile;  // /var/local/zotero/accounts.json
+    // Every account's library, the open one first (asked at install time: accounts come and go).
+    std::function<std::vector<AccountLibrary>()> libraries;
     std::string updateDir() const { return appDir + "/update"; }
 };
 
@@ -35,6 +47,7 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
 // the launcher undoes at the next start.
 struct InstallHooks {
     std::function<void()> flush;  // to disk before each state change; default sync()
+    std::function<int64_t(const std::string& dir)> freeSpace;  // bytes; default statvfs
 };
 bool installRelease(const InstallPaths&, const std::string& newDir, Version from, Version to,
                     std::function<void(const char* step)> beat, UserError*, InstallHooks hooks = {});

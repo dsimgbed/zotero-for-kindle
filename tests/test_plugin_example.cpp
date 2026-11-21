@@ -88,7 +88,7 @@ TEST_CASE("example: Highlights to Markdown, loaded by the host against the fixtu
     addHighlight(lib, "ANNOTAT0", "PDFCITE1", "first line", "", "3", "00001|000100|00100");
 
     PluginHostDeps d = fp.deps();
-    d.dbPath = fp.path("library.db");
+    d.account.dbPath = fp.path("library.db");
     d.handlerBudgetMs = 5000;
     PluginHost host(d);
     host.setEnabled("highlights-to-markdown", true);
@@ -388,7 +388,7 @@ struct Riffle {
         lib.upsertCollection({"COLLINB1", "Inbox", "", 1});
         fake.expect("GET", "https://feeds.test/prob.xml", FakeHttp::ok(kFeed));
         PluginHostDeps d = fp.deps();
-        d.dbPath = fp.path("library.db");
+        d.account.dbPath = fp.path("library.db");
         d.handlerBudgetMs = 5000;
         d.backgroundBudgetMs = 10000;
         d.renderBudgetMs = 5000;
@@ -709,7 +709,7 @@ struct Desk {
         deskItem(lib, "INBX0004", "journalArticle", "Done", "2024-04-01T12:00:00Z", "COLLINBX", "application/pdf");
         lib.markRead("INBX0004", true);
         PluginHostDeps d = fp.deps();
-        d.dbPath = fp.path("library.db");
+        d.account.dbPath = fp.path("library.db");
         d.handlerBudgetMs = 5000;
         d.renderBudgetMs = renderBudgetMs;
         d.actionBudgetMs = 10000;
@@ -863,6 +863,7 @@ TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and
     CHECK(pair.items[1].texts == Strings{"Another Paper", "Vaswani et al.", "67% · today"});
     const Block* twoUp = firstOf(*pair.items[0].block, Block::Kind::Cover);
     REQUIRE(twoUp);
+    const auto twoUpWidth = twoUp->widthPct;  // (the tree it is in goes with the next render)
 
     // Read: the next paper opened takes its place; an EPUB is a book whatever its type.
     d.lib.markRead("PAPR0002", true);
@@ -877,7 +878,7 @@ TEST_CASE("example: Reading Desk — the pair: the newest opened unread book and
     REQUIRE(t.at("pair").items.size() == 1);
     const Block* alone = firstOf(*t.at("pair").items[0].block, Block::Kind::Cover);
     REQUIRE(alone);
-    CHECK(alone->widthPct < twoUp->widthPct);
+    CHECK(alone->widthPct < twoUpWidth);
 }
 
 TEST_CASE("example: Reading Desk — nothing opened of a kind: its first pin never opened and not read, UP NEXT, Not started; Pinned is a row of covers minus the pair") {

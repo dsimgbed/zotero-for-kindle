@@ -528,3 +528,96 @@ TEST_CASE("update leftovers: a backup left without its state (a clean-up cut sho
     CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
     CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
 }
+
+namespace {
+
+// The Kindle of the account layout (0.13 on): no library or config.json in the old places; two
+// accounts, 111 open, each with its own library under zotero/accounts/<userId>/.
+struct AccountsKindle : Kindle {
+    AccountsKindle() {
+        fs::remove(app("zotero.db"));
+        fs::remove(root / "var/config.json");
+        paths.accountsFile = (root / "var/accounts.json").string();
+        writeFile(paths.accountsFile, R"({"version":1,"active":111,"accounts":[]})");
+        for (const char* id : {"111", "222"}) fs::create_directories(app("accounts") / id);
+        sql(app("accounts/111/zotero.db"), "PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES (1),(2);");
+        sql(app("accounts/222/zotero.db"), "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3),(4),(5);");
+        writeFile(app("accounts/222/files/K/book.pdf"), "a pdf");
+        paths.libraries = [this] {
+            return std::vector<AccountLibrary>{{111, app("accounts/111/zotero.db").string()},
+                                               {222, app("accounts/222/zotero.db").string()}};
+        };
+    }
+};
+
+}  // namespace
+
+TEST_CASE("update install: with accounts, accounts.json and every account's library are backed up, not their files") {
+    AccountsKindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    sql(k.app("accounts/111/zotero.db"), "INSERT INTO t VALUES (3);");  // a write still in the WAL
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK(rowCount(k.app("update/old/accounts/111/zotero.db")) == 3);
+    CHECK(rowCount(k.app("update/old/accounts/222/zotero.db")) == 5);
+    CHECK_FALSE(fs::exists(k.app("update/old/accounts/222/files")));
+    CHECK_FALSE(fs::exists(k.app("update/old/zotero.db")));  // no library in the old place: none backed up
+    CHECK_FALSE(fs::exists(k.app("update/old/accounts.json")));  // the list stays off USB storage
+    CHECK(readFile(k.root / "var/accounts.json.old") == R"({"version":1,"active":111,"accounts":[]})");
+    const auto perms = fs::status(k.root / "var/accounts.json.old").permissions();
+    CHECK((perms & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    // The accounts themselves are untouched.
+    CHECK(rowCount(k.app("accounts/111/zotero.db")) == 3);
+    CHECK(readFile(k.app("accounts/222/files/K/book.pdf")) == "a pdf");
+    // A good start of the new version deletes the backups, the list's included.
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    CHECK(confirmStartup(k.paths, {0, 3, 0}).note == StartupNote::Updated);
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+    CHECK_FALSE(fs::exists(k.root / "var/accounts.json.old"));
+}
+
+TEST_CASE("update install: short of space for every library, only the open account's is backed up") {
+    AccountsKindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    const auto size = [&](const char* rel) {
+        std::error_code ec;
+        const auto n = fs::file_size(k.app(rel), ec);
+        return ec ? int64_t{0} : static_cast<int64_t>(n);
+    };
+    const int64_t open = size("accounts/111/zotero.db") + size("accounts/111/zotero.db-wal");
+    InstallHooks hooks;
+    hooks.freeSpace = [&](const std::string&) { return open + 1; };  // room for the open one only
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr, hooks));
+    CHECK(rowCount(k.app("update/old/accounts/111/zotero.db")) == 2);
+    CHECK_FALSE(fs::exists(k.app("update/old/accounts/222")));
+    CHECK(fs::exists(k.root / "var/accounts.json.old"));
+    CHECK(k.state() == "installed 0.2.0 0.3.0\n");
+}
+
+TEST_CASE("update install: a backup cut short leaves nothing of it behind") {
+    AccountsKindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    writeFile(k.app("accounts/222/zotero.db"), "not a database");
+    UserError err;
+    CHECK_FALSE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, &err));
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+    CHECK_FALSE(fs::exists(k.root / "var/accounts.json.old"));
+    CHECK_FALSE(fs::exists(k.app("update/state")));
+    CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
+}
+
+TEST_CASE("update install: a config.json naming no account on the Kindle (a removed one's) isn't backed up; a listed one's is") {
+    AccountsKindle k;
+    writeFile(k.paths.accountsFile, R"({"version":1,"active":111,"accounts":[{"userId":111},{"userId":222}]})");
+    writeFile(k.root / "var/config.json", R"({"userId":333,"apiKey":"key333"})");  // 333 was removed
+    std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+    CHECK(fs::exists(k.root / "var/accounts.json.old"));
+
+    AccountsKindle listed;
+    writeFile(listed.paths.accountsFile, R"({"version":1,"active":111,"accounts":[{"userId":111}]})");
+    writeFile(listed.root / "var/config.json", R"({"userId":"111","apiKey":"key111"})");
+    newDir = listed.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(listed.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK(readFile(listed.root / "var/config.json.old") == R"({"userId":"111","apiKey":"key111"})");
+}

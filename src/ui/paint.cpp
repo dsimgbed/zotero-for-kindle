@@ -225,6 +225,22 @@ void closeIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_restore(cr);
 }
 
+void lockIcon(cairo_t* cr, double cx, double cy, uint8_t g, double scale) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    cairo_set_line_width(cr, kIconStroke * scale);
+    const double bw = 34 * scale, bh = 24 * scale, top = cy - 2 * scale;  // the body
+    roundedRect(cr, cx - bw / 2, top, bw, bh, 4 * scale);
+    cairo_stroke(cr);
+    const double r = 10 * scale;  // the shackle
+    cairo_move_to(cr, cx - r, top);
+    cairo_line_to(cr, cx - r, top - 8 * scale);
+    cairo_arc(cr, cx, top - 8 * scale, r, M_PI, 2 * M_PI);
+    cairo_line_to(cr, cx + r, top);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 void contentsIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_save(cr);
     iconPen(cr, g);

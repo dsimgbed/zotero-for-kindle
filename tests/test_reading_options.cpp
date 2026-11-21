@@ -206,10 +206,10 @@ TEST_CASE("reader: in landscape the Two columns button switches columns, and the
     rig.openDisplay();
     rig.reader->onGesture(test::tapAt(ReaderMenus::orientationRect(2).center()), rig.nav);  // Two columns
     REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 2; }));
-    CHECK(loadSettings(rig.lib).twoColumns == 1);
+    CHECK(loadSettings(rig.lib, rig.nav.device()).twoColumns == 1);
     rig.reader->onGesture(test::tapAt(ReaderMenus::orientationRect(2).center()), rig.nav);  // off again
     REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 1; }));
-    CHECK(loadSettings(rig.lib).twoColumns == 0);
+    CHECK(loadSettings(rig.lib, rig.nav.device()).twoColumns == 0);
 }
 
 TEST_CASE("reader: a PDF never gets columns; its Display panel trims page margins instead") {

@@ -81,9 +81,16 @@ void Updater::download() {
         UserError err;
         std::string zip;
         DownloadHooks hooks = config_.hooks;
+        // Backed up while installing: at least the open account's library (and one from before
+        // accounts); the others too if there is room then (installRelease).
+        std::vector<std::string> backedUp{config_.paths.dbPath};
+        if (config_.paths.libraries)
+            if (const auto libraries = config_.paths.libraries(); !libraries.empty()) backedUp.push_back(libraries.front().dbPath);
         std::error_code sizeError;
-        for (const std::string& f : {config_.paths.dbPath, config_.paths.dbPath + "-wal"})  // backed up while installing
-            if (auto n = std::filesystem::file_size(f, sizeError); !sizeError) hooks.extraBytes += static_cast<int64_t>(n);
+        for (const std::string& db : backedUp)
+            for (const std::string& f : {db, db + "-wal"})
+                if (auto n = std::filesystem::file_size(f, sizeError); !db.empty() && !sizeError)
+                    hooks.extraBytes += static_cast<int64_t>(n);
         bool ok = downloadRelease(
             *http, release, config_.publicKey, work,
             [this](int64_t done, int64_t total) {

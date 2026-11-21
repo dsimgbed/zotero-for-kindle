@@ -196,9 +196,9 @@ TEST_CASE("home: showing Home asks for a sync when the last one is old") {
 
 TEST_CASE("home: with Sync every Off, showing Home never syncs by itself") {
     Rig rig;
-    AppSettings off = loadSettings(rig.lib);
+    AppSettings off = loadSettings(rig.lib, rig.nav.device());
     off.syncIntervalMinutes = 0;
-    saveSettings(rig.lib, off);
+    saveSettings(rig.lib, rig.nav.device(), off);
     const int before = rig.nav.syncFake.syncs;
     rig.nav.now += 3 * 60'000;
     rig.home.onShow(rig.nav);

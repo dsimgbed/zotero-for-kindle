@@ -13,6 +13,10 @@ namespace zk {
 
 class EpubDom;
 
+// crengine's document cache (one per process, the open account's cache/cre) closed: nothing is
+// written to it until an engine names a cache again (the account session's stop).
+void closeDocCache();
+
 class EpubEngine final : public DocumentEngine {
 public:
     explicit EpubEngine(const EngineEnv&);
@@ -37,7 +41,7 @@ public:
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
-    bool fullText(std::string& out, UserError*) override;
+    bool fullText(std::string& out, UserError*, const std::atomic<bool>* cancel = nullptr) override;
 
 private:
     void applyLayout();

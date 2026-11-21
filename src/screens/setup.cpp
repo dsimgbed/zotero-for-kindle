@@ -25,7 +25,7 @@ const char* kLabels[SetupScreen::kFields] = {"Zotero user ID", "API key", "WebDA
 
 }  // namespace
 
-UserError checkAccount(Http& http, const Config& c) {
+UserError checkAccount(Http& http, const Config& c, std::string* name) {
     if (c.userId <= 0 || c.apiKey.empty())
         return {ErrorKind::Other, "Enter your Zotero user ID and API key (zotero.org/settings/keys).", "missing fields"};
     ZoteroApi api(http, c.userId, c.apiKey);
@@ -33,6 +33,7 @@ UserError checkAccount(Http& http, const Config& c) {
     UserError err;
     auto key = api.keyInfo(&err);
     if (!key) return err;
+    if (name) *name = key->username.empty() ? key->displayName : key->username;
     if (!key->canRead) return {ErrorKind::ApiKeyRejected, "This API key can't read your library.", "access.user.library false"};
     if (key->userId != c.userId)
         return {ErrorKind::ApiKeyRejected,
@@ -45,6 +46,17 @@ UserError checkAccount(Http& http, const Config& c) {
                 "This API key can't download files. Allow file access for it at zotero.org/settings/keys, or set up WebDAV.",
                 "access.user.files false"};
     }
+    return {};
+}
+
+UserError checkKeyOwner(Http& http, const Config& c) {
+    ZoteroApi api(http, c.userId, c.apiKey);
+    api.setSleeper([](int) {});
+    UserError err;
+    auto key = api.keyInfo(&err);
+    if (!key) return err;
+    if (key->userId != c.userId)
+        return {ErrorKind::ApiKeyRejected, "This API key belongs to another Zotero user.", "userID mismatch"};
     return {};
 }
 
@@ -88,9 +100,21 @@ void SetupScreen::connect(Nav& nav) {
     if (checking_) return;
     nav.keyboard().hide();
     focus_ = -1;
-    checking_ = true;
     error_.reset();
     const Config c = config();
+    // Who the key is for is known before the network: a user already here, another user's key.
+    if (purpose_.kind == SetupPurpose::Kind::Add && purpose_.present && c.userId > 0)
+        if (const std::string name = purpose_.present(c.userId); !name.empty()) {
+            error_ = UserError{ErrorKind::Other, name + " is already on this Kindle", "user already present"};
+            nav.redrawAll(Waveform::Quality);
+            return;
+        }
+    if (purpose_.kind == SetupPurpose::Kind::Update && c.userId != purpose_.userId) {
+        error_ = UserError{ErrorKind::Other, "This key is for another account — use Add account", "another user"};
+        nav.redrawAll(Waveform::Quality);
+        return;
+    }
+    checking_ = true;
     auto check = std::make_shared<Check>();
     pending_ = check;
     std::thread([check, checker = checker_, c] {
@@ -116,12 +140,14 @@ void SetupScreen::onTick(Nav& nav) {
     checking_ = false;
     pending_.reset();
     if (verdict.kind != ErrorKind::None) {
+        if (purpose_.kind == SetupPurpose::Kind::Update && verdict.details == "userID mismatch")
+            verdict.message = "This key is for another account — use Add account";
         error_ = verdict;
         nav.redrawAll(Waveform::Quality);
         return;
     }
     const Config c = config();
-    if (!saveConfig(configDir_, c)) {
+    if (purpose_.kind == SetupPurpose::Kind::First && purpose_.keepsConfigFile && !saveConfig(configDir_, c)) {
         error_ = UserError{ErrorKind::DiskFull, "Can't save the settings on the Kindle.", configDir_};
         nav.redrawAll(Waveform::Quality);
         return;
@@ -132,9 +158,14 @@ void SetupScreen::onTick(Nav& nav) {
 void SetupScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    drawHeader(cr, "Set up Zotero", canGoBack_);
-    const std::string intro = imported_ ? "Settings loaded from config.json. Connect to check them."
-                                        : "Create an API key at zotero.org/settings/keys with access to your library.";
+    using Kind = SetupPurpose::Kind;
+    drawHeader(cr, purpose_.kind == Kind::Add ? "Add an account" : purpose_.kind == Kind::Update ? "Update key" : "Set up Zotero",
+               canGoBack_);
+    std::string intro = imported_ ? "Settings loaded from config.json. Connect to check them."
+                                  : "Create an API key at zotero.org/settings/keys with access to your library.";
+    if (purpose_.kind == Kind::Add) intro = "Another Zotero user's ID and API key (zotero.org/settings/keys). Up to three accounts fit on this Kindle.";
+    if (purpose_.kind == Kind::Update)
+        intro = "A new API key for " + purpose_.name + " (user ID " + std::to_string(purpose_.userId) + "), or new WebDAV details.";
     drawText(cr, intro, {kSans, 8, 400, false, kSecondary}, {kMargin, kHeaderH + 10, W() - 2 * kMargin, 120}, 3);
     for (int i = 0; i < kFields; ++i) {
         const Rect f = fieldRect(i);

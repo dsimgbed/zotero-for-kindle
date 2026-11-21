@@ -309,7 +309,9 @@ struct PluginHost::Impl {
     PluginState state;
     std::shared_ptr<Inbox> inbox = std::make_shared<Inbox>();
     pthread_t thread{};
-    bool started = false, joined = false;
+    std::atomic<bool> threadRunning{false};  // made by start() and not yet joined by stop()
+    // The account served (start(PluginAccount)): written before the thread is made, read on it.
+    PluginAccount account;
     std::atomic<bool> stopping{false};
     std::atomic<uint64_t> version{0};  // entriesVersion()
 
@@ -344,9 +346,12 @@ struct PluginHost::Impl {
     std::unique_ptr<plugins::PluginNet> net;
     // zk.library's connection and identifier index, made at the first library call (bindings_library.cpp).
     std::shared_ptr<void> library;
+    // zk.library.fullText's worker, made at the first call; stop() joins it (bindings_library.cpp).
+    std::shared_ptr<void> fullText;
 
     explicit Impl(PluginHostDeps d) : deps(std::move(d)), state(deps.pluginsDir + "/.state.json") {
-        webdavHost = deps.webdavHost;
+        account = deps.account;
+        webdavHost = account.webdavHost;
         if (!deps.clock) deps.clock = systemMs;
         pool.limit = deps.memoryTotal;
         folders = scanPlugins(deps.pluginsDir, deps.appVersion);
@@ -578,7 +583,7 @@ struct PluginHost::Impl {
         // plugin's load failing, not a crash on the plugin thread.
         std::unique_ptr<PluginCtx> owned;
         try {
-            owned = std::make_unique<PluginCtx>(*this, *f.manifest, dir.string(), deps.memoryPerPlugin);
+            owned = std::make_unique<PluginCtx>(*this, *f.manifest, dir.string(), storageDir(id), deps.memoryPerPlugin);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't load this plugin: ") + e.what());
             failedLoad.insert(id);
@@ -637,10 +642,17 @@ struct PluginHost::Impl {
         for (const auto& f : foldersCopy()) known = known || f.dir == id;
         if (!known) return;
         auto it = loaded.find(id);
-        resetPluginData((fs::path(deps.pluginsDir) / id).string(), it == loaded.end() ? nullptr : it->second.get());
+        resetPluginData(storageDir(id), it == loaded.end() ? nullptr : it->second.get());
     }
 
-    void unload(const std::string& id) {
+    // The plugin's zk.storage and zk.files folder in the account served (no storage root: its
+    // own folder, as before accounts).
+    std::string storageDir(const std::string& id) const {
+        return (fs::path(account.storageRoot.empty() ? deps.pluginsDir : account.storageRoot) / id).string();
+    }
+
+    // `id` by value: callers pass the loaded map's own key, which erasing it below frees.
+    void unload(const std::string id) {
         auto it = loaded.find(id);
         if (it == loaded.end()) return;
         for (auto& [wid, w] : it->second->run->work) w.cancel->store(true);
@@ -1695,8 +1707,9 @@ struct PluginHost::Impl {
 
 namespace plugins {
 
-PluginCtx::PluginCtx(PluginHost::Impl& h, PluginManifest m, std::string d, size_t memoryLimit)
-    : host(h), manifest(std::move(m)), dir(std::move(d)), dataDir(dir + "/data"), rt(memoryLimit, &h.pool), cx(rt),
+PluginCtx::PluginCtx(PluginHost::Impl& h, PluginManifest m, std::string d, std::string sd, size_t memoryLimit)
+    : host(h), manifest(std::move(m)), dir(std::move(d)), storageDir(std::move(sd)), dataDir(storageDir + "/data"),
+      rt(memoryLimit, &h.pool), cx(rt),
       run(std::make_unique<PluginRun>()) {}
 
 PluginCtx::~PluginCtx() {
@@ -1717,9 +1730,18 @@ PluginNet* netOf(PluginCtx& p) {
 
 const PluginHostDeps& depsOf(PluginCtx& p) { return p.host.deps; }
 
+const PluginAccount& accountOf(PluginCtx& p) { return p.host.account; }
+
+std::string webdavHostOf(PluginCtx& p) {
+    std::lock_guard<std::mutex> lock(p.host.mu);
+    return p.host.webdavHost;
+}
+
 PluginState& pluginStateOf(PluginCtx& p) { return p.host.state; }
 
 std::shared_ptr<void>& librarySlot(PluginCtx& p) { return p.host.library; }
+
+std::shared_ptr<void>& fullTextSlot(PluginCtx& p) { return p.host.fullText; }
 
 CallInfo currentCall(PluginCtx& p) {
     auto it = p.run->calls.find(p.run->current);
@@ -1984,19 +2006,42 @@ void* threadMain(void* impl) {
 }  // namespace
 
 void PluginHost::start() {
-    if (impl_->started) return;
+    Impl& h = *impl_;
+    if (h.threadRunning) return;
+    {  // open again after a stop (what was asked meanwhile was dropped)
+        std::lock_guard<std::mutex> lock(h.inbox->mu);
+        h.inbox->stopping = false;
+        h.inbox->closed = false;
+    }
+    h.stopping = false;
+    // What the run before left: nothing is loaded now, so nothing of it applies.
+    h.failedLoad.clear();
+    h.turnOffs.clear();
+    h.restarts.clear();
+    h.backgroundOpen = false;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     // The engine's stack limit is 512 KB; secondary threads may default to less than that.
     pthread_attr_setstacksize(&attr, 4u << 20);
-    impl_->started = pthread_create(&impl_->thread, &attr, threadMain, impl_.get()) == 0;
+    h.threadRunning = pthread_create(&h.thread, &attr, threadMain, &h) == 0;
     pthread_attr_destroy(&attr);
-    if (impl_->started && impl_->deps.loadEagerly) impl_->post([](Impl& h) { h.reload(nullptr); });
+    if (h.threadRunning && h.deps.loadEagerly) h.post([](Impl& h) { h.reload(nullptr); });
+}
+
+void PluginHost::start(const PluginAccount& account) {
+    stop();
+    Impl& h = *impl_;
+    h.account = account;
+    {
+        std::lock_guard<std::mutex> lock(h.mu);
+        h.webdavHost = account.webdavHost;
+    }
+    start();
 }
 
 void PluginHost::stop() {
     Impl& h = *impl_;
-    if (!h.started || h.joined) return;
+    if (!h.threadRunning) return;
     {
         std::lock_guard<std::mutex> lock(h.inbox->mu);
         h.inbox->stopping = true;
@@ -2008,8 +2053,20 @@ void PluginHost::stop() {
         if (h.running) h.running->interruptNow();
     }
     pthread_join(h.thread, nullptr);
-    h.joined = true;
+    // The plugin thread is gone: what it made is dropped here, so nothing of the account served is
+    // left running or open (the next start() makes them afresh).
     if (h.net) h.net->shutdown();  // aborts fetches still running; their promises are gone with the thread
+    h.net.reset();
+    h.fullText.reset();  // joins the full-text worker
+    h.library.reset();   // closes the library connection
+    {
+        // What was queued for the screen thread belongs to the account served (a background
+        // round's report, a screen's tree): nothing of it reaches the next one. The app abandons
+        // the round's keep-awake hold itself (BackgroundRound::abandon).
+        std::lock_guard<std::mutex> lock(h.mu);
+        h.events.clear();
+    }
+    h.threadRunning = false;
 }
 
 void PluginHost::reload() {
@@ -2176,7 +2233,7 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
     if (on) impl_->state.clearFailures(id);
     // Developer mode (loadEagerly): a plugin turned on loads at once, as at start. Otherwise
     // (the Kindle) it waits for its first event. Before start(), start() loads it.
-    const bool loadNow = on && impl_->started && impl_->deps.loadEagerly;
+    const bool loadNow = on && impl_->threadRunning && impl_->deps.loadEagerly;
     impl_->post([id, on, loadNow](Impl& h) {
         h.failedLoad.erase(id);
         h.setProblem(id, "");
@@ -2192,6 +2249,15 @@ void PluginHost::forget(const std::string& id) { forgetPlugin(id, false); }
 void PluginHost::forgetState(const std::string& id) {
     impl_->state.forget(id);
     ++impl_->version;
+}
+
+void removePluginData(const std::vector<std::string>& roots, const std::string& id) {
+    if (id.empty() || id[0] == '.' || id.find('/') != std::string::npos || id.find('\\') != std::string::npos) return;
+    for (const auto& root : roots) {
+        if (root.empty()) continue;
+        std::error_code ec;
+        fs::remove_all(fs::path(root) / id, ec);
+    }
 }
 
 void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
@@ -2213,7 +2279,11 @@ void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
         h.unload(id);
         h.logs.erase(id);
         std::error_code ec;
-        if (deleteFolder) fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
+        if (deleteFolder) {
+            fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
+            fs::remove_all(h.storageDir(id), ec);  // its data in the account served
+            if (h.deps.pluginDataRoots) removePluginData(h.deps.pluginDataRoots(), id);  // and in every account
+        }
         h.state.forget(id);  // what a call ending meanwhile recorded
     });
 }
@@ -2225,7 +2295,7 @@ bool PluginHost::hold(const std::string& id, int timeoutMs) {
         h.held.insert(id);
     }
     ++h.version;
-    if (!h.started || h.joined) return true;  // no plugin thread: nothing runs
+    if (!h.threadRunning) return true;  // no plugin thread: nothing runs
     auto done = std::make_shared<std::promise<void>>();
     auto stopped = done->get_future();
     h.post([id, done](Impl& h) {
@@ -2246,7 +2316,7 @@ void PluginHost::release(const std::string& id) {
         h.held.erase(id);
     }
     ++h.version;
-    if (h.started && !h.joined) {
+    if (h.threadRunning) {
         h.post([id](Impl& h) { h.reload(&id); });
         return;
     }

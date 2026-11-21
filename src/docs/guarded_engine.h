@@ -60,9 +60,9 @@ public:
     }
     size_t cacheLimitBytes() override { return guard([&] { return e_->cacheLimitBytes(); }, size_t{0}); }
     void trimCaches() override { guard([&] { e_->trimCaches(); }); }
-    bool fullText(std::string& out, UserError* err) override {
+    bool fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel = nullptr) override {
         try {
-            return e_->fullText(out, err);
+            return e_->fullText(out, err, cancel);
         } catch (...) {
             out.clear();
             if (err) *err = UserError{ErrorKind::Other, "The app failed reading this file's text.", "exception in fullText"};

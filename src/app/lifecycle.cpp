@@ -27,12 +27,17 @@ bool Lifecycle::watch() {
 void Lifecycle::applyInterval() { sync_.setIntervalMinutes(background_ || reading_ ? 0 : interval_()); }
 
 void Lifecycle::onBackground() {
+    if (lock_) {
+        if (suspendedMs_) suspendedAtBackground_ = suspendedMs_();
+        if (asleep_ && asleep_()) lock_();
+    }
     background_ = true;
     applyInterval();
     if (onBackgroundExtra_) onBackgroundExtra_();
 }
 
 void Lifecycle::onForeground(int64_t nowMs) {
+    if (lock_ && background_ && suspendedMs_ && suspendedMs_() > suspendedAtBackground_ + 1000) lock_();  // slept unseen
     if (onForegroundExtra_) onForegroundExtra_();
     background_ = false;
     applyInterval();

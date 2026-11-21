@@ -33,6 +33,8 @@ void puzzleIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 // A badge dot for puzzleIcon at the same centre: ink, with a white halo cutting the outline.
 void puzzleBadge(cairo_t* cr, double cx, double cy);
 void closeIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+// A padlock, closed (an account with a PIN, locked), in the same family at `scale` of its size.
+void lockIcon(cairo_t* cr, double cx, double cy, uint8_t g, double scale = 1.0);
 // The reader panel's: a bulleted list (Contents), a page with a folded corner and two lines
 // (Notes), "Aa" (Display), a sun (Light), a frame's four corners (Mark area), and a square sticky
 // note with its bottom-right corner folded (Add note).

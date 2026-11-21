@@ -4,12 +4,15 @@
 
 #include <fcntl.h>
 #include <miniz.h>
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 
 namespace zk {
@@ -20,6 +23,38 @@ namespace {
 
 const char* const kSwapped[] = {"bin", "lib", "share"};
 const char* const kDownloadFiles[] = {"zotero-for-kindle.zip", "zotero-for-kindle.zip.part"};
+
+std::optional<nlohmann::json> readJson(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    auto j = nlohmann::json::parse(ss.str(), nullptr, false);
+    if (j.is_discarded()) return std::nullopt;
+    return j;
+}
+
+int64_t userIdIn(const nlohmann::json& j) {
+    if (!j.is_object() || !j.contains("userId")) return 0;
+    const auto& v = j["userId"];
+    if (v.is_number_integer()) return v.get<int64_t>();
+    if (v.is_string()) return std::strtoll(v.get<std::string>().c_str(), nullptr, 10);
+    return 0;
+}
+
+// config.json is worth a backup only as an account's key: before the account layout (no
+// accounts.json), or naming an account the list has. A removed account's key is never kept.
+bool configOfListedAccount(const InstallPaths& p) {
+    std::error_code ec;
+    if (p.accountsFile.empty() || !fs::exists(p.accountsFile, ec)) return true;
+    const auto config = readJson(p.configFile);
+    const auto list = readJson(p.accountsFile);
+    const int64_t user = config ? userIdIn(*config) : 0;
+    if (user <= 0 || !list || !list->is_object() || !list->contains("accounts") || !(*list)["accounts"].is_array()) return false;
+    for (const auto& a : (*list)["accounts"])
+        if (userIdIn(a) == user) return true;
+    return false;
+}
 
 // installRelease and a deferred confirmation (UpdateConfirm, on the UI thread) both change update/:
 // never at once. The UI thread only tries it: an install under way confirms the running version itself.
@@ -91,6 +126,35 @@ bool backupDatabase(const std::string& from, const std::string& to, const std::f
     sqlite3_close(src);
     sqlite3_close(dst);
     return ok;
+}
+
+int64_t librarySize(const std::string& dbPath) {
+    int64_t n = 0;
+    std::error_code ec;
+    for (const char* f : {"", "-wal"})
+        if (const auto size = fs::file_size(dbPath + f, ec); !ec) n += static_cast<int64_t>(size);
+    return n;
+}
+
+// Every account's library that is there (the open one first), or — short of space for them all
+// beside the backup — the open one only.
+std::vector<AccountLibrary> librariesToBackUp(const InstallPaths& p, const fs::path& old, const InstallHooks& hooks) {
+    std::vector<AccountLibrary> all;
+    std::error_code ec;
+    if (p.libraries)
+        for (AccountLibrary& a : p.libraries())
+            if (a.userId > 0 && fs::exists(a.dbPath, ec)) all.push_back(std::move(a));
+    if (all.size() < 2) return all;
+    int64_t needed = 0;
+    for (const AccountLibrary& a : all) needed += librarySize(a.dbPath);
+    int64_t free = INT64_MAX;
+    if (hooks.freeSpace) free = hooks.freeSpace(old.string());
+    else if (const auto space = fs::space(old, ec); !ec) free = static_cast<int64_t>(space.available);
+    if (needed <= free) return all;
+    log(LogLevel::Warn, "update: %lld bytes free, every library needs %lld: only the open account's (%lld) is backed up",
+        static_cast<long long>(free), static_cast<long long>(needed), static_cast<long long>(all.front().userId));
+    all.resize(1);
+    return all;
 }
 
 bool parseState(const std::string& line, std::string* word, Version* from, Version* to) {
@@ -172,6 +236,7 @@ bool confirmRunning(const InstallPaths& p, Version running) {
     ::sync();
     for (const char* leftover : {"state.tmp", "old", "trash"}) fs::remove_all(update / leftover, ec);
     if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
+    if (!p.accountsFile.empty()) fs::remove(p.accountsFile + ".old", ec);
     log(LogLevel::Info, "update: %s confirmed", to.str().c_str());
     return true;
 }
@@ -204,10 +269,12 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
         return false;
     }
     const std::string configBackup = p.configFile + ".old";
+    const std::string accountsBackup = p.accountsFile + ".old";
     auto failBeforeSwap = [&](const std::string& details) {
         std::error_code ignored;
         fs::remove_all(old, ignored);
         if (!p.configFile.empty()) fs::remove(configBackup, ignored);
+        if (!p.accountsFile.empty()) fs::remove(accountsBackup, ignored);
         dropDownload();
         log(LogLevel::Warn, "update: install of %s failed before the swap: %s", to.str().c_str(), details.c_str());
         if (err) *err = {ErrorKind::Other, "Couldn't install the update. Nothing was changed.", details};
@@ -227,15 +294,27 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     }
     if (fs::exists(p.launcherPath)) fs::copy_file(p.launcherPath, old / "Zotero.sh", ec);
     if (ec) return failBeforeSwap("backup of the launcher: " + ec.message());
-    // The account's backup stays beside it, off the USB drive, private.
-    if (!p.configFile.empty() && fs::exists(p.configFile)) {
-        fs::copy_file(p.configFile, configBackup, fs::copy_options::overwrite_existing, ec);
-        if (!ec) fs::permissions(configBackup, fs::perms::owner_read | fs::perms::owner_write, ec);
+    // The account list's backup and an old config.json's stay beside them, off the USB drive, private.
+    // A config.json naming no listed account (a removed one's) is nobody's key: not kept anywhere.
+    for (const auto& [file, backup] : {std::pair{p.configFile, configBackup}, std::pair{p.accountsFile, accountsBackup}}) {
+        if (file.empty() || !fs::exists(file)) continue;
+        if (file == p.configFile && !configOfListedAccount(p)) {
+            log(LogLevel::Warn, "update: %s names no account on the Kindle; not backed up", file.c_str());
+            continue;
+        }
+        fs::copy_file(file, backup, fs::copy_options::overwrite_existing, ec);
+        if (!ec) fs::permissions(backup, fs::perms::owner_read | fs::perms::owner_write, ec);
+        if (ec) return failBeforeSwap("backup of " + file + ": " + ec.message());
     }
-    if (ec) return failBeforeSwap("backup of the account: " + ec.message());
     std::string dbError;
-    if (fs::exists(p.dbPath) && !backupDatabase(p.dbPath, (old / "zotero.db").string(), beat, &dbError))
+    if (!p.dbPath.empty() && fs::exists(p.dbPath) && !backupDatabase(p.dbPath, (old / "zotero.db").string(), beat, &dbError))
         return failBeforeSwap(dbError);
+    for (const AccountLibrary& a : librariesToBackUp(p, old, hooks)) {
+        fs::create_directories(old / "accounts" / std::to_string(a.userId), ec);
+        if (ec || !backupDatabase(a.dbPath, (old / "accounts" / std::to_string(a.userId) / "zotero.db").string(), beat, &dbError))
+            return failBeforeSwap(ec ? "can't create the backup of account " + std::to_string(a.userId) + ": " + ec.message()
+                                     : dbError);
+    }
 
     // 2. From here on an interrupted install is undone by the launcher: the backup must be on disk first.
     hooks.flush();
@@ -316,6 +395,7 @@ Confirmed startupState(const InstallPaths& p, Version running, bool commit) {
         for (const char* leftover : {"state.tmp", "old", "new", "trash", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
             fs::remove_all(update / leftover, ec);
         if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
+        if (!p.accountsFile.empty()) fs::remove(p.accountsFile + ".old", ec);
     };
     Version from, to;
     if (!fs::exists(update / "state", ec)) {  // a download never installed, or a clean-up cut short

@@ -72,7 +72,7 @@ public:
         if (off_) ldomDocCache::close();
     }
     ~DocCacheOff() {
-        if (off_) ldomDocCache::init(Utf8ToUnicode(lString8(docCacheDir().c_str())), kDocCacheBytes);
+        if (off_ && !docCacheDir().empty()) ldomDocCache::init(Utf8ToUnicode(lString8(docCacheDir().c_str())), kDocCacheBytes);
     }
     DocCacheOff(const DocCacheOff&) = delete;
     DocCacheOff& operator=(const DocCacheOff&) = delete;
@@ -91,11 +91,16 @@ void initCrengine(const EngineEnv& env) {
         HyphMan::activateDictionary(U"English_US.pattern");  // books without a language
         TextLangMan::setHyphenationEnabled(true);
         TextLangMan::setEmbeddedLangsEnabled(true);
-        if (!env.cacheDir.empty()) {
-            ::mkdir(env.cacheDir.c_str(), 0755);
-            if (ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), kDocCacheBytes)) docCacheDir() = env.cacheDir;
-        }
     });
+    // The cache is the account's (AccountPaths::creDir): an engine for another account's session
+    // moves it there (that account's readers are all closed by then). An env without one (the
+    // plugins' full text, which reads with the cache off) leaves it where it is.
+    if (!env.cacheDir.empty() && env.cacheDir != docCacheDir()) {
+        if (ldomDocCache::enabled()) ldomDocCache::close();
+        docCacheDir().clear();
+        ::mkdir(env.cacheDir.c_str(), 0755);
+        if (ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), kDocCacheBytes)) docCacheDir() = env.cacheDir;
+    }
     registerFonts(env.fontDirs);
 }
 
@@ -141,6 +146,12 @@ bool looksLikeHtml(const std::string& path) {
 }
 
 }  // namespace
+
+void closeDocCache() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    if (ldomDocCache::enabled()) ldomDocCache::close();
+    docCacheDir().clear();
+}
 
 EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
@@ -671,7 +682,7 @@ void appendParagraphs(const std::string& raw, std::string& out) {
 
 // The book's chapters (crengine's DocFragments) in order, paragraphs separated by a blank line.
 // The crengine lock is taken per chapter, so the reader's render worker can run in between.
-bool EpubEngine::fullText(std::string& out, UserError* err) {
+bool EpubEngine::fullText(std::string& out, UserError* err, const std::atomic<bool>* cancel) {
     out.clear();
     auto fail = [&] {
         out.clear();
@@ -717,6 +728,7 @@ bool EpubEngine::fullText(std::string& out, UserError* err) {
     }
     for (int i : fragments) {
         if (out.size() > kMaxFullTextBytes) break;
+        if (cancel && cancel->load()) return cancelledText(out, err);
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
         DocCacheOff cacheOff(textOnly_);
         if (!view_ || i >= (int)holder->getChildCount()) return fail();

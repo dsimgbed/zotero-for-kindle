@@ -1,5 +1,7 @@
 #include "app/previews.h"
 
+#include "app/device_settings.h"
+
 #include <unistd.h>
 
 #include <chrono>
@@ -43,13 +45,15 @@ std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry& e, const EngineE
         flashEvery, lipc);
 }
 
-PluginEvents::PreviewOpener previewOpener(PreviewCache& cache, std::function<PluginHost*()> host,
+PluginEvents::PreviewOpener previewOpener(std::function<PreviewCache*()> cache, std::function<PluginHost*()> host,
                                           std::function<std::unique_ptr<ReaderScreen>(const PreviewEntry&)> makeReader) {
-    return [&cache, host = std::move(host), makeReader = std::move(makeReader)](
+    return [cache = std::move(cache), host = std::move(host), makeReader = std::move(makeReader)](
                App& app, const PluginHostEvent& ev, std::function<void(const std::string&)> answer, std::function<void()> closed) {
+        PreviewCache* c = cache();
+        if (!c) return answer("The reader can't open this right now");  // no account open
         PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""), ev.value.value("baseUrl", "")};
         PreviewScreen::Deps d;
-        d.cache = &cache;
+        d.cache = c;
         PluginHost* h = host();
         d.download = [h, id = ev.pluginId](HttpRequest req) {
             if (!h) throw std::runtime_error("Plugins aren't running");
@@ -94,7 +98,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
     Library lib(db);
     PluginHostDeps d;
     d.pluginsDir = pluginsDir;
-    d.dbPath = dbPath;
+    d.account.dbPath = dbPath;  // no account: plugin data in the plugins' own folders
     d.engineEnv = env;
     d.appVersion = version;
     d.loadEagerly = true;
@@ -131,6 +135,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
         Library& lib;
         NullSync syncNull;
         NoKeyboard kb;
+        DeviceSettings dev{""};
         explicit ShotNav(Library& l) : lib(l) {}
         void push(std::unique_ptr<Screen>) override {}
         void pop() override {}
@@ -139,6 +144,7 @@ int pluginScreenshot(const std::string& pluginsDir, const std::string& dbPath, c
         void redrawAll(Waveform) override {}
         SyncControl& sync() override { return syncNull; }
         Library& library() override { return lib; }
+        DeviceSettings& device() override { return dev; }
         Keyboard& keyboard() override { return kb; }
         int64_t nowMs() const override { return 0; }
         void quit() override {}
@@ -170,7 +176,7 @@ int homeScreenshot(const std::string& pluginsDir, const std::string& dbPath, con
     Library lib(db);
     PluginHostDeps d;
     d.pluginsDir = pluginsDir;
-    d.dbPath = dbPath;
+    d.account.dbPath = dbPath;  // no account: plugin data in the plugins' own folders
     d.engineEnv = env;
     d.appVersion = version;
     d.loadEagerly = true;
