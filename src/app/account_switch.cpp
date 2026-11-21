@@ -93,9 +93,8 @@ void AccountSwitcher::tick() {
 }
 
 void AccountSwitcher::proceed() {
-    stopOld();      // 3.
-    writeActive();  // 4.
-    // 5. After the PIN, if the account has one.
+    stopOld();  // 3.
+    // 4. After the PIN, if the account has one.
     const AccountEntry e = entryFor(target_);
     if (!e.pin) return open();
     if (!deps_.unlock) return failed("it is locked and its PIN can't be asked here");
@@ -135,6 +134,7 @@ void AccountSwitcher::open() {
     if (!s) return failed(why);
     session_ = std::move(s);
     app_.setSession(session_.get());
+    writeActive();  // 5.: only an account that opened is the next start's
     phase_ = Phase::Idle;
     lastSwitchMs_ = app_.nowMs() - startedMs_;
     log(LogLevel::Info, "accounts: %lld open (%lld ms)", static_cast<long long>(target_), static_cast<long long>(lastSwitchMs_));
@@ -146,10 +146,19 @@ void AccountSwitcher::failed(const std::string& why) {
     log(LogLevel::Error, "accounts: %lld can't be opened: %s", static_cast<long long>(target_), why.c_str());
     std::vector<AccountErrorScreen::Choice> choices;
     choices.push_back({"Try again", [this, target = target_, w = why_](Nav&) { switchTo(target, w); }});
-    if (previous_ > 0 && previous_ != target_)
-        choices.push_back({"Switch to " + previousName_, [this, prev = previous_](Nav&) { switchTo(prev, Why::User); }});
-    else
-        choices.push_back({"Close Zotero", [](Nav& nav) { nav.quit(); }});
+    // Every other account on the Kindle: the user is never left with only the broken one.
+    std::vector<AccountEntry> others;
+    if (const auto st = readAccounts(deps_.paths.accountsFile()))
+        for (const auto& a : st->accounts)
+            if (a.userId != target_) others.push_back(a);
+    std::stable_sort(others.begin(), others.end(), [](const AccountEntry& a, const AccountEntry& b) { return a.order < b.order; });
+    for (const auto& a : others)
+        choices.push_back({"Switch to " + (a.name.empty() ? "account " + std::to_string(a.userId) : a.name),
+                           [this, id = a.userId](Nav&) { switchTo(id, Why::User); }});
+    if (others.empty()) {
+        if (setup_) choices.push_back({"Set up", [this](Nav&) { setup_(); }});
+        else choices.push_back({"Close Zotero", [](Nav& nav) { nav.quit(); }});
+    }
     app_.replaceRoot(0, std::make_unique<AccountErrorScreen>("Can't open the library",
                                                              "The library of " + targetName_ + " can't be opened: " + why,
                                                              std::move(choices)));

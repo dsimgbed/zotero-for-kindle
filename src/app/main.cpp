@@ -536,6 +536,7 @@ int main(int argc, char** argv) {
     }
     PluginEvents pluginEvents(plugins.get());
     pluginEvents.setRunning(!pluginsOff);  // safe mode: plugin screens show their error at once
+    pluginEvents.setRefusing([&switcher] { return switcher.busy(); });  // nothing over the Switching screen
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.
     bool pluginsRunning = true;
@@ -615,6 +616,7 @@ int main(int argc, char** argv) {
     app.setCatalog(&catalogService);
     catalogService.start();
     app.setPollHook([&] {
+        switcher.tick();  // a switch moves on whatever shows
         updateListening();
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
             startConfirmed = true;
@@ -797,6 +799,10 @@ int main(int argc, char** argv) {
     switcher.onLeave([&] {
         backgroundRound.abandon();  // a round of the account left ends unreported
         unbindSession();
+    });
+    switcher.onSetup([&] {  // the only account can't be opened: its key, or another account's, again
+        setTabRoots();
+        app.replaceRoot(0, makeSetup(config.value_or(Config{}), false, false));
     });
     switcher.onOpened([&](AccountSession& s) {
         config = s.config();

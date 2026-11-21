@@ -36,7 +36,7 @@ void SwitchingScreen::onShow(Nav&) {
 
 void SwitchingScreen::onTick(Nav& nav) {
     if (tick_) tick_(nav);
-    if (!view_) return;
+    if (!view_ || nav.top() != this) return;  // the switch is over: this screen is gone
     View now = view_();
     if (now == shown_) return;
     shown_ = std::move(now);

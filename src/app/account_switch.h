@@ -7,11 +7,14 @@
 //      ends it at once); what isn't sent stays queued in that account's library;
 //   3. the old session stops (downloads cancelled, plugin host, sync, workers, caches, library)
 //      and is destroyed;
-//   4. `active` is written to accounts.json;
-//   5. the new session is opened (after the PIN, if the account has one), its services start and
-//      its Home shows (main's onOpened).
-// A switch can't start while one runs. If the new session can't be opened, an error offers Try
-// again / Switch to <previous>; nothing of either account's files is touched. Screen thread only.
+//   4. the new session is opened (after the PIN, if the account has one);
+//   5. once it is open, `active` is written to accounts.json, its services start and its Home
+//      shows (main's onOpened).
+// `active` names only an account that opened, so a library that can't be opened is never the one
+// every later start tries first. A switch can't start while one runs; while it runs, plugins may
+// put nothing over the Switching screen (PluginEvents::setRefusing). If the new session can't be
+// opened, an error offers Try again, Switch to <name> for each other account on the Kindle, or —
+// with none — Set up (main's onSetup); nothing of any account's files is touched. Screen thread only.
 
 #include <cstdint>
 #include <functional>
@@ -57,6 +60,8 @@ public:
     // session bound, its services started and its screens set (Home last), at step 5.
     void onLeave(std::function<void()> f) { leave_ = std::move(f); }
     void onOpened(std::function<void(AccountSession&)> f) { opened_ = std::move(f); }
+    // The error's way out when no other account is on the Kindle: Setup. Unset: Close Zotero.
+    void onSetup(std::function<void()> f) { setup_ = std::move(f); }
 
     // Starts going to `userId`'s account; false (nothing done) while a switch runs. With no account
     // open (startup, after a failure) it is done before returning, unless a PIN is asked; else it
@@ -65,6 +70,9 @@ public:
     bool busy() const { return phase_ != Phase::Idle; }
     // Skip on the Switching screen: the push ends now; the switch goes on.
     void skip();
+    // Moves a running switch on: from every loop step (main's poll hook) and the Switching screen's
+    // tick, so nothing shown can hold it up. Nothing while no switch runs.
+    void tick();
 
     AccountSession* session() const { return session_.get(); }
     // At exit: the open session left and stopped as in steps 1 and 3 (no push, no screen change
@@ -77,10 +85,9 @@ public:
 private:
     enum class Phase { Idle, Leaving, Pushing, Unlocking };
 
-    void tick();       // from the Switching screen
     void proceed();    // steps 3–5
     void stopOld();    // step 3
-    void writeActive();  // step 4
+    void writeActive();  // once open
     void open();       // step 5, after the PIN
     void failed(const std::string& why);
     SwitchingScreen::View view() const;
@@ -91,6 +98,7 @@ private:
     SwitcherDeps deps_;
     std::function<void()> leave_;
     std::function<void(AccountSession&)> opened_;
+    std::function<void()> setup_;
     std::unique_ptr<AccountSession> session_;
     Phase phase_ = Phase::Idle;
     int64_t target_ = 0, previous_ = 0;

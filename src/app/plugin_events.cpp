@@ -110,7 +110,7 @@ void PluginEvents::stop(uint64_t run) {
 }
 
 void PluginEvents::openScreen(const std::string& pluginId, const std::string& screenId) {
-    if (app_) openScreen(*app_, pluginId, screenId);
+    if (app_ && !refusing()) openScreen(*app_, pluginId, screenId);
 }
 
 void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginId, const std::string& pluginName,
@@ -201,6 +201,11 @@ void PluginEvents::openPreview(App& app, const PluginHostEvent& ev) {
     auto answer = [this, id, bound](const std::string& error) {
         if (host_ && rebinds_ == bound) host_->answerReader(id, error);  // the host that asked
     };
+    if (refusing()) {
+        log(LogLevel::Info, "plugin %s: no preview while switching accounts", ev.pluginId.c_str());
+        answer(kRefusedWhileSwitching);
+        return;
+    }
     // Its screen went meanwhile (Back, another tab): nothing to open it over.
     if (!previewOpener_ || (instance != 0 && !screens_.count(instance))) {
         answer("The reader can't open this right now");
@@ -230,6 +235,11 @@ void PluginEvents::openItem(App& app, const PluginHostEvent& ev) {
     if (ev.value.contains("attachment") && ev.value["attachment"].is_string()) attachment = ev.value["attachment"].get<std::string>();
     std::optional<std::string> annotation;
     if (ev.value.contains("annotation") && ev.value["annotation"].is_string()) annotation = ev.value["annotation"].get<std::string>();
+    if (refusing()) {
+        log(LogLevel::Info, "plugin %s: no item opened while switching accounts", ev.pluginId.c_str());
+        answer(kRefusedWhileSwitching);
+        return;
+    }
     if (!itemOpener_ || ref.key.empty() || (instance != 0 && !screens_.count(instance))) {
         answer("The reader can't open this right now");
         return;
@@ -247,6 +257,11 @@ void PluginEvents::poll(App& app) {
                 std::vector<std::string> lines{ev.text};
                 lines.insert(lines.end(), ev.lines.begin(), ev.lines.end());
                 const uint64_t id = ev.requestId;
+                if (refusing()) {  // nothing over the Switching screen: the answer is no
+                    log(LogLevel::Info, "plugin %s asks while switching accounts: no", ev.pluginId.c_str());
+                    host_->answer(id, false);
+                    break;
+                }
                 open_.insert(id);
                 log(LogLevel::Info, "plugin %s asks: %s", ev.pluginId.c_str(), ev.text.c_str());
                 app.confirm(id, PluginConfirm(ev.pluginName, std::move(lines), ev.action), [this, id](bool yes) {
@@ -272,7 +287,10 @@ void PluginEvents::poll(App& app) {
             case PluginHostEvent::Kind::Log:
                 break;
             case PluginHostEvent::Kind::ScreenOpen:
-                if (ev.parent != 0 && !screens_.count(ev.parent)) host_->closeScreen(ev.instance);  // its parent went
+                if (refusing()) {  // nothing over the Switching screen
+                    log(LogLevel::Info, "plugin %s: screen refused while switching accounts", ev.pluginId.c_str());
+                    host_->closeScreen(ev.instance);
+                } else if (ev.parent != 0 && !screens_.count(ev.parent)) host_->closeScreen(ev.instance);  // its parent went
                 else pushScreen(app, ev.instance, ev.pluginId, ev.pluginName, ev.text);
                 break;
             case PluginHostEvent::Kind::ScreenClose:

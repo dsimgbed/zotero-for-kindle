@@ -19,6 +19,7 @@
 #include "app/accounts.h"
 #include "app/app.h"
 #include "app/device_settings.h"
+#include "app/plugin_events.h"
 #include "app/session.h"
 #include "fake_display.h"
 #include "fake_engine.h"
@@ -29,6 +30,7 @@
 #include "open_guard.h"
 #include "plugins/host.h"
 #include "screens/account_error.h"
+#include "screens/plugin_screen.h"
 #include "screens/reader.h"
 #include "screens/switching.h"
 #include "store/db.h"
@@ -129,6 +131,8 @@ struct Kindle {
     std::atomic<bool> online{false};
     FakePlugins fp;
     std::unique_ptr<PluginHost> host;
+    std::unique_ptr<PluginEvents> events;  // main's routing of what plugins ask of the screen
+    int itemOpens = 0, setups = 0;
     FakeDisplay display;
     Db emptyDb = Db::open(":memory:");
     Library emptyLib{emptyDb};
@@ -176,8 +180,18 @@ struct Kindle {
 zk.on("syncFinished", async () => { await zk.storage.set("k", "v"); });
 zk.screen("home", { title: "Home", render: async () => { const t = Date.now(); while (Date.now() - t < 250) {} return zk.ui.text("home"); } });
 )JS");
+        // A plugin whose item action, run late, puts things on screen: a screen and an item opened.
+        fp.add("q", R"JS(
+zk.itemAction({ id: "go", title: "Go", run: async () => {
+  zk.ui.open("s");
+  try { await zk.library.open({ key: "BOOK1101", library: 0 }); console.log("item opened"); }
+  catch (e) { console.log("item refused: " + e.message); }
+} });
+zk.screen("s", { title: "S", render: () => zk.ui.text("s") });
+)JS", {"library:read"});
         host = std::make_unique<PluginHost>(fp.deps());
         if (withHomePlugin) host->setEnabled("p", true);
+        host->setEnabled("q", true);
         guard = std::make_unique<OpenGuard>(paths.accountsRoot);
 
         SwitcherDeps d;
@@ -201,6 +215,20 @@ zk.screen("home", { title: "Home", render: async () => { const t = Date.now(); w
         app.setRoot(0, std::make_unique<SwitchingScreen>([] { return SwitchingScreen::View{"Zotero", "", false}; }, nullptr, nullptr));
         app.start();
         switcher = std::make_unique<AccountSwitcher>(app, d);
+        events = std::make_unique<PluginEvents>(host.get());
+        events->attach(app);
+        events->setRefusing([this] { return switcher->busy(); });
+        events->setItemOpener([this](App& a, const ItemRef&, std::optional<std::string>, std::optional<std::string>,
+                                     std::function<void(const std::string&)> answer) {
+            ++itemOpens;  // as main's would: a reader of the open library over what shows
+            a.push(std::make_unique<AccountHome>(0));
+            answer("");
+        });
+        app.setPollHook([this] {
+            events->poll(app);
+            switcher->tick();
+        });
+        switcher->onSetup([this] { ++setups; });
         switcher->onLeave([this] { ++leaves; });
         switcher->onOpened([this](AccountSession& s) {
             opened.push_back(s.userId());
@@ -210,7 +238,9 @@ zk.screen("home", { title: "Home", render: async () => { const t = Date.now(); w
         });
     }
     ~Kindle() {
+        app.setPollHook(nullptr);
         switcher.reset();
+        events.reset();
         host.reset();
         guard.reset();
         std::error_code ec;
@@ -444,6 +474,7 @@ TEST_CASE("switch: a target library that can't be opened shows why; its file is 
     CHECK(error->choices()[1].label == "Switch to Pavel");
     CHECK(slurp(b.dbPath) == bytes);
     CHECK(openFilesUnder(b.root).empty());
+    CHECK(readAccounts(k.paths.accountsFile())->active == 11);  // the next start opens Pavel, not the broken one
     // Try again: the same.
     const_cast<AccountErrorScreen*>(error)->onGesture(tapAt(AccountErrorScreen::choiceRect(0).center()), k.app);
     REQUIRE(k.settle());
@@ -551,4 +582,91 @@ TEST_CASE("switch: the app's loop delivers the open account's sync events to the
         k.app.step(0);
         return listener->finished > 0;
     }, 10000));
+}
+
+TEST_CASE("switch: while a switch runs, a plugin can put nothing over the Switching screen; the switch ends on time") {
+    Kindle k;
+    k.online = true;
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    k.pull();
+    k.twoUnsent();
+    k.online = true;
+    k.zotero.slowWrites = true;
+    const int writesBefore = k.zotero.writesSeen;
+    REQUIRE(k.switcher->switchTo(22, AccountSwitcher::Why::User));
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        return k.zotero.writesSeen > writesBefore;
+    }, 5000));  // the push hangs
+    // An action of A's plugin ends now: it opens a screen and an item.
+    k.host->runAction("q", "itemAction", "go", {{"key", "BOOK1101"}, {"title", "First book of 11"}});
+    bool covered = false;
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        covered = covered || !k.switching();
+        return k.fp.log("q").find("item refused: Switching accounts") != std::string::npos;
+    }, 5000));
+    k.steps(20, 5);  // the screen it opened would have come by now
+    for (int i = 0; i < 20; ++i) covered = covered || !k.switching();
+    CHECK_FALSE(covered);
+    CHECK(k.itemOpens == 0);
+    k.nowMs += 15'000;
+    const auto t0 = Clock::now();
+    REQUIRE(k.settle());
+    CHECK(Clock::now() - t0 < std::chrono::seconds(3));
+    CHECK(k.session()->userId() == 22);
+    CHECK(k.homeOf() == 22);
+    CHECK(k.unsentOnDisk(11) == 2);
+    CHECK(openFilesUnder(k.ap(11).root).empty());
+    // Once it is over, plugins may show things again.
+    k.host->runAction("q", "itemAction", "go", {{"key", "BOOK2201"}, {"title", "First book of 22"}});
+    CHECK(eventually([&] {
+        k.app.step(0);
+        return dynamic_cast<const PluginScreen*>(k.top()) != nullptr || k.itemOpens > 0;
+    }, 5000));
+}
+
+TEST_CASE("switch: at startup, an active library that can't be opened offers every other account; that one becomes active") {
+    Kindle k;
+    {
+        auto st = *readAccounts(k.paths.accountsFile());
+        st.active = 22;
+        REQUIRE(writeAccounts(k.paths.accountsFile(), st));
+    }
+    std::ofstream(k.ap(22).dbPath, std::ios::binary) << std::string(4096, 'x');  // not a database
+    REQUIRE(k.switcher->switchTo(22, AccountSwitcher::Why::Startup));
+    CHECK(k.session() == nullptr);
+    auto* error = dynamic_cast<const AccountErrorScreen*>(k.top());
+    REQUIRE(error);
+    REQUIRE(error->choices().size() == 2);
+    CHECK(error->choices()[0].label == "Try again");
+    CHECK(error->choices()[1].label == "Switch to Pavel");
+    const_cast<AccountErrorScreen*>(error)->onGesture(Gesture{GestureType::Tap, AccountErrorScreen::choiceRect(1).center(),
+                                                              AccountErrorScreen::choiceRect(1).center()},
+                                                      k.app);
+    REQUIRE(k.settle());
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 11);
+    CHECK(k.homeOf() == 11);
+    CHECK(readAccounts(k.paths.accountsFile())->active == 11);
+}
+
+TEST_CASE("switch: at startup, the only account's library can't be opened: Try again or Set up") {
+    Kindle k;
+    {
+        auto st = *readAccounts(k.paths.accountsFile());
+        st.accounts.pop_back();  // Pavel only
+        REQUIRE(writeAccounts(k.paths.accountsFile(), st));
+    }
+    std::ofstream(k.ap(11).dbPath, std::ios::binary) << std::string(4096, 'x');
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    CHECK(k.session() == nullptr);
+    auto* error = dynamic_cast<const AccountErrorScreen*>(k.top());
+    REQUIRE(error);
+    REQUIRE(error->choices().size() == 2);
+    CHECK(error->choices()[0].label == "Try again");
+    CHECK(error->choices()[1].label == "Set up");
+    const Rect r = AccountErrorScreen::choiceRect(1);
+    const_cast<AccountErrorScreen*>(error)->onGesture(Gesture{GestureType::Tap, r.center(), r.center()}, k.app);
+    CHECK(k.setups == 1);
 }
