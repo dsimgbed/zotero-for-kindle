@@ -492,6 +492,10 @@ int main(int argc, char** argv) {
     // The account screens' side (Settings → Accounts, Home's chip, the PIN pad and the lock), made
     // just below: an account with a PIN opens only once its PIN pad says so.
     std::unique_ptr<AccountsUi> accountsUi;
+    // Declared before the switcher, so destroyed after it: a session it stops at exit (or while
+    // unwinding) still finds the plugin host and the listening flag it was started with.
+    std::atomic<bool> pluginsListening{false};
+    std::unique_ptr<PluginHost> plugins;
     switcherDeps.unlock = [&accountsUi](int64_t userId, std::function<void(bool)> done) { accountsUi->unlock(userId, std::move(done)); };
     AccountSwitcher switcher(app, switcherDeps);
     // The open account's engines (its crengine cache), for the readers made from now on.
@@ -499,9 +503,9 @@ int main(int argc, char** argv) {
         const AccountSession* s = switcher.session();
         return s ? s->engineEnv(kEngineEnv) : kEngineEnv;
     };
-    // Some plugin is on and running: only then do the screens and the sync worker build events for
-    // plugins (kept by the poll hook; read on both threads). Outlives the sync service.
-    std::atomic<bool> pluginsListening{false};
+    // pluginsListening (declared above the switcher): some plugin is on and running — only then do
+    // the screens and the sync worker build events for plugins (kept by the poll hook; read on both
+    // threads). Outlives the sync service.
     SyncStatus status;
     OpenFlow flow(wallMs);
     // Updates (Plan 7): only when the user asks, from Settings. <appDir>/update-feed (one URL)
@@ -552,7 +556,7 @@ int main(int argc, char** argv) {
     if (pluginsOff)
         log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
     catalog::repairInterrupted(paths.pluginsDir);  // a swap the app was killed in: before the host scans
-    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, PluginAccount{}));  // bound to an account as it opens
+    plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, PluginAccount{}));  // bound to an account as it opens
     if (gPluginDevLoop) {  // say what is on, and why each other plugin won't run
         for (const auto& line : enablePluginsForDev(*plugins, gEnablePlugins)) std::fprintf(stderr, "%s\n", line.c_str());
         for (const auto& line : devLoopNotes(plugins->status(), appVersion())) std::fprintf(stderr, "%s\n", line.c_str());
@@ -853,7 +857,11 @@ int main(int argc, char** argv) {
                 app.toast("This key is for another account");
                 return;
             }
-            saveCredentials(paths, c);
+            if (!saveCredentials(paths, c)) {
+                app.toast("Can't save the key on the Kindle");
+                return;
+            }
+            forgetOldConfig(paths, c.userId);  // the key lives in its credentials only
             config = c;
             status.reset();
             flow.reset();
@@ -874,7 +882,11 @@ int main(int argc, char** argv) {
             app.toast("This key is for another account");
             return;
         }
-        saveCredentials(paths, c);
+        if (!saveCredentials(paths, c)) {
+            app.toast("Can't save the key on the Kindle");
+            return;
+        }
+        forgetOldConfig(paths, c.userId);
         config = c;
         switcher.switchTo(c.userId, AccountSwitcher::Why::Startup);  // Home, or why it can't be opened
     };
@@ -912,7 +924,13 @@ int main(int argc, char** argv) {
         auto connected = [&](const Config& c, Nav&) {
             app.defer([&, c] { useKey(c); });
         };
-        return std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected, canGoBack);
+        auto setup = std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected, canGoBack);
+        // config.json only on a fresh install (no account list yet: the migration takes it in);
+        // with a list, the key goes to the account's credentials only.
+        SetupPurpose purpose;
+        purpose.keepsConfigFile = firstSetupKeepsConfigFile(paths);
+        setup->setPurpose(std::move(purpose));
+        return setup;
     };
 
     if (!startError.empty()) {

@@ -36,7 +36,7 @@ bool AccountSwitcher::switchTo(int64_t userId, Why why) {
     if (busy() || userId <= 0) return false;
     if (session_ && session_->userId() == userId) return true;  // already open
     // From an open account, a locked one's PIN first: wrong or cancelled, nothing was left.
-    if (session_ && unlockedAhead_ != userId && entryFor(userId).pin) {
+    if (session_ && unlockedAhead_ != userId && asksBeforeOpening(entryFor(userId))) {
         if (!deps_.unlock) return false;
         phase_ = Phase::Asking;
         target_ = userId;
@@ -148,7 +148,7 @@ void AccountSwitcher::proceed() {
     const AccountEntry e = entryFor(target_);
     const bool askedAhead = unlockedAhead_ == target_;
     unlockedAhead_ = 0;
-    if (!e.pin || askedAhead) return open();
+    if (!asksBeforeOpening(e) || askedAhead) return open();
     if (!deps_.unlock) return failed("it is locked and its PIN can't be asked here");
     phase_ = Phase::Unlocking;
     deps_.unlock(target_, [this, target = target_](bool unlocked) {

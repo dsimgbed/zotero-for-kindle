@@ -97,8 +97,12 @@ different: *Settings → Accounts* shows it, with *Add account*.
 - **Update key** takes a new API key or WebDAV details for the same Zotero user. A key of another user is refused:
   that's *Add account*.
 - **Remove from this Kindle** deletes the account's library, downloads and plugin data from the Kindle — nothing in
-  Zotero itself. It shows what it deletes and offers to send unsent changes first. A locked account can be removed
-  without its PIN, after a warning.
+  Zotero itself. It shows what it deletes and how many changes haven't been sent to Zotero. For the open account
+  (with Wi-Fi) it offers *Send now* first; for another account, switch to it first to send them, or removing loses
+  them. A locked account can be removed without its PIN, after a warning.
+- If the account list on the Kindle (`accounts.json`) ever can't be read, the app keeps it aside
+  (`accounts.json.bad-<time>`) and lists the accounts again from their folders. A PIN they had can't be known then,
+  so each opens once with its API key, as with *Forgot PIN?*; set a PIN again afterwards.
 
 ## Plugins
 

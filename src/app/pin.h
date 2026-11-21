@@ -51,7 +51,8 @@ public:
     std::optional<AccountEntry> entry(int64_t userId) const;
     int64_t waitMs(int64_t userId) const;
     Result tryPin(int64_t userId, const std::string& pin);
-    // The forgotten-PIN proof: `key` is the account's API key (`stored`: its credentials).
+    // The forgotten-PIN proof: `key` is the account's API key (`stored`: its credentials). Right, it
+    // also clears needsKey (and so does keyProved). tryPin on a needsKey account is Failed.
     Result tryKey(int64_t userId, const Config& stored, const std::string& key);
     // A miss of another kind.
     void miss(int64_t userId);

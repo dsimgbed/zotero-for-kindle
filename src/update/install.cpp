@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <miniz.h>
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include <unistd.h>
 
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 
 namespace zk {
@@ -21,6 +23,38 @@ namespace {
 
 const char* const kSwapped[] = {"bin", "lib", "share"};
 const char* const kDownloadFiles[] = {"zotero-for-kindle.zip", "zotero-for-kindle.zip.part"};
+
+std::optional<nlohmann::json> readJson(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    auto j = nlohmann::json::parse(ss.str(), nullptr, false);
+    if (j.is_discarded()) return std::nullopt;
+    return j;
+}
+
+int64_t userIdIn(const nlohmann::json& j) {
+    if (!j.is_object() || !j.contains("userId")) return 0;
+    const auto& v = j["userId"];
+    if (v.is_number_integer()) return v.get<int64_t>();
+    if (v.is_string()) return std::strtoll(v.get<std::string>().c_str(), nullptr, 10);
+    return 0;
+}
+
+// config.json is worth a backup only as an account's key: before the account layout (no
+// accounts.json), or naming an account the list has. A removed account's key is never kept.
+bool configOfListedAccount(const InstallPaths& p) {
+    std::error_code ec;
+    if (p.accountsFile.empty() || !fs::exists(p.accountsFile, ec)) return true;
+    const auto config = readJson(p.configFile);
+    const auto list = readJson(p.accountsFile);
+    const int64_t user = config ? userIdIn(*config) : 0;
+    if (user <= 0 || !list || !list->is_object() || !list->contains("accounts") || !(*list)["accounts"].is_array()) return false;
+    for (const auto& a : (*list)["accounts"])
+        if (userIdIn(a) == user) return true;
+    return false;
+}
 
 // installRelease and a deferred confirmation (UpdateConfirm, on the UI thread) both change update/:
 // never at once. The UI thread only tries it: an install under way confirms the running version itself.
@@ -261,8 +295,13 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     if (fs::exists(p.launcherPath)) fs::copy_file(p.launcherPath, old / "Zotero.sh", ec);
     if (ec) return failBeforeSwap("backup of the launcher: " + ec.message());
     // The account list's backup and an old config.json's stay beside them, off the USB drive, private.
+    // A config.json naming no listed account (a removed one's) is nobody's key: not kept anywhere.
     for (const auto& [file, backup] : {std::pair{p.configFile, configBackup}, std::pair{p.accountsFile, accountsBackup}}) {
         if (file.empty() || !fs::exists(file)) continue;
+        if (file == p.configFile && !configOfListedAccount(p)) {
+            log(LogLevel::Warn, "update: %s names no account on the Kindle; not backed up", file.c_str());
+            continue;
+        }
         fs::copy_file(file, backup, fs::copy_options::overwrite_existing, ec);
         if (!ec) fs::permissions(backup, fs::perms::owner_read | fs::perms::owner_write, ec);
         if (ec) return failBeforeSwap("backup of " + file + ": " + ec.message());

@@ -44,7 +44,7 @@ std::string trimmed(const std::string& s) {
 }  // namespace
 
 PinPadScreen::PinPadScreen(Purpose purpose, PinPadDeps deps) : purpose_(purpose), deps_(std::move(deps)) {
-    stage_ = purpose_ == Purpose::Set ? Stage::Choose : Stage::Enter;
+    stage_ = purpose_ == Purpose::Set ? Stage::Choose : deps_.keyOnly ? Stage::Forgot : Stage::Enter;
 }
 
 Rect PinPadScreen::keyRect(const std::string& key) const {
@@ -67,7 +67,12 @@ Rect PinPadScreen::forgotRect() const {
 }
 
 Rect PinPadScreen::anotherRect() const {
-    if (purpose_ != Purpose::Unlock || stage_ != Stage::Enter || !deps_.others || !deps_.useAnother) return {};
+    if (purpose_ != Purpose::Unlock || !deps_.others || !deps_.useAnother) return {};
+    if (deps_.keyOnly && stage_ == Stage::Forgot) {
+        const Rect k = typeKeyRect();
+        return {kMargin, k.y + k.h + 30, W() - 2 * kMargin, kLinkH};
+    }
+    if (stage_ != Stage::Enter) return {};
     const Rect row = linkRow();
     return {row.x + row.w / 2, row.y, row.w - row.w / 2, row.h};
 }
@@ -83,7 +88,7 @@ std::string PinPadScreen::title() const {
     switch (stage_) {
         case Stage::Forgot:
         case Stage::TypeKey:
-        case Stage::Reset: return "Forgot PIN?";
+        case Stage::Reset: return deps_.keyOnly ? deps_.name : "Forgot PIN?";
         case Stage::Choose:
         case Stage::Confirm: return purpose_ == Purpose::Change ? "Change PIN" : "Set a PIN";
         case Stage::Enter: break;
@@ -101,6 +106,14 @@ std::string PinPadScreen::prompt() const {
         case Stage::Choose: return "Choose a PIN of 4 to 6 digits for " + deps_.name;
         case Stage::Confirm: return "Enter the same PIN again";
         case Stage::Forgot:
+            if (deps_.keyOnly)
+                return "The list of accounts on this Kindle had to be made again, so " + deps_.name +
+                       " opens only with its Zotero API key — only its owner has it:\n"
+                       "1. Connect the Kindle to a computer by USB.\n"
+                       "2. In the zotero folder, make a text file named reset-pin.txt with the API key in it "
+                       "(zotero.org/settings/keys).\n"
+                       "3. Eject the Kindle, then tap Check reset-pin.txt.\n"
+                       "Or type the key here.";
             return "To set a new PIN, show the app " + deps_.name +
                    "'s Zotero API key — only its owner has it:\n"
                    "1. Connect the Kindle to a computer by USB.\n"
@@ -155,8 +168,7 @@ void PinPadScreen::onTick(Nav& nav) {
         // try it was counted as is forgiven).
         if (deps_.keepKey) deps_.keepKey(c);
         deps_.pins->keyProved(deps_.userId);
-        keyAccepted();
-        return to(Stage::Reset, nav);
+        return keyAccepted(nav);
     }
     // Not this user's, or no answer: the wrong try counted already stands.
     message_ = kNotThisAccount;
@@ -188,7 +200,7 @@ void PinPadScreen::to(Stage s, Nav& nav) {
 void PinPadScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    const bool canGoBack = deps_.back || stage_ == Stage::Forgot || stage_ == Stage::TypeKey || stage_ == Stage::Reset;
+    const bool canGoBack = deps_.back || (stage_ == Stage::Forgot && !deps_.keyOnly) || stage_ == Stage::TypeKey || stage_ == Stage::Reset;
     drawHeader(cr, title(), canGoBack);
     const int w = W() - 2 * kMargin;
     const TextStyle body{kSans, 8, 400}, quiet{kSans, 7, 400, false, kSecondary}, error{kSans, 7.5, 700};
@@ -197,7 +209,12 @@ void PinPadScreen::draw(Canvas& canvas) {
         drawText(cr, prompt(), body, {kMargin, kHeaderH + 20, w, 660}, 16);
         drawButton(cr, checkFileRect(), "Check reset-pin.txt", true);
         drawButton(cr, typeKeyRect(), "Type the key", false);
-        if (!message_.empty()) drawText(cr, message_, error, {kMargin, typeKeyRect().y + 130, w, 100}, 2);
+        int msgY = typeKeyRect().y + 130;
+        if (const Rect a = anotherRect(); !a.empty()) {
+            centredText(cr, "Use another account", {kSans, 8, 500, false, kSecondary}, a, Align::Left);
+            msgY = a.y + a.h + 10;
+        }
+        if (!message_.empty()) drawText(cr, message_, error, {kMargin, msgY, w, 100}, 2);
     } else if (stage_ == Stage::TypeKey) {
         drawText(cr, prompt(), {kSans, 7, 500, false, kSecondary}, {kMargin, kHeaderH + 40, w, 60}, 1);
         const Rect f = keyFieldRect();
@@ -286,6 +303,11 @@ void PinPadScreen::onGesture(const Gesture& g, Nav& nav) {
     if (headerBackRect().contains(g.pos)) {
         switch (stage_) {
             case Stage::Forgot:
+                if (deps_.keyOnly) {
+                    if (deps_.back) deps_.back(nav);
+                    return;
+                }
+                return to(Stage::Enter, nav);
             case Stage::Reset: return to(Stage::Enter, nav);
             case Stage::TypeKey: return to(Stage::Forgot, nav);
             default:
@@ -293,9 +315,17 @@ void PinPadScreen::onGesture(const Gesture& g, Nav& nav) {
                 return;
         }
     }
+    auto chooseAnother = [&] {
+        auto others = deps_.others();
+        if (others.empty()) return;
+        if (others.size() == 1 && !others.front().locked) return deps_.useAnother(others.front().userId, nav);
+        chooser_.emplace(std::move(others), false, false, "Use another account");
+        nav.redrawAll(Waveform::Ui);
+    };
     if (stage_ == Stage::Forgot) {
         if (checkFileRect().contains(g.pos)) return checkFile(nav);
         if (typeKeyRect().contains(g.pos)) return to(Stage::TypeKey, nav);
+        if (const Rect a = anotherRect(); !a.empty() && a.contains(g.pos)) return chooseAnother();
         return;
     }
     if (stage_ == Stage::TypeKey) {
@@ -323,14 +353,7 @@ void PinPadScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (const Rect f = forgotRect(); !f.empty() && f.contains(g.pos)) return to(Stage::Forgot, nav);
-    if (const Rect a = anotherRect(); !a.empty() && a.contains(g.pos)) {
-        auto others = deps_.others();
-        if (others.empty()) return;
-        if (others.size() == 1 && !others.front().locked) return deps_.useAnother(others.front().userId, nav);
-        chooser_.emplace(std::move(others), false, false, "Use another account");
-        nav.redrawAll(Waveform::Ui);
-        return;
-    }
+    if (const Rect a = anotherRect(); !a.empty() && a.contains(g.pos)) return chooseAnother();
     for (const auto& row : kKeys)
         for (const char* k : row)
             if (keyRect(k).contains(g.pos)) return press(k, nav);
@@ -432,8 +455,7 @@ void PinPadScreen::checkFile(Nav& nav) {
     }
     const Config stored = deps_.credentials ? deps_.credentials().value_or(Config{}) : Config{};
     if (deps_.pins->tryKey(deps_.userId, stored, *key) == AccountPins::Result::Ok) {
-        keyAccepted();
-        return to(Stage::Reset, nav);
+        return keyAccepted(nav);
     }
     log(LogLevel::Info, "accounts: a reset key for %lld didn't match", static_cast<long long>(deps_.userId));
     message_ = kNotThisAccount;
@@ -456,8 +478,7 @@ void PinPadScreen::checkTypedKey(Nav& nav) {
     const Config stored = deps_.credentials ? deps_.credentials().value_or(Config{}) : Config{};
     // Not the key on the Kindle: a wrong try, counted now whatever Zotero says (or doesn't) later.
     if (deps_.pins->tryKey(deps_.userId, stored, typed) == AccountPins::Result::Ok) {
-        keyAccepted();
-        return to(Stage::Reset, nav);
+        return keyAccepted(nav);
     }
     message_ = kNotThisAccount;
     if (const int64_t wait = deps_.pins->waitMs(deps_.userId); wait > 0) message_ += ". Try again in " + waitText(wait);
@@ -486,8 +507,13 @@ void PinPadScreen::checkTypedKey(Nav& nav) {
     nav.redrawAll(Waveform::Ui);
 }
 
-void PinPadScreen::keyAccepted() {
+void PinPadScreen::keyAccepted(Nav& nav) {
     log(LogLevel::Info, "accounts: the reset key of %lld matched", static_cast<long long>(deps_.userId));
+    if (deps_.keyOnly) {  // its owner is proved: it opens (a PIN can be set in Settings → Accounts)
+        if (deps_.done) deps_.done(nav);
+        return;
+    }
+    to(Stage::Reset, nav);
 }
 
 }  // namespace zk

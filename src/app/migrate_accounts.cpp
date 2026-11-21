@@ -242,6 +242,11 @@ bool moveCredentials(const Paths& p, int64_t userId, std::string* why) {
 }
 
 bool listAccount(const Paths& p, int64_t userId, const std::string& dbPath, std::string* why) {
+    // A listed account has its folder (startup's repair drops one without): an install with
+    // nothing to move (a first Setup's config.json only) gets it here.
+    std::error_code ec;
+    fs::create_directories(accountPaths(p, userId).root, ec);
+    if (ec) return fail(why, "can't make " + accountPaths(p, userId).root + ": " + ec.message());
     AccountsState s = readAccounts(p.accountsFile()).value_or(AccountsState{});
     const bool listed = std::any_of(s.accounts.begin(), s.accounts.end(), [&](const AccountEntry& e) { return e.userId == userId; });
     if (listed && s.active == userId) return true;
@@ -322,6 +327,8 @@ std::vector<MigrationStep> migrationSteps(const Paths& p, int64_t userId, std::f
                      }});
     return steps;
 }
+
+std::string readLibraryMeta(const std::string& dbPath, const char* key) { return readMeta(dbPath, key); }
 
 MigrateResult migrateToAccounts(const Paths& p, std::string* why) {
     int64_t userId = markedUser(p);

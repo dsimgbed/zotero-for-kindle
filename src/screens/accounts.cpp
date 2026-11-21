@@ -122,6 +122,14 @@ void AccountPageScreen::onShow(Nav& nav) {
     if (gone_) nav.pop();
 }
 
+void AccountPageScreen::onTick(Nav& nav) {
+    if (!account_.measuring || gone_) return;
+    for (auto& a : host_.accounts(userId_))
+        if (a.userId == userId_) account_ = a;
+    if (account_.measuring) nav.wakeAt(nav.nowMs() + 500);
+    else nav.redrawAll(Waveform::Ui);
+}
+
 // Top to bottom: the summary; Switch to (another account's); the PIN; Lock on sleep (with a PIN);
 // the key; Remove from this Kindle. A locked account: the summary, Switch to, Remove.
 Rect AccountPageScreen::switchRect() const {
@@ -167,7 +175,8 @@ void AccountPageScreen::draw(Canvas& canvas) {
                  {kMargin + 70, kHeaderH + 20, w - 70, 100}, 2);
     } else {
         std::string line = accountLine(account_, host_.wallMs());
-        if (account_.bytes >= 0) line += " · " + sizeText(account_.bytes) + " on this Kindle";
+        if (account_.measuring) line += " · … on this Kindle";
+        else if (account_.bytes >= 0) line += " · " + sizeText(account_.bytes) + " on this Kindle";
         drawText(cr, (account_.active ? "Open · " : "") + line, kValue, {kMargin, kHeaderH + 30, w, 100}, 2);
     }
     if (const Rect s = switchRect(); !s.empty()) drawButton(cr, s, "Switch to " + name, true);

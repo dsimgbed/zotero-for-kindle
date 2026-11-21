@@ -6,6 +6,7 @@
 #include "sync/config.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -57,7 +58,13 @@ struct AccountEntry {
     int64_t itemCount = 0;
     int unsentCount = 0;
     int64_t syncedWallMs = 0;  // the last good sync (0: not known)
+    // Listed again after accounts.json couldn't be read (rebuildAccounts): its PIN, if it had one,
+    // isn't known, so it opens only once its owner shows its API key (as Forgot PIN? does).
+    bool needsKey = false;
 };
+
+// Opening it asks something first: its PIN, or (needsKey) its API key.
+inline bool asksBeforeOpening(const AccountEntry& e) { return e.pin.has_value() || e.needsKey; }
 
 struct AccountsState {
     int version = 1;
@@ -78,13 +85,26 @@ std::vector<std::string> repairAccounts(const Paths&, AccountsState&);
 
 // A new account on this Kindle (Add account, once its key was checked): its folder made and its
 // entry listed last (`active` unchanged). False — nothing listed — when the user is already on
-// the Kindle, there are kMaxAccounts, or accounts.json can't be written.
+// the Kindle, there are kMaxAccounts, or accounts.json is there but can't be read (writing a new
+// list would drop the others), or can't be written.
 bool addAccount(const Paths&, int64_t userId, const std::string& name);
 // The account taken off this Kindle (Remove from this Kindle), and nothing of any other: its folder
 // accounts/<userId>/ is first renamed aside (accounts/.removing-<userId>, so the list never names a
 // half-deleted library), then its entry and its credentials go, then the folder is deleted.
-// `active` moves to the first account left (0: none). The account must not be open.
+// `active` moves to the first account left (0: none). The account must not be open. A config.json
+// of the layout before accounts naming that user goes too (forgetOldConfig).
 bool removeAccount(const Paths&, int64_t userId);
+// Deletes <configDir>/config.json when it names `userId` (a key of the layout before accounts, or
+// one a first Setup wrote): an account's key is kept only in its credentials file.
+void forgetOldConfig(const Paths&, int64_t userId);
+// Startup: what removals cut short left (accounts/.removing-<userId>, unlisted by construction) is
+// deleted, with the credentials and config.json of a user no longer listed. Returns the log lines.
+std::vector<std::string> finishRemovals(const Paths&, const AccountsState&);
+// accounts.json there but unreadable: it is kept aside (accounts.json.bad-<time>) and the list made
+// again from the account folders (userID-named, at most kMaxAccounts, by user ID), each entry
+// needsKey (its PIN isn't known), named by `nameOf` (its library's username; "" when unknown).
+// Returns the list written (nullopt: nothing to do, or it can't be written).
+std::optional<AccountsState> rebuildAccounts(const Paths&, const std::function<std::string(int64_t userId)>& nameOf);
 // The account's summary (itemCount, unsentCount, and syncedWallMs when `syncedWallMs` > 0) written
 // into its entry; `name` (its library's Zotero username) only where the entry has none (an account
 // added from a dropped config.json, before its first sync). False when it isn't listed or the

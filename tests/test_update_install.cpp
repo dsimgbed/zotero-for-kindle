@@ -604,3 +604,20 @@ TEST_CASE("update install: a backup cut short leaves nothing of it behind") {
     CHECK_FALSE(fs::exists(k.app("update/state")));
     CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
 }
+
+TEST_CASE("update install: a config.json naming no account on the Kindle (a removed one's) isn't backed up; a listed one's is") {
+    AccountsKindle k;
+    writeFile(k.paths.accountsFile, R"({"version":1,"active":111,"accounts":[{"userId":111},{"userId":222}]})");
+    writeFile(k.root / "var/config.json", R"({"userId":333,"apiKey":"key333"})");  // 333 was removed
+    std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+    CHECK(fs::exists(k.root / "var/accounts.json.old"));
+
+    AccountsKindle listed;
+    writeFile(listed.paths.accountsFile, R"({"version":1,"active":111,"accounts":[{"userId":111}]})");
+    writeFile(listed.root / "var/config.json", R"({"userId":"111","apiKey":"key111"})");
+    newDir = listed.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(listed.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK(readFile(listed.root / "var/config.json.old") == R"({"userId":"111","apiKey":"key111"})");
+}

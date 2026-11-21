@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -121,6 +123,21 @@ private:
     };
     std::shared_ptr<DropCheck> dropCheck_;  // Zotero asked about a dropped key; the answer not yet taken
     bool offlineSaid_ = false;
+    // Each account's size on the Kindle, measured once per run on a thread of its own (a walk of a
+    // folder of gigabytes on FAT takes seconds): never on the screen thread.
+    struct Size {
+        std::mutex mutex;
+        bool done = false;
+        int64_t bytes = 0;
+    };
+    std::map<int64_t, std::shared_ptr<Size>> sizes_;
+    // An account Setup confirmed while the open account was locked: added only once the open
+    // account's own PIN unlocks it (dropped, said, if another account is opened instead).
+    struct PendingAdd {
+        Config config;
+        std::string name;
+    };
+    std::optional<PendingAdd> pendingAdd_;
 };
 
 }  // namespace zk

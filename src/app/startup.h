@@ -20,7 +20,17 @@ namespace zk {
 // backs up every account's library itself). Returns the active account's userId, 0 when there is none (the
 // old places stay: Setup). nullopt (and *why): the migration failed part-way — open no database;
 // the next launch resumes it.
+// Also, after the migration, the repair: an unreadable accounts.json is kept aside and the list
+// made again from the account folders (rebuildAccounts); an entry whose folder is gone is dropped
+// (repairAccounts), and what removals cut short left is deleted (finishRemovals).
 std::optional<int64_t> openAccountLayout(Paths&, std::string* why = nullptr);
+// That repair alone (openAccountLayout runs it).
+void repairAccountLayout(const Paths&);
+
+// Whether a first Setup writes config.json too: only on a fresh install (no accounts.json yet; the
+// migration takes it in). With an account list a key goes to the account's credentials only, so a
+// removed account's key never stays behind in config.json.
+bool firstSetupKeepsConfigFile(const Paths&);
 
 struct Startup {
     // What became of a config.json dropped over USB (/mnt/us/zotero/config.json):
@@ -50,9 +60,10 @@ std::optional<Config> pendingDroppedKey(const Paths&);
 // What Zotero said of the pending key `c` (checkKeyOwner, as Update key asks):
 //   Applied   it is c.userId's: saved as that account's credentials, the file deleted
 //   Offline   Zotero couldn't be asked (unreachable): nothing changes, asked again later
+//   Later     Zotero answered but couldn't say (rate limit, server error): as Offline
 //   Refused   another user's, or a key Zotero doesn't take: nothing changes, the file left (logged)
 //   None      no such file any more, or it changed meanwhile (asked again)
-enum class DroppedKey { None, Applied, Offline, Refused };
+enum class DroppedKey { None, Applied, Offline, Later, Refused };
 DroppedKey settleDroppedKey(const Paths&, const Config& c, const UserError& owner);
 // Both at once (`owner` asks Zotero; on the UI thread only in tests). `applied`: the key kept.
 DroppedKey applyDroppedKey(const Paths&, const std::function<UserError(const Config&)>& owner, Config* applied = nullptr);

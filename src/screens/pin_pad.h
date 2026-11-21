@@ -45,6 +45,10 @@ struct PinPadDeps {
     // Use another account: the other accounts (none: the link is hidden) and a choice among them.
     std::function<std::vector<AccountSheet::Row>()> others;
     std::function<void(int64_t userId, Nav&)> useAnother;
+    // Unlock of an account whose PIN isn't known (needsKey: the account list was made again): no
+    // PIN to enter — the pad starts at the key (reset-pin.txt or typed), and the account's key
+    // proved is `done`.
+    bool keyOnly = false;
 };
 
 class PinPadScreen final : public Screen {
@@ -72,7 +76,7 @@ public:
     // "0"–"9", "⌫", "OK".
     Rect keyRect(const std::string& key) const;
     Rect forgotRect() const;   // "Forgot PIN?" (Unlock only)
-    Rect anotherRect() const;  // "Use another account" (Unlock, with others)
+    Rect anotherRect() const;  // "Use another account" (Unlock, with others; keyOnly: under the key's choices)
     // Forgot PIN?: check the file, type the key; the typed key's field and Check; then Set a new PIN / Remove PIN.
     Rect checkFileRect() const;
     Rect typeKeyRect() const;
@@ -94,7 +98,7 @@ private:
     void submit(Nav&);
     void checkFile(Nav&);
     void checkTypedKey(Nav&);
-    void keyAccepted();
+    void keyAccepted(Nav&);
     void refreshWait(Nav&);
     void to(Stage, Nav&);
     Rect linkRow() const;

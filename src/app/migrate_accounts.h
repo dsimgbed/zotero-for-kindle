@@ -22,6 +22,10 @@ enum class MigrateResult {
     Failed,     // a step failed (*why); the next launch resumes. Open no database meanwhile.
 };
 
+// A meta value of an existing library (e.g. "zotero.userName"), read without changing it; "" when
+// there is none or it can't be read.
+std::string readLibraryMeta(const std::string& dbPath, const char* key);
+
 // Runs before anything opens a database. Leaves a config.json dropped over USB alone.
 MigrateResult migrateToAccounts(const Paths&, std::string* why);
 

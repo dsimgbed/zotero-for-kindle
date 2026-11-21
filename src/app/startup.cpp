@@ -15,13 +15,38 @@ namespace zk {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+// An unreadable list is never written over: kept aside, and made again from the folders.
+void rebuildUnreadable(const Paths& p) {
+    rebuildAccounts(p, [&p](int64_t userId) { return readLibraryMeta(accountPaths(p, userId).dbPath, "zotero.userName"); });
+}
+
+}  // namespace
+
+void repairAccountLayout(const Paths& p) {
+    rebuildUnreadable(p);
+    auto st = readAccounts(p.accountsFile());
+    if (!st) return;
+    const AccountsState before = *st;
+    repairAccounts(p, *st);  // an entry whose folder is gone (a removal cut short) is dropped
+    const bool changed = st->active != before.active || st->accounts.size() != before.accounts.size();
+    if (changed && !writeAccounts(p.accountsFile(), *st)) {
+        log(LogLevel::Error, "accounts: the repaired list can't be written; nothing more is cleaned up");
+        return;
+    }
+    finishRemovals(p, *st);
+}
+
 std::optional<int64_t> openAccountLayout(Paths& p, std::string* whyOut) {
     std::string why;
+    rebuildUnreadable(p);  // before a resumed migration lists its account in it
     if (migrateToAccounts(p, &why) == MigrateResult::Failed) {
         log(LogLevel::Error, "migration to the account layout failed (%s); resumed at the next start", why.c_str());
         if (whyOut) *whyOut = why;
         return std::nullopt;
     }
+    repairAccountLayout(p);
     const auto accounts = readAccounts(p.accountsFile());
     if (!accounts || accounts->active == 0) return 0;
     const AccountPaths a = accountPaths(p, accounts->active);
@@ -102,6 +127,11 @@ DroppedKey settleDroppedKey(const Paths& p, const Config& c, const UserError& ow
     const long long user = static_cast<long long>(c.userId);
     if (owner.kind != ErrorKind::None) {
         if (unreachable(owner)) return DroppedKey::Offline;
+        if (owner.kind == ErrorKind::RateLimited || owner.kind == ErrorKind::ServerError) {
+            log(LogLevel::Info, "config: Zotero couldn't check the key in %s now (%s); asked again later", p.droppedConfig.c_str(),
+                owner.details.c_str());
+            return DroppedKey::Later;
+        }
         log(LogLevel::Warn, "config: the key in %s isn't account %lld's (%s): not used, left in place", p.droppedConfig.c_str(),
             user, owner.details.c_str());
         return DroppedKey::Refused;
@@ -123,6 +153,11 @@ DroppedKey applyDroppedKey(const Paths& p, const std::function<UserError(const C
     return r;
 }
 
+bool firstSetupKeepsConfigFile(const Paths& p) {
+    std::error_code ec;
+    return !fs::exists(p.accountsFile(), ec) && !ec;
+}
+
 Startup startupConfig(const Paths& p) {
     Startup s;
     s.dropped = takeDropped(p, s);
@@ -135,7 +170,10 @@ Startup startupConfig(const Paths& p) {
             if (writeAccounts(p.accountsFile(), *accounts)) s.config = loadCredentials(p, s.droppedUser);
         }
     }
-    if (!s.config) s.config = loadConfig(p.configDir);
+    // config.json is a key only before the account layout (a fresh install's first Setup, or an old
+    // install the migration takes in); once there is an account list it is nobody's key.
+    std::error_code ec;
+    if (!s.config && !fs::exists(p.accountsFile(), ec)) s.config = loadConfig(p.configDir);
     return s;
 }
 

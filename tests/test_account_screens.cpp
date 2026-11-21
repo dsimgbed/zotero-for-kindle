@@ -19,6 +19,8 @@
 #include "app/lifecycle.h"
 #include "app/pin.h"
 #include "app/session.h"
+#include "app/startup.h"
+#include "screens/account_error.h"
 #include "fake_display.h"
 #include "fake_engine.h"
 #include "fake_nav.h"
@@ -94,6 +96,7 @@ struct Rig {
     std::unique_ptr<AccountSwitcher> switcher;
     std::unique_ptr<AccountsUi> ui;
     int noAccounts = 0;
+    std::function<UserError(const Config&)> ownerAnswer;  // set: what Zotero says of a key's owner
 
     explicit Rig(std::vector<std::pair<int64_t, std::string>> accounts = {{11, "Pavel"}, {22, "Anna"}}) {
         dir = uniqueTempPath("zk-account-screens");
@@ -150,6 +153,11 @@ struct Rig {
                 return UserError{ErrorKind::ApiKeyRejected, "This API key belongs to another Zotero user (ID " + owner + ").", "userID mismatch"};
             if (name) *name = "user" + owner;
             return UserError{};
+        };
+        u.keyOwner = [this, check = u.checkKey](const Config& c) {
+            if (ownerAnswer) return ownerAnswer(c);
+            std::string name;
+            return check(c, &name);
         };
         u.noAccount = [this](std::unique_ptr<Screen> s) {
             ++noAccounts;
@@ -1224,4 +1232,225 @@ TEST_CASE("account screens: goldens on the KT4 and the Scribe — the list and t
         if (kt4) checkShrunk(c, "tests/golden/pin-pad-kt4.png");
         else checkGolden(c, "tests/golden/pin-pad-scribe.png");
     }
+}
+
+// ---- the final review's fixes ----------------------------------------------------------------------
+
+TEST_CASE("account screens: two accounts removed one after the other leave no config.json; the next start's Setup is empty") {
+    Rig k;
+    Config stale;
+    stale.userId = 11;
+    stale.apiKey = "key11";
+    REQUIRE(saveConfig(k.paths.configDir, stale));  // what a Setup used to write besides the credentials
+    k.openAt(11);
+    k.app.push(std::make_unique<RemoveAccountScreen>(*k.ui, 22));
+    k.tap(k.topAs<RemoveAccountScreen>()->removeRect());
+    CHECK(fs::exists(k.paths.configFile()));  // 11's: 11 is still here
+    k.app.push(std::make_unique<RemoveAccountScreen>(*k.ui, 11));
+    k.top()->onGesture(tapOn(k.topAs<RemoveAccountScreen>()->removeRect()), k.app);
+    REQUIRE(k.settle());
+    k.app.step(0);
+    REQUIRE(k.topAs<SetupScreen>());
+    CHECK(k.topAs<SetupScreen>()->config().userId == 0);
+    CHECK_FALSE(fs::exists(k.paths.configFile()));
+    CHECK_FALSE(fs::exists(k.paths.credentialsFile(11)));
+    CHECK_FALSE(fs::exists(k.paths.credentialsFile(22)));
+    // The next start: nothing of anyone's key to fill Setup with.
+    Paths p = k.paths;
+    REQUIRE(openAccountLayout(p) == std::optional<int64_t>(0));
+    const Startup s = startupConfig(p);
+    CHECK_FALSE(s.config);
+    CHECK_FALSE(firstSetupKeepsConfigFile(p));
+}
+
+TEST_CASE("account screens: locked on sleep, the open account shows its name and lock only, in the lock pad's Use another account too") {
+    Rig k;
+    lockedPavel(k);
+    for (const AccountSummary& a : k.ui->accounts(11)) {
+        CHECK(a.locked);  // Pavel open but locked; Anna not open, with a PIN
+        CHECK(a.items == 0);
+        CHECK(a.keyLine.empty());
+        CHECK(a.bytes == -1);
+        CHECK_FALSE(a.measuring);
+    }
+    useAnother(k, 22);
+    REQUIRE(padFor(k, "Anna"));
+    auto* pad = k.topAs<PinPadScreen>();
+    k.tap(pad->anotherRect());
+    REQUIRE(pad->chooser());  // Pavel is locked: a chooser, not straight back
+    const auto& rows = pad->chooser()->rows();
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].userId == 11);
+    CHECK(rows[0].locked);
+    CHECK(rows[0].line.empty());
+    // Chosen: its own lock pad; unlocked with its PIN, it shows everything again.
+    k.tap(pad->chooser()->rowRect({0, 0, k.display.w, k.display.h}, 0));
+    k.app.step(0);
+    REQUIRE(padFor(k, "Pavel"));
+    k.typePin("1357");
+    k.app.step(0);
+    for (const AccountSummary& a : k.ui->accounts())
+        if (a.userId == 11) {
+            CHECK_FALSE(a.locked);
+            CHECK_FALSE(a.keyLine.empty());
+        }
+}
+
+TEST_CASE("account screens: an account listed again after an unreadable list opens only with its key, never a PIN") {
+    Rig k;
+    AccountsState st = *readAccounts(k.paths.accountsFile());
+    st.accounts[1].needsKey = true;  // as rebuildAccounts lists Anna
+    REQUIRE(writeAccounts(k.paths.accountsFile(), st));
+    k.openAt(11);
+    for (const AccountSummary& a : k.ui->accounts())
+        if (a.userId == 22) CHECK(a.locked);
+    k.ui->switchTo(22);
+    k.app.step(0);
+    auto* pad = k.topAs<PinPadScreen>();
+    REQUIRE(pad);
+    CHECK(pad->stage() == PinPadScreen::Stage::Forgot);  // no PIN to enter: the key
+    CHECK(pad->prompt().find("opens only with its Zotero API key") != std::string::npos);
+    CHECK(pad->forgotRect().empty());
+    std::ofstream(k.dir / "reset-pin.txt") << "key11";  // another account's key
+    k.tap(pad->checkFileRect());
+    CHECK(pad->message() == "This key isn't this account's");
+    CHECK(k.session()->userId() == 11);
+    std::ofstream(k.dir / "reset-pin.txt") << "key22\n";
+    k.tap(pad->checkFileRect());
+    REQUIRE(k.settle());
+    k.app.step(0);
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 22);
+    CHECK(k.homeOf() == 22);
+    CHECK_FALSE(k.entry(22)->needsKey);
+    CHECK_FALSE(k.entry(22)->pin);
+}
+
+TEST_CASE("account screens: at startup, an account that needs its key offers Use another account beside the key") {
+    Rig k;
+    AccountsState st = *readAccounts(k.paths.accountsFile());
+    st.accounts[0].needsKey = true;
+    REQUIRE(writeAccounts(k.paths.accountsFile(), st));
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    k.app.step(0);
+    auto* pad = k.topAs<PinPadScreen>();
+    REQUIRE(pad);
+    CHECK_FALSE(k.session());
+    REQUIRE_FALSE(pad->anotherRect().empty());
+    k.tap(pad->anotherRect());
+    REQUIRE(k.settle());
+    REQUIRE(k.session());
+    CHECK(k.session()->userId() == 22);
+    CHECK_FALSE(fs::exists(accountPaths(k.paths, 11).dbPath));
+}
+
+TEST_CASE("account screens: an account's size is measured off the screen thread, '…' until known, then kept for the run") {
+    Rig k;
+    k.openAt(11);
+    const auto first = k.ui->accounts(22);
+    const AccountSummary* anna = nullptr;
+    for (const auto& a : first)
+        if (a.userId == 22) anna = &a;
+    REQUIRE(anna);
+    CHECK((anna->measuring || anna->bytes > 0));
+    int64_t bytes = -1;
+    REQUIRE(eventually([&] {
+        for (const auto& a : k.ui->accounts(22))
+            if (a.userId == 22 && !a.measuring) bytes = a.bytes;
+        return bytes >= 0;
+    }));
+    CHECK(bytes == static_cast<int64_t>(std::string("a file of Anna").size()));
+    std::ofstream(fs::path(accountPaths(k.paths, 22).filesDir) / "MARK" / "more.pdf") << "more";
+    for (const auto& a : k.ui->accounts(22))
+        if (a.userId == 22) CHECK(a.bytes == bytes);  // not walked again this run
+    // The Remove screen says "…" while it is measured, then the size.
+    k.app.push(std::make_unique<RemoveAccountScreen>(*k.ui, 11));
+    k.app.step(0);
+    auto* remove = k.topAs<RemoveAccountScreen>();
+    REQUIRE(remove);
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        return !remove->shown().measuring;
+    }));
+    CHECK(remove->removeLabel().find("…") == std::string::npos);
+    CHECK(remove->removeLabel().rfind("Remove Pavel and delete ", 0) == 0);
+}
+
+TEST_CASE("account screens: an account confirmed by Setup while the open account locks waits for its PIN; another account chosen drops it") {
+    for (bool unlockOpen : {true, false}) {
+        CAPTURE(unlockOpen);
+        Rig k;
+        k.setPin(11, "1357");
+        k.setPin(22, "2468");
+        REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+        k.app.step(0);
+        k.typePin("1357");
+        REQUIRE(k.settle());
+        k.ui->addAccount(k.app);
+        auto* setup = k.topAs<SetupScreen>();
+        REQUIRE(setup);
+        setup->onGesture(tapOn(SetupScreen::fieldRect(0)), k.app);
+        setup->onKey(KeyEvent{KeyEvent::Code::Text, "33"}, k.app);
+        setup->onGesture(tapOn(SetupScreen::fieldRect(1)), k.app);
+        setup->onKey(KeyEvent{KeyEvent::Code::Text, "key33"}, k.app);
+        setup->onGesture(tapOn(SetupScreen::connectRect()), k.app);
+        // The check's answer is taken (its result deferred to the end of the step)...
+        REQUIRE(eventually([&] {
+            setup->onTick(k.app);
+            return !setup->checking();
+        }, 10000));
+        k.ui->lockNow();  // ...and the Kindle sleeps before it is acted on
+        k.app.step(0);
+        REQUIRE(padFor(k, "Pavel"));
+        CHECK(k.session()->userId() == 11);
+        CHECK_FALSE(k.entry(33));
+        CHECK_FALSE(loadCredentials(k.paths, 33));
+        if (unlockOpen) {
+            k.typePin("1357");
+            REQUIRE(eventually([&] {
+                k.app.step(0);
+                return k.session() && k.session()->userId() == 33 && !k.switcher->busy();
+            }, 10000));
+            CHECK(k.entry(33));
+        } else {
+            useAnother(k, 22);
+            REQUIRE(padFor(k, "Anna"));
+            k.typePin("2468");
+            REQUIRE(k.settle());
+            k.app.step(0);
+            CHECK(k.session()->userId() == 22);
+            CHECK_FALSE(k.entry(33));
+            CHECK_FALSE(loadCredentials(k.paths, 33));
+            CHECK(k.app.lastToast() == "user33 wasn't added; add it again in Settings → Accounts");
+        }
+    }
+}
+
+TEST_CASE("account screens: a dropped key Zotero can't check now (429, 5xx) is 'will try again', not 'isn't theirs'") {
+    Rig k;
+    k.openAt(11);
+    k.online = true;
+    std::ofstream(k.paths.droppedConfig) << R"({"userId":22,"apiKey":"new22"})";
+    k.ownerAnswer = [](const Config&) { return UserError{ErrorKind::RateLimited, "Zotero asks to wait.", "HTTP 429"}; };
+    k.ui->checkDroppedKey();
+    REQUIRE(eventually([&] {
+        k.app.step(0);
+        k.ui->poll();
+        return !k.app.lastToast().empty();
+    }, 10000));
+    CHECK(k.app.lastToast() == "Couldn't check the key for Anna — will try again");
+    CHECK(fs::exists(k.paths.droppedConfig));
+    CHECK(loadCredentials(k.paths, 22)->apiKey == "key22");
+}
+
+TEST_CASE("account screens: a listed account whose folder is gone is never opened as a new, empty library") {
+    Rig k;
+    k.openAt(11);
+    fs::remove_all(accountPaths(k.paths, 22).root);
+    k.ui->switchTo(22);
+    REQUIRE(k.settle());
+    k.app.step(0);
+    CHECK_FALSE(k.session());
+    CHECK(k.topAs<AccountErrorScreen>());
+    CHECK_FALSE(fs::exists(accountPaths(k.paths, 22).root));
 }

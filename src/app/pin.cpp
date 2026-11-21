@@ -211,13 +211,17 @@ void AccountPins::miss(int64_t userId) { missed(userId); }
 
 void AccountPins::keyProved(int64_t userId) {
     monoUntil_.erase(userId);
-    if (!update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); }))
+    if (!update(userId, [](AccountEntry& a) {
+            recordSuccess(a.backoff);
+            a.needsKey = false;
+        }))
         log(LogLevel::Error, "accounts: can't clear the wrong tries of %lld", static_cast<long long>(userId));
 }
 
 AccountPins::Result AccountPins::tryPin(int64_t userId, const std::string& pin) {
     const auto e = entry(userId);
     if (!e) return Result::Failed;
+    if (e->needsKey) return Result::Failed;  // its PIN isn't known: only its key opens it (tryKey)
     if (!e->pin) return Result::Ok;
     if (waitMs(userId) > 0) return Result::Waiting;
     if (!checkPin(*e->pin, pin)) {
@@ -237,7 +241,10 @@ AccountPins::Result AccountPins::tryKey(int64_t userId, const Config& stored, co
         missed(userId);
         return Result::Wrong;
     }
-    if (!update(userId, [](AccountEntry& a) { recordSuccess(a.backoff); }))
+    if (!update(userId, [](AccountEntry& a) {
+            recordSuccess(a.backoff);
+            a.needsKey = false;  // the owner is proved
+        }))
         log(LogLevel::Error, "accounts: can't clear the wrong tries of %lld", static_cast<long long>(userId));
     monoUntil_.erase(userId);
     return Result::Ok;

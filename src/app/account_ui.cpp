@@ -90,7 +90,9 @@ std::vector<AccountSummary> AccountsUi::accounts(int64_t measure) {
         a.active = e.userId == open;
         a.hasPin = e.pin.has_value();
         a.lockOnSleep = e.lockOnSleep;
-        a.locked = a.hasPin && !a.active;  // nothing of it until its PIN
+        // Nothing of it until its PIN (or its key): an account that isn't open, and the open one
+        // while it is locked (on sleep), shown under a pad's Use another account.
+        a.locked = asksBeforeOpening(e) && (!a.active || openLocked_);
         if (!a.locked) {
             a.items = e.itemCount;
             a.unsent = e.unsentCount;
@@ -104,7 +106,24 @@ std::vector<AccountSummary> AccountsUi::accounts(int64_t measure) {
                 }
             }
             a.keyLine = keyLineOf(deps_.credentials(e.userId), e.userId);
-            if (measure == e.userId) a.bytes = folderBytes(accountPaths(deps_.paths, e.userId).root);
+            if (measure == e.userId) {
+                std::shared_ptr<Size>& size = sizes_[e.userId];
+                if (!size) {
+                    size = std::make_shared<Size>();
+                    std::thread([size, dir = accountPaths(deps_.paths, e.userId).root] {
+                        const int64_t n = folderBytes(dir);
+                        {
+                            std::lock_guard<std::mutex> lock(size->mutex);
+                            size->bytes = n;
+                            size->done = true;
+                        }
+                        wakeUi();
+                    }).detach();
+                }
+                std::lock_guard<std::mutex> lock(size->mutex);
+                if (size->done) a.bytes = size->bytes;
+                else a.measuring = true;
+            }
         }
         out.push_back(std::move(a));
     }
@@ -152,6 +171,11 @@ void AccountsUi::addAccount(Nav& nav) {
 
 // Identity first: the key was checked and names its user; only now is anything of it made.
 void AccountsUi::added(const Config& c, const std::string& name) {
+    if (openLocked_) {  // the user isn't here: nothing is switched before the open account's PIN
+        log(LogLevel::Info, "accounts: %lld waits for the open account to be unlocked", static_cast<long long>(c.userId));
+        pendingAdd_ = PendingAdd{c, name};
+        return;
+    }
     if (pins_.entry(c.userId)) {
         app_.toast(nameOf(c.userId) + " is already on this Kindle");
         return;
@@ -165,11 +189,8 @@ void AccountsUi::added(const Config& c, const std::string& name) {
     log(LogLevel::Info, "accounts: %lld added", static_cast<long long>(c.userId));
     // A config.json from before (a first account dropped over USB, kept for Setup) is this
     // account's credentials again: no second copy stays.
-    if (const auto old = loadConfig(deps_.paths.configDir); old && old->userId == c.userId) {
-        std::error_code ec;
-        fs::remove(deps_.paths.configFile(), ec);
-        if (ec) log(LogLevel::Warn, "accounts: %s not removed: %s", deps_.paths.configFile().c_str(), ec.message().c_str());
-    }
+    forgetOldConfig(deps_.paths, c.userId);
+    sizes_.erase(c.userId);
     added_ = c.userId;
     if (!switcher_.switchTo(c.userId, openUserId() ? AccountSwitcher::Why::User : AccountSwitcher::Why::Startup))
         app_.toast("Can't switch now; the account is in Settings → Accounts");
@@ -221,6 +242,8 @@ std::unique_ptr<PinPadScreen> AccountsUi::pad(int64_t userId, PinPadScreen::Purp
     d.keepKey = [this](const Config& c) { keepKey(c); };
     d.done = std::move(done);
     d.back = std::move(back);
+    if (purpose == PinPadScreen::Purpose::Unlock)
+        if (const auto e = pins_.entry(userId); e && e->needsKey) d.keyOnly = true;  // its PIN isn't known: its key
     if (useAnother) {
         d.others = [this, userId] { return rowsExcept(userId); };
         d.useAnother = std::move(useAnother);
@@ -300,6 +323,11 @@ void AccountsUi::showOpenLock() {
             app_.defer([this] {
                 openLocked_ = false;  // its right PIN, or the reset: the only way the lock goes
                 app_.unlock();
+                if (pendingAdd_) {  // confirmed under the lock: added now that its user is here
+                    const PendingAdd p = std::move(*pendingAdd_);
+                    pendingAdd_.reset();
+                    added(p.config, p.name);
+                }
             });
         },
         nullptr,
@@ -345,6 +373,7 @@ bool AccountsUi::sent(uint64_t request) {
 void AccountsUi::remove(Nav& nav, int64_t userId) {
     const std::string name = nameOf(userId);
     if (userId != openUserId()) {  // nothing of it is open: it goes now
+        sizes_.erase(userId);
         if (!removeAccount(deps_.paths, userId)) {
             nav.toast("Can't remove " + name + " from the Kindle");
             return;
@@ -359,7 +388,7 @@ void AccountsUi::remove(Nav& nav, int64_t userId) {
             if (e.userId != userId) others.push_back(e);
     if (!others.empty()) {  // it goes once the next one is open (the switch stops it first)
         // An account without a PIN first: no other account's PIN in the way of a removal.
-        const auto unlocked = std::find_if(others.begin(), others.end(), [](const AccountEntry& e) { return !e.pin; });
+        const auto unlocked = std::find_if(others.begin(), others.end(), [](const AccountEntry& e) { return !asksBeforeOpening(e); });
         removing_ = userId;
         if (!switcher_.switchTo((unlocked != others.end() ? *unlocked : others.front()).userId, AccountSwitcher::Why::Remove))
             removing_ = 0;
@@ -376,6 +405,7 @@ void AccountsUi::remove(Nav& nav, int64_t userId) {
 void AccountsUi::finishRemoval() {
     const int64_t id = removing_;
     removing_ = 0;
+    sizes_.erase(id);
     const std::string name = nameOf(id);
     if (removeAccount(deps_.paths, id)) app_.toast(name + " was removed from this Kindle");
     else app_.toast("Can't remove " + name + " from the Kindle");
@@ -383,6 +413,13 @@ void AccountsUi::finishRemoval() {
 
 void AccountsUi::opened(AccountSession& s) {
     openLocked_ = false;  // opened through its own PIN (or it has none)
+    if (pendingAdd_) {  // confirmed under the lock, and the user opened another account instead
+        AccountSummary who;
+        who.userId = pendingAdd_->config.userId;
+        who.name = pendingAdd_->name;
+        app_.toast(accountName(who) + " wasn't added; add it again in Settings → Accounts");
+        pendingAdd_.reset();
+    }
     if (removing_ == s.userId()) {  // it was opened again instead (the error screen's choice)
         app_.toast(nameOf(removing_) + " wasn't removed");
         removing_ = 0;
@@ -446,6 +483,7 @@ void AccountsUi::poll() {
             if (!offlineSaid_) app_.toast("The key for " + name + " will be checked when Wi-Fi is on");
             offlineSaid_ = true;
             break;
+        case DroppedKey::Later: app_.toast("Couldn't check the key for " + name + " — will try again"); break;
         case DroppedKey::Refused: app_.toast("The key in config.json isn't " + name + "'s, so it wasn't used"); break;
         case DroppedKey::None: break;
     }

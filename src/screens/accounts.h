@@ -22,13 +22,14 @@ struct AccountSummary {
     int64_t userId = 0;
     std::string name;  // "" before the name is known: "Account <id>"
     bool active = false;
-    bool locked = false;  // a PIN, and not the open account: nothing of it is shown
+    bool locked = false;  // a PIN (or its key needed), and not open or the open one locked: nothing of it is shown
     bool hasPin = false, lockOnSleep = false;
     // Unlocked accounts only:
     int64_t items = 0;
     int unsent = 0;             // changes made on the Kindle not sent to Zotero
     int64_t syncedWallMs = 0;   // the last finished sync (0: not known)
     int64_t bytes = -1;         // everything of it on the Kindle (-1: not measured)
+    bool measuring = false;     // asked for and being measured (off the screen thread): "…" meanwhile
     std::string keyLine;        // "User ID 11 · WebDAV: dav.example.org"
 };
 
@@ -42,7 +43,8 @@ class AccountsHost {
 public:
     virtual ~AccountsHost() = default;
     // In their order (counts as each account's session last kept them; the open one's live).
-    // `measure`: that account's size on the Kindle too (walks its folder).
+    // `measure`: that account's size on the Kindle too — measured in the background, `measuring`
+    // until it is known (ask again; the UI is woken once it is).
     virtual std::vector<AccountSummary> accounts(int64_t measure = 0) = 0;
     virtual int64_t wallMs() = 0;
     virtual void switchTo(int64_t userId) = 0;  // the account switch (the PIN first, if it has one)
@@ -83,6 +85,7 @@ public:
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onShow(Nav&) override;
+    void onTick(Nav&) override;  // the size, once measured
     bool showsTabBar() const override { return false; }
 
     const AccountSummary& shown() const { return account_; }

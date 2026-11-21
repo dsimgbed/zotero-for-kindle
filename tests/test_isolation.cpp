@@ -124,6 +124,7 @@ struct Kindle {
     // One session of `user`: open (its sweep), a sync, the shared file downloaded, then stop.
     void session(int64_t userId, ZoteroUser& user, OpenGuard& guard, bool download = true) {
         guard.setActive(accountPaths(paths, userId).root);
+        fs::create_directories(accountPaths(paths, userId).root);  // made when it was added
         AccountEntry e;
         e.userId = userId;
         Config c;

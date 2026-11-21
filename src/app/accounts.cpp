@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -85,6 +86,7 @@ std::optional<AccountsState> readAccounts(const std::string& file) {
             e.itemCount = a.value("itemCount", int64_t{0});
             e.unsentCount = a.value("unsentCount", 0);
             e.syncedWallMs = a.value("syncedWallMs", int64_t{0});
+            e.needsKey = a.value("needsKeyToOpen", false);
             if (a.contains("backoff") && a["backoff"].is_object()) {
                 e.backoff.misses = a["backoff"].value("misses", 0);
                 e.backoff.waitUntilMs = a["backoff"].value("waitUntilMs", int64_t{0});
@@ -119,7 +121,8 @@ bool writeAccounts(const std::string& file, const AccountsState& s) {
         list.push_back({{"userId", e.userId}, {"name", e.name}, {"order", e.order}, {"pin", pin},
                         {"lockOnSleep", e.lockOnSleep},
                         {"backoff", {{"misses", e.backoff.misses}, {"waitUntilMs", e.backoff.waitUntilMs}}},
-                        {"itemCount", e.itemCount}, {"unsentCount", e.unsentCount}, {"syncedWallMs", e.syncedWallMs}});
+                        {"itemCount", e.itemCount}, {"unsentCount", e.unsentCount}, {"syncedWallMs", e.syncedWallMs},
+                        {"needsKeyToOpen", e.needsKey}});
     }
     const std::string text = json{{"version", s.version}, {"active", s.active}, {"accounts", list}}.dump(2) + "\n";
     std::error_code ec;
@@ -175,14 +178,19 @@ std::vector<std::string> repairAccounts(const Paths& paths, AccountsState& s) {
 }
 
 bool addAccount(const Paths& paths, int64_t userId, const std::string& name) {
-    AccountsState st = readAccounts(paths.accountsFile()).value_or(AccountsState{});
+    const auto read = readAccounts(paths.accountsFile());
+    std::error_code ec;
+    if (!read && fs::exists(paths.accountsFile(), ec)) {  // a new list would drop the accounts it names
+        log(LogLevel::Error, "accounts: %s can't be read; %lld not added", paths.accountsFile().c_str(), static_cast<long long>(userId));
+        return false;
+    }
+    AccountsState st = read.value_or(AccountsState{});
     if (userId <= 0 || st.accounts.size() >= kMaxAccounts) return false;
     int order = 0;
     for (const auto& e : st.accounts) {
         if (e.userId == userId) return false;
         order = std::max(order, e.order + 1);
     }
-    std::error_code ec;
     fs::create_directories(accountPaths(paths, userId).root, ec);
     if (ec) {
         log(LogLevel::Error, "accounts: can't make the folder of %lld: %s", static_cast<long long>(userId), ec.message().c_str());
@@ -224,11 +232,95 @@ bool removeAccount(const Paths& paths, int64_t userId) {
     }
     if (!fs::remove(paths.credentialsFile(userId), ec) && ec)
         log(LogLevel::Warn, "accounts: credentials of %lld not deleted: %s", static_cast<long long>(userId), ec.message().c_str());
+    forgetOldConfig(paths, userId);
     ec.clear();
     fs::remove_all(aside, ec);
     if (ec) log(LogLevel::Warn, "accounts: %s not deleted entirely: %s", aside.c_str(), ec.message().c_str());
     log(LogLevel::Info, "accounts: %lld removed from this Kindle", static_cast<long long>(userId));
     return true;
+}
+
+void forgetOldConfig(const Paths& paths, int64_t userId) {
+    const auto old = loadConfig(paths.configDir);
+    if (!old || old->userId != userId) return;
+    std::error_code ec;
+    fs::remove(paths.configFile(), ec);
+    if (ec) log(LogLevel::Warn, "accounts: %s not removed: %s", paths.configFile().c_str(), ec.message().c_str());
+    else log(LogLevel::Info, "accounts: config.json of %lld removed (the key is kept in its credentials only)", static_cast<long long>(userId));
+}
+
+std::vector<std::string> finishRemovals(const Paths& paths, const AccountsState& s) {
+    std::vector<std::string> lines;
+    static const std::string kPrefix = ".removing-";
+    std::vector<fs::path> found;
+    std::error_code ec;
+    for (fs::directory_iterator it(paths.accountsRoot, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename().string().rfind(kPrefix, 0) == 0) found.push_back(it->path());
+    for (const fs::path& aside : found) {
+        const std::string idText = aside.filename().string().substr(kPrefix.size());
+        int64_t userId = 0;
+        if (!idText.empty() && idText.size() <= 18 && std::all_of(idText.begin(), idText.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            userId = std::stoll(idText);
+        const bool listed = std::any_of(s.accounts.begin(), s.accounts.end(), [&](const AccountEntry& e) { return e.userId == userId; });
+        if (userId > 0 && !listed) {  // its removal got as far as the folder: the rest of it goes too
+            std::error_code e2;
+            fs::remove(paths.credentialsFile(userId), e2);
+            forgetOldConfig(paths, userId);
+        }
+        std::error_code e2;
+        fs::remove_all(aside, e2);
+        std::string line = "a removal cut short finished: " + aside.filename().string();
+        if (e2) line += " (not deleted entirely: " + e2.message() + ")";
+        log(LogLevel::Warn, "accounts: %s", line.c_str());
+        lines.push_back(std::move(line));
+    }
+    return lines;
+}
+
+std::optional<AccountsState> rebuildAccounts(const Paths& paths, const std::function<std::string(int64_t)>& nameOf) {
+    const std::string file = paths.accountsFile();
+    std::error_code ec;
+    if (!fs::exists(file, ec) || readAccounts(file)) return std::nullopt;
+    char stamp[32];
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    ::localtime_r(&now, &tm);
+    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+    std::string bad = file + ".bad-" + stamp;
+    for (int n = 2; fs::exists(bad, ec); ++n) bad = file + ".bad-" + stamp + "-" + std::to_string(n);
+    fs::rename(file, bad, ec);
+    if (ec) {
+        log(LogLevel::Error, "accounts: %s can't be read nor put aside (%s)", file.c_str(), ec.message().c_str());
+        return std::nullopt;
+    }
+    std::vector<int64_t> ids;
+    for (const std::string& root : pluginDataRoots(paths)) {  // <accountsRoot>/<userId>/plugins
+        const std::string name = fs::path(root).parent_path().filename().string();
+        ids.push_back(std::stoll(name));
+    }
+    std::sort(ids.begin(), ids.end());
+    AccountsState st;
+    for (int64_t id : ids) {
+        if (st.accounts.size() >= kMaxAccounts) {
+            log(LogLevel::Warn, "accounts: folder of %lld not listed again (%zu accounts at most); left in place",
+                static_cast<long long>(id), kMaxAccounts);
+            continue;
+        }
+        AccountEntry e;
+        e.userId = id;
+        e.name = nameOf ? nameOf(id) : std::string();
+        e.order = static_cast<int>(st.accounts.size());
+        e.needsKey = true;
+        st.accounts.push_back(std::move(e));
+    }
+    st.active = st.accounts.empty() ? 0 : st.accounts.front().userId;
+    if (!writeAccounts(file, st)) {
+        fs::rename(bad, file, ec);
+        return std::nullopt;
+    }
+    log(LogLevel::Error, "accounts: %s couldn't be read: kept as %s; the list was made again from %zu account folder(s), "
+        "each opening only with its API key", file.c_str(), bad.c_str(), st.accounts.size());
+    return st;
 }
 
 bool keepAccountSummary(const std::string& accountsFile, int64_t userId, int64_t items, int unsent, int64_t syncedWallMs,

@@ -291,3 +291,36 @@ TEST_CASE("accounts: the summary fills a name the account didn't have, and never
     CHECK(st->accounts[0].name == "pavel");
     CHECK(st->accounts[1].name == "anna");
 }
+
+TEST_CASE("accounts: removing an account deletes a config.json that names it, and never another's") {
+    Root r;
+    Paths p = r.paths();
+    for (int64_t id : {1, 2}) {
+        REQUIRE(saveCredentials(p, cred(id)));
+        REQUIRE(addAccount(p, id, "user" + std::to_string(id)));
+    }
+    REQUIRE(saveConfig(p.configDir, cred(1)));
+    REQUIRE(removeAccount(p, 2));
+    CHECK(fs::exists(p.configFile()));  // 1's, still listed
+    REQUIRE(removeAccount(p, 1));
+    CHECK_FALSE(fs::exists(p.configFile()));
+    CHECK_FALSE(fs::exists(p.credentialsFile(1)));
+    CHECK(readAccounts(p.accountsFile())->accounts.empty());
+}
+
+TEST_CASE("accounts: needsKeyToOpen round-trips, and an account that needs it asks before opening") {
+    Root r;
+    const std::string f = (r.path / "accounts.json").string();
+    AccountsState s;
+    s.active = 1;
+    s.accounts = {entry(1, 0, false), entry(2, 1, false)};
+    s.accounts[1].needsKey = true;
+    REQUIRE(writeAccounts(f, s));
+    const auto back = readAccounts(f);
+    REQUIRE(back);
+    CHECK_FALSE(back->accounts[0].needsKey);
+    CHECK(back->accounts[1].needsKey);
+    CHECK_FALSE(asksBeforeOpening(back->accounts[0]));
+    CHECK(asksBeforeOpening(back->accounts[1]));
+    CHECK(asksBeforeOpening(entry(3, 2, true)));
+}

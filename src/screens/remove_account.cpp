@@ -30,7 +30,8 @@ void RemoveAccountScreen::load() {
 void RemoveAccountScreen::onShow(Nav&) { load(); }
 
 std::string RemoveAccountScreen::removeLabel() const {
-    return "Remove " + accountName(account_) + " and delete " + sizeText(std::max<int64_t>(account_.bytes, 0));
+    return "Remove " + accountName(account_) + " and delete " +
+           (account_.measuring ? std::string("…") : sizeText(std::max<int64_t>(account_.bytes, 0)));
 }
 
 std::string RemoveAccountScreen::unsentLine() const {
@@ -67,7 +68,8 @@ void RemoveAccountScreen::draw(Canvas& canvas) {
                  strong, {kMargin, kTextY + 200, w, 260}, 5);
     } else {
         std::string line = accountLine(account_, host_.wallMs());
-        if (account_.bytes >= 0) line += " · " + sizeText(account_.bytes) + " on this Kindle";
+        if (account_.measuring) line += " · … on this Kindle";
+        else if (account_.bytes >= 0) line += " · " + sizeText(account_.bytes) + " on this Kindle";
         drawText(cr, line, quiet, {kMargin, kTextY + 200, w, 60}, 1);
         if (const std::string u = unsentLine(); !u.empty()) drawText(cr, u, strong, {kMargin, kUnsentY, w, 130}, 3);
     }
@@ -76,6 +78,12 @@ void RemoveAccountScreen::draw(Canvas& canvas) {
 }
 
 void RemoveAccountScreen::onTick(Nav& nav) {
+    if (account_.measuring && !request_) {  // the size, once measured
+        load();
+        if (account_.measuring) nav.wakeAt(nav.nowMs() + 500);
+        else nav.redrawAll(Waveform::Ui);
+        return;
+    }
     if (!request_) return;
     if (!host_.sent(request_)) {
         nav.wakeAt(nav.nowMs() + 500);

@@ -41,6 +41,9 @@ std::unique_ptr<AccountSession> AccountSession::open(const Paths& p, const Accou
     std::unique_ptr<AccountSession> s(new AccountSession(p, e, c, device, std::move(deps)));
     const AccountPaths& a = s->paths_;
     std::error_code ec;
+    // Its folder is made when it is added; gone (a removal cut short), it is never made again
+    // empty here: that would be a fresh, empty library under the account's name.
+    if (!fs::is_directory(a.root, ec)) return fail("its folder isn't on the Kindle (" + a.root + ")");
     for (const std::string& dir : {a.filesDir, a.creDir, a.stateDir}) {
         fs::create_directories(dir, ec);
         if (ec) return fail("can't make " + dir + ": " + ec.message());
