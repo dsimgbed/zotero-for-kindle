@@ -70,6 +70,10 @@ public:
     // goes on from the Switching screen's ticks.
     bool switchTo(int64_t userId, Why);
     bool busy() const { return phase_ != Phase::Idle; }
+    // Another account's PIN is being asked, nothing left yet; cancelAsking drops that question
+    // (its answer, when it comes, is ignored) and the open account stays.
+    bool asking() const { return phase_ == Phase::Asking; }
+    void cancelAsking();
     // The open account left and stopped as a switch does (steps 1 and 3, without the push: every
     // screen goes first, and the session stops a step later, once they are destroyed), then
     // `then` (removing the last account: Setup). The Switching screen says `title`. False while a

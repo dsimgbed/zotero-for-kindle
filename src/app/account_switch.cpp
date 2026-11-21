@@ -82,6 +82,13 @@ bool AccountSwitcher::switchTo(int64_t userId, Why why) {
     return true;
 }
 
+void AccountSwitcher::cancelAsking() {
+    if (phase_ != Phase::Asking) return;
+    log(LogLevel::Info, "accounts: the PIN of %lld is no longer asked", static_cast<long long>(target_));
+    phase_ = Phase::Idle;
+    target_ = 0;
+}
+
 void AccountSwitcher::skip() {
     if (phase_ != Phase::Pushing) return;
     skipped_ = true;

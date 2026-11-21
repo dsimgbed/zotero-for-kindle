@@ -814,6 +814,105 @@ TEST_CASE("account screens: wake with Lock on sleep — the PIN pad covers the r
     RenderWorker::waitForAll(3000);
 }
 
+namespace {
+
+// Pavel (11, PIN 1357, Lock on sleep) open and then locked on sleep; Anna (22) has PIN 2468.
+void lockedPavel(Rig& k) {
+    k.setPin(11, "1357");
+    k.setPin(22, "2468");
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    k.app.step(0);
+    k.typePin("1357");
+    REQUIRE(k.settle());
+    REQUIRE(k.homeOf() == 11);
+    k.ui->lockNow();
+    k.app.step(0);
+    REQUIRE(k.app.locked());
+}
+
+// The pad that shows asks for `who`'s PIN.
+bool padFor(Rig& k, const std::string& who) {
+    auto* pad = k.topAs<PinPadScreen>();
+    return pad && k.app.locked() && pad->prompt() == "Enter the PIN for " + who;
+}
+
+// The locked pad's Use another account, then (a chooser: more than one, or a locked one) the row of `userId`.
+void useAnother(Rig& k, int64_t userId) {
+    auto* pad = k.topAs<PinPadScreen>();
+    REQUIRE(pad);
+    k.tap(pad->anotherRect());
+    if (auto* p = k.topAs<PinPadScreen>(); p && p == pad && p->chooser()) {
+        const Rect area{0, 0, k.display.w, k.display.h};
+        const auto& rows = p->chooser()->rows();
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (rows[i].userId == userId) k.tap(p->chooser()->rowRect(area, i));
+    }
+    k.app.step(0);
+}
+
+}  // namespace
+
+TEST_CASE("account screens: locked on sleep, Use another account → a locked one → Back ends on the open account's own pad, never its library") {
+    Rig k;
+    lockedPavel(k);
+    REQUIRE(padFor(k, "Pavel"));
+    useAnother(k, 22);
+    REQUIRE(padFor(k, "Anna"));
+    CHECK(k.session()->userId() == 11);  // still open, under the pads
+    k.tap(headerBackRect());
+    k.app.step(0);
+    CHECK(padFor(k, "Pavel"));
+    CHECK_FALSE(k.switcher->busy());
+    CHECK_FALSE(k.topAs<AccountHome>());
+}
+
+TEST_CASE("account screens: locked on sleep, another account's pad → Use another account → the open one shows the open one's pad") {
+    Rig k;
+    lockedPavel(k);
+    useAnother(k, 22);
+    REQUIRE(padFor(k, "Anna"));
+    useAnother(k, 11);  // Anna's only other: Pavel, open (no chooser)
+    CHECK(padFor(k, "Pavel"));
+    CHECK(k.session()->userId() == 11);
+    // Pavel's right PIN: as before.
+    k.typePin("1357");
+    k.app.step(0);
+    CHECK_FALSE(k.app.locked());
+    CHECK(k.homeOf() == 11);
+}
+
+TEST_CASE("account screens: sleep while another account's PIN is asked over the open one locks the open one; its PIN brings everything back") {
+    Rig k;
+    k.setPin(11, "1357");
+    k.setPin(22, "2468");
+    REQUIRE(k.switcher->switchTo(11, AccountSwitcher::Why::Startup));
+    k.app.step(0);
+    k.typePin("1357");
+    REQUIRE(k.settle());
+    k.ui->switchTo(22);
+    k.app.step(0);
+    REQUIRE(padFor(k, "Anna"));
+    REQUIRE(k.switcher->asking());
+    k.ui->lockNow();  // the Kindle sleeps
+    k.app.step(0);
+    CHECK(padFor(k, "Pavel"));
+    CHECK_FALSE(k.switcher->busy());  // Anna's question dropped
+    CHECK(k.topAs<PinPadScreen>()->anotherRect().w > 0);
+    k.typePin("0000");  // wrong: still locked
+    CHECK(padFor(k, "Pavel"));
+    k.typePin("1357");
+    k.app.step(0);
+    CHECK_FALSE(k.app.locked());
+    CHECK(k.homeOf() == 11);
+    // And switching works as before.
+    k.ui->switchTo(22);
+    k.app.step(0);
+    k.typePin("2468");
+    REQUIRE(k.settle());
+    k.app.step(0);
+    CHECK(k.homeOf() == 22);
+}
+
 TEST_CASE("account screens: a suspend not seen as the app went to the background still locks on coming back") {
     Rig k;
     k.setPin(11, "1357");

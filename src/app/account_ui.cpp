@@ -234,6 +234,14 @@ std::vector<AccountSheet::Row> AccountsUi::rowsExcept(int64_t userId) {
     return rows;
 }
 
+// Over the open account, no pad but its own lock pad ever takes the lock away: while the open
+// account is locked (openLocked_), leaving a nested pad (Back, Use another account → itself)
+// shows its lock pad again; only its right PIN (or the reset) clears it.
+void AccountsUi::backToOpen() {
+    if (openLocked_) showOpenLock();
+    else app_.unlock();
+}
+
 void AccountsUi::unlock(int64_t userId, std::function<void(bool)> done) {
     // Not unlocked: a removal waiting for this switch doesn't happen either (and says so).
     auto notUnlocked = [this, done] {
@@ -243,42 +251,70 @@ void AccountsUi::unlock(int64_t userId, std::function<void(bool)> done) {
         }
         done(false);
     };
-    // From an open account (asked before the switch begins) the pad can go back to it.
+    // From an open account (asked before the switch begins) the pad can go back to it — to its
+    // lock pad if it is locked.
     std::function<void(Nav&)> back;
     if (openUserId())
         back = [this, notUnlocked](Nav&) {
             app_.defer([this, notUnlocked] {
-                app_.unlock();
                 notUnlocked();
+                backToOpen();
             });
         };
     app_.lock(pad(
         userId, PinPadScreen::Purpose::Unlock,
         [this, done](Nav&) {
             app_.defer([this, done] {
-                app_.unlock();
+                if (!openUserId()) app_.unlock();  // (from an open account, the switch's clearTo ends the lock)
                 done(true);
+                if (app_.locked() && openUserId()) backToOpen();  // the switch didn't start: as it was
             });
         },
         std::move(back),
         [this, notUnlocked](int64_t other, Nav&) {  // this one stays closed; the switch goes to the one chosen
             app_.defer([this, notUnlocked, other] {
-                app_.unlock();
                 notUnlocked();
-                switcher_.switchTo(other, AccountSwitcher::Why::User);
+                if (other == openUserId()) return backToOpen();  // the open account: its own lock, never a way past it
+                if (!openLocked_) app_.unlock();
+                if (!switcher_.switchTo(other, AccountSwitcher::Why::User) && openUserId()) backToOpen();
+            });
+        }));
+}
+
+void AccountsUi::showOpenLock() {
+    const int64_t open = openUserId();
+    if (!open) return;
+    app_.lock(pad(
+        open, PinPadScreen::Purpose::Unlock,
+        [this](Nav&) {
+            app_.defer([this] {
+                openLocked_ = false;  // its right PIN, or the reset: the only way the lock goes
+                app_.unlock();
+            });
+        },
+        nullptr,
+        [this](int64_t other, Nav&) {
+            app_.defer([this, other] {
+                if (!switcher_.switchTo(other, AccountSwitcher::Why::User)) showOpenLock();
             });
         }));
 }
 
 void AccountsUi::lockNow() {
     const int64_t open = openUserId();
-    if (!open || switcher_.busy() || app_.locked()) return;
+    if (!open) return;
     const auto e = pins_.entry(open);
     if (!e || !e->pin || !e->lockOnSleep) return;
+    // Another account's PIN asked over this one: that question goes; this one is what locks.
+    if (switcher_.asking()) switcher_.cancelAsking();
+    else if (switcher_.busy()) return;  // it is being left: nothing of it shows any more
+    if (removing_) {
+        app_.toast(nameOf(removing_) + " wasn't removed");
+        removing_ = 0;
+    }
     log(LogLevel::Info, "accounts: locked on sleep");
-    app_.lock(pad(
-        open, PinPadScreen::Purpose::Unlock, [this](Nav&) { app_.defer([this] { app_.unlock(); }); }, nullptr,
-        [this](int64_t other, Nav&) { app_.defer([this, other] { switcher_.switchTo(other, AccountSwitcher::Why::User); }); }));
+    openLocked_ = true;
+    showOpenLock();
 }
 
 // ---- Remove from this Kindle -----------------------------------------------------------------------
@@ -336,6 +372,7 @@ void AccountsUi::finishRemoval() {
 }
 
 void AccountsUi::opened(AccountSession& s) {
+    openLocked_ = false;  // opened through its own PIN (or it has none)
     if (removing_ == s.userId()) {  // it was opened again instead (the error screen's choice)
         app_.toast(nameOf(removing_) + " wasn't removed");
         removing_ = 0;

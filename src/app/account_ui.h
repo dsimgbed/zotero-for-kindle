@@ -94,6 +94,8 @@ private:
     std::string nameOf(int64_t userId);
     int64_t openUserId() const;
     void finishRemoval();
+    void showOpenLock();  // the open account's lock pad
+    void backToOpen();    // a nested pad left: the open account's lock pad if locked, else what was there
 
     App& app_;
     AccountSwitcher& switcher_;
@@ -101,6 +103,7 @@ private:
     AccountPins pins_;
     int64_t removing_ = 0;  // the open account to remove once the switch away from it has opened another
     int64_t added_ = 0;     // an account just added: it syncs once open
+    bool openLocked_ = false;  // the open account is locked (on sleep) until its right PIN
 };
 
 }  // namespace zk
