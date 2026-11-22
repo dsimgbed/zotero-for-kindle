@@ -50,8 +50,11 @@ struct RenderEvent {
 // at most this many bytes: three gray pages of the largest screen (the Scribe's 1860 × 2480), as
 // always, but only two color ones on a Colorsoft (spec §Design 5: fewer pages, the same memory).
 constexpr size_t kPageCacheBytes = size_t{3} * 1860 * 2480;
+// The budget for pages of `pageBytes` each: kPageCacheBytes, but always room for the current page
+// and the next (a Scribe ColorSoft's color page is about the whole of kPageCacheBytes).
+size_t pageCacheBudget(size_t pageBytes);
 // The pages kept rendered around `current`, in the order they are drawn: it, the next, the previous,
-// while they fit kPageCacheBytes at `pageBytes` each (the current one always).
+// while they fit pageCacheBudget at `pageBytes` each (all of a document's pages are the same size).
 std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes);
 
 // The saturation boost color pages get (spec §Design 4; page content only, never the UI): each
@@ -107,6 +110,8 @@ public:
     // Waits (up to the timeout) for workers whose readers are gone to finish; before exit.
     static void waitForAll(int timeoutMs);
     int64_t wordPagesCounted() const;
+    // The most bytes of rendered pages the worker has held at once (for tests of the budget).
+    size_t peakCachedBytes() const;
 
     struct Impl;
 

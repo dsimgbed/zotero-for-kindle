@@ -54,7 +54,7 @@ Open a PDF with color figures and an EPUB with color images, make a highlight in
   highlight shows its Zotero color as a light tint with readable text. Underlines, the annotation bar's color
   dots and the color marks beside highlights in Notes are in the full color. Do page turns feel slower than
   with Color off? (Color pages take three times the memory, so only the next page is drawn ahead, not the
-  previous one; on the Scribe Colorsoft's larger screen no page is drawn ahead.)
+  previous one.)
 - **Reader → Display:** the panel shows a **Color** row with On and Off, but only on a color panel. Turn it Off.
   The whole screen should redraw in gray and look as it does on any other Kindle, and the page should be drawn
   again in gray. Turn it On again: the page comes back in color.

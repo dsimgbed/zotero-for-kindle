@@ -28,12 +28,14 @@ int g_live = 0;
 
 }  // namespace
 
+size_t pageCacheBudget(size_t pageBytes) { return std::max(kPageCacheBytes, 2 * pageBytes); }
+
 std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes) {
     std::vector<int> out{current};
     size_t used = pageBytes;
     for (int p : {current + 1, current - 1}) {
         if (p < 0 || p >= pageCount) continue;
-        if (used + pageBytes > kPageCacheBytes) break;
+        if (used + pageBytes > pageCacheBudget(pageBytes)) break;
         used += pageBytes;
         out.push_back(p);
     }
@@ -132,6 +134,29 @@ struct RenderWorker::Impl {
     int current = -1;
     int pageCount = 0;
     std::atomic<int64_t> wordPagesCounted{0};
+    std::atomic<size_t> peakCachedBytes{0};
+    // Before a page is rendered: the pages furthest from the current one go until the cache and the
+    // new page (sized as the cached ones) fit the budget, so a burst of turns or jumps (renders
+    // overtaken, never posted) can't pile pages up.
+    void makeRoom() {
+        if (cache.empty()) return;
+        const size_t each = pageBytes(*cache.begin()->second.image);
+        const size_t budget = pageCacheBudget(each);
+        size_t used = 0;
+        for (const auto& [p, e] : cache) used += pageBytes(*e.image);
+        while (!cache.empty() && used + each > budget) {
+            auto far = std::max_element(cache.begin(), cache.end(), [&](const auto& a, const auto& b) {
+                return std::abs(a.first - current) < std::abs(b.first - current);
+            });
+            used -= pageBytes(*far->second.image);
+            cache.erase(far);
+        }
+    }
+    void notePeak() {
+        size_t sum = 0;
+        for (const auto& [p, e] : cache) sum += pageBytes(*e.image);
+        if (sum > peakCachedBytes) peakCachedBytes = sum;
+    }
 
     void emit(RenderEvent e) {
         {
@@ -149,12 +174,15 @@ struct RenderWorker::Impl {
     Entry& entry(int page) {
         auto it = cache.find(page);
         if (it != cache.end()) return it->second;
+        makeRoom();
         Entry e;
         PageImage img = engine->render(page);
         if (!img.rgb.empty()) boostSaturation(img.rgb.data(), img.rgb.size() / 3, boostPct);
         e.image = std::make_shared<const PageImage>(std::move(img));
         e.highlights = engine->highlights(page, anns);
-        return cache[page] = std::move(e);
+        Entry& kept = cache[page] = std::move(e);
+        notePeak();
+        return kept;
     }
     // The pages pagesToKeep wants around the current one (sized as the current page) not rendered yet.
     std::vector<int> toPrerender() {
@@ -432,15 +460,15 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.landed = landed;
         ev.layoutId = layoutId;
         postCurrent = false;
+        // Kept: what fits around the current page (pagesToKeep); the rest goes, posted or not.
+        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(*cache.at(current).image));
+        for (auto it = cache.begin(); it != cache.end();)
+            it = std::find(keep.begin(), keep.end(), it->first) == keep.end() ? cache.erase(it) : std::next(it);
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != gen) return;  // overtaken while rendering: don't post
         }
         emit(std::move(ev));
-        // Kept: what fits around the current page (pagesToKeep); the rest goes.
-        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(*cache.at(current).image));
-        for (auto it = cache.begin(); it != cache.end();)
-            it = std::find(keep.begin(), keep.end(), it->first) == keep.end() ? cache.erase(it) : std::next(it);
         return;
     }
     // Idle: pre-render the next page, then the previous one (as fits), unless something new arrives.
@@ -481,6 +509,7 @@ void RenderWorker::waitForAll(int timeoutMs) {
 }
 
 int64_t RenderWorker::wordPagesCounted() const { return impl_->wordPagesCounted; }
+size_t RenderWorker::peakCachedBytes() const { return impl_->peakCachedBytes; }
 
 namespace {
 

@@ -136,8 +136,12 @@ TEST_CASE("color pages: a color page counts three bytes a pixel, and fewer of th
     CHECK(pagesToKeep(5, 100, pageBytes(rgb)) == std::vector<int>{5, 6});
     CHECK(3 * pageBytes(rgb) > kPageCacheBytes);
     CHECK(2 * pageBytes(rgb) <= kPageCacheBytes);
-    // A page larger than the budget: still shown, nothing kept around it.
-    CHECK(pagesToKeep(5, 100, kPageCacheBytes + 1) == std::vector<int>{5});
+    // A Scribe ColorSoft's color page (about the whole gray budget): this page and the next still.
+    const size_t scribeColor = size_t{3} * 1860 * 2319;
+    CHECK(pagesToKeep(5, 100, scribeColor) == std::vector<int>{5, 6});
+    CHECK(pageCacheBudget(scribeColor) == 2 * scribeColor);
+    CHECK(pageCacheBudget(pageBytes(gray)) == kPageCacheBytes);
+    CHECK(pagesToKeep(5, 100, kPageCacheBytes + 1) == std::vector<int>{5, 6});
 }
 
 namespace {
@@ -204,6 +208,24 @@ TEST_CASE("color pages: the worker opens in color, boosts the page, keeps fewer 
     CHECK(page->image->rgb.empty());
     CHECK(page->image->gray[0] == 5);
     CHECK(rig.settledRenders() == 2 + 3);  // again, gray: 5, then 6 and 4
+}
+
+TEST_CASE("color pages: a burst of turns and jumps with color pages never holds more than the budget") {
+    WorkerRig rig;
+    Layout scribe;  // a Scribe ColorSoft's page area: a color page is about the whole gray budget
+    scribe.width = 1860;
+    scribe.height = 2319;
+    rig.worker->open("book.epub", DocType::Epub, scribe, DocPosition{"pos:450"}, "", true, 25);
+    REQUIRE(rig.waitPage());
+    rig.engine->delayMs = 15;
+    for (int p : {6, 7, 30, 31, 32, 60, 8, 9, 80, 81}) {  // overtaken renders, jumps, turns
+        rig.worker->show(p);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    rig.settledRenders();
+    const size_t page = size_t{3} * 1860 * 2319;
+    CHECK(rig.worker->peakCachedBytes() <= pageCacheBudget(page));
+    CHECK(rig.worker->peakCachedBytes() >= 2 * page);  // the next page is kept ahead
 }
 
 TEST_CASE("color pages: a gray worker keeps three pages as before") {
