@@ -19,6 +19,7 @@
 #include "ui/text.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
 
@@ -278,6 +279,7 @@ struct ReaderRig {
     FakeNav nav{lib};
     std::unique_ptr<ReaderScreen> reader;
     explicit ReaderRig(ColorCaps caps) {
+        ::unsetenv("ZK_COLOR_BOOST");  // the default boost the goldens were made with, whatever the shell has
         addFontDir("assets/fonts-device");
         fillFixtureLibrary(lib, 10);
         nav.caps = caps;
