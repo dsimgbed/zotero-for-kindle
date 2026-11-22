@@ -310,6 +310,19 @@ TEST_CASE("launcher: after an unclean exit it resets the system ink, not after a
     }
 }
 
+TEST_CASE("launcher: an app that ends with an error code leaves the code in the log; a normal end doesn't") {
+    {
+        Kindle k(app("0.2.0", 139));
+        k.launch();
+        CHECK(readFile(k.home / "log/zotero.log").find("launcher: the app ended with code 139") != std::string::npos);
+    }
+    {
+        Kindle k;
+        k.launch();
+        CHECK(readFile(k.home / "log/zotero.log").find("the app ended") == std::string::npos);
+    }
+}
+
 TEST_CASE("launcher: killed itself while the app runs, it still lets the Kindle sleep") {
     // The system ends the launcher (SIGTERM) along with the app: the app's own signal path can't
     // call lipc, so the launcher's ending is what turns the keep-awake off.

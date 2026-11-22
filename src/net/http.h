@@ -72,7 +72,11 @@ private:
     std::string caBundle_;
     void* handle_ = nullptr;  // CURL*
     std::mutex mutex_;
+    bool ipv4Only_ = false;   // set once a lookup timed out: from then on only IPv4 addresses are asked for
 };
+
+// curl's error for a lookup that ran out of time (curl 28, "Resolving timed out after N milliseconds").
+bool resolveTimedOut(int curlCode, const char* error);
 
 // "METHOD URL" plus headers, with secret header values replaced by ***; never the password.
 std::string maskedForLog(const HttpRequest&);

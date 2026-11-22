@@ -208,6 +208,9 @@ while [ "$starts" -lt 5 ]; do
     wait $!
     code=$?
     rm -f "$ZK_PIDFILE"
+    # How it ended, for the log: 139 a crash (SIGSEGV), 134 an abort, 137 killed (often out of
+    # memory), 3 the app's own stall exit; 0 and 75 are normal.
+    case "$code" in 0|75) ;; *) note "the app ended with code $code" ;; esac
     [ "$code" = 75 ] && continue
     # A new version that ended before confirming: go back now, and start the old one.
     if [ -f "$U/state" ] && read -r word rest < "$U/state" && [ "$word" = tried ]; then

@@ -1,5 +1,8 @@
 #include "net/http.h"
 
+#include "core/log.h"
+#include "net/errors.h"
+
 #include <curl/curl.h>
 
 #include <algorithm>
@@ -81,12 +84,31 @@ curl_socket_t onOpenSocket(void* user, curlsocktype, curl_sockaddr* a) {
     return ::socket(a->family, a->socktype, a->protocol);
 }
 
+// Where a failed request spent its time: the lookup, the connection and the TLS handshake (each
+// as seconds since the start, 0 if not reached), and the address it tried. Host only, never the
+// path or query (a plugin's URL may carry a token).
+void logFailure(CURL* h, const HttpRequest& req, const HttpResponse& resp) {
+    curl_off_t lookup = 0, connect = 0, tls = 0;
+    curl_easy_getinfo(h, CURLINFO_NAMELOOKUP_TIME_T, &lookup);
+    curl_easy_getinfo(h, CURLINFO_CONNECT_TIME_T, &connect);
+    curl_easy_getinfo(h, CURLINFO_APPCONNECT_TIME_T, &tls);
+    const char* ip = nullptr;
+    curl_easy_getinfo(h, CURLINFO_PRIMARY_IP, &ip);
+    log(LogLevel::Warn, "http: %s %s failed after %.1fs: curl %d: %s (lookup %.2fs, connect %.2fs, tls %.2fs, address %s)",
+        req.method.c_str(), hostOf(req.url).c_str(), resp.seconds, resp.curlCode, resp.curlError.c_str(),
+        lookup / 1e6, connect / 1e6, tls / 1e6, ip && *ip ? ip : "none");
+}
+
 void globalInit() {
     static std::once_flag once;
     std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
 
 }  // namespace
+
+bool resolveTimedOut(int curlCode, const char* error) {
+    return curlCode == CURLE_OPERATION_TIMEDOUT && error && std::string(error).rfind("Resolving timed out", 0) == 0;
+}
 
 CurlHttp::CurlHttp(std::string caBundle) : caBundle_(std::move(caBundle)) { globalInit(); }
 
@@ -182,10 +204,27 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
 
     const auto t0 = std::chrono::steady_clock::now();
+    if (ipv4Only_) curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     CURLcode rc = curl_easy_perform(h);
+    if (rc != CURLE_OK && !ipv4Only_ && resolveTimedOut(rc, errbuf)) {
+        // Some routers drop or delay the answer to the IPv6 (AAAA) question that goes out beside
+        // the IPv4 one, and the lookup waits out its retries. Ask for IPv4 only from now on; once
+        // again here, unless the caller's whole-transfer limit is in force (nothing was sent yet).
+        ipv4Only_ = true;
+        log(LogLevel::Warn, "http: looking up %s timed out; asking for IPv4 addresses only from now on",
+            hostOf(req.url).c_str());
+        if (req.timeoutMs == 0 && !(req.cancel && *req.cancel)) {
+            errbuf[0] = 0;
+            curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            rc = curl_easy_perform(h);
+        }
+    }
     resp.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     resp.curlCode = rc;
-    if (rc != CURLE_OK) resp.curlError = errbuf[0] ? errbuf : curl_easy_strerror(rc);
+    if (rc != CURLE_OK) {
+        resp.curlError = errbuf[0] ? errbuf : curl_easy_strerror(rc);
+        if (rc != CURLE_ABORTED_BY_CALLBACK) logFailure(h, req, resp);
+    }
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &resp.status);
 
     curl_slist_free_all(headers);

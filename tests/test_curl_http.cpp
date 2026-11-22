@@ -90,3 +90,20 @@ TEST_CASE("curl http: with a stall limit and no total limit, a download that kee
         CHECK(s < 8.0);  // the stall limit ended it, not the server closing (at 10 s)
     }
 }
+
+TEST_CASE("curl http: only a lookup that ran out of time counts as a lookup timeout") {
+    CHECK(resolveTimedOut(28, "Resolving timed out after 10002 milliseconds"));
+    CHECK_FALSE(resolveTimedOut(28, "Connection timed out after 10002 milliseconds"));
+    CHECK_FALSE(resolveTimedOut(28, "Operation timed out after 10002 milliseconds with 0 bytes received"));
+    CHECK_FALSE(resolveTimedOut(6, "Resolving timed out after 10002 milliseconds"));
+    CHECK_FALSE(resolveTimedOut(28, nullptr));
+}
+
+TEST_CASE("curl http: a failed request still answers, with curl's code and error") {
+    CurlHttp http("");
+    HttpRequest req;
+    req.url = "http://127.0.0.1:1/x";  // nothing listens on port 1
+    const HttpResponse r = http.send(req);
+    CHECK(r.curlCode == 7);
+    CHECK_FALSE(r.curlError.empty());
+}
