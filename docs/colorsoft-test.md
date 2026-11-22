@@ -66,7 +66,14 @@ Open a PDF with color figures and an EPUB with color images, make a highlight in
   the keyboard (Search) and type, pull down the quick settings from the top, and let the screensaver
   come on while a sync runs. The app must never draw over the keyboard, the pulldown or the screensaver.
   The log shows `color: framebuffer writes held (…)` while something covers the window and `resumed` after.
-  When the keyboard closes, the window should show in color again (`color: the window again in color`).
+  When the keyboard closes over a colored page, the window should show in color again (`color: the window
+  again in color`).
+- **The `fb` path writes only color.** Only an update that has color in it goes to the framebuffer; the home
+  screen, the library, menus and gray pages are drawn by X alone, exactly as on a gray Kindle. If the
+  framebuffer path garbles a page (shifted or doubled pixels), the rest of the app should still look right,
+  and Reader → Display → Color Off is the way out. If a framebuffer write fails, the log says
+  `color: writing … to the framebuffer failed (…): no framebuffer path` once, and the app leaves the `fb` path (gray, or `x` where X has color) until it
+  is started again.
 - **Menus and typing** should be as fast as on other Kindles. Color waveforms are only used where there is
   color.
 

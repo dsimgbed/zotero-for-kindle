@@ -1,8 +1,9 @@
 // Kindle display: an X11 window under the awesome WM + explicit e-ink refresh via FBInk.
 // See research/spikes/s2-s5-window-refresh.md.
 // Color (Colorsoft, platform/color.h): the X path when X has a 24-bit TrueColor visual (a 32-bit
-// image), else the framebuffer path (X keeps its 8-bit gray; the region's RGB goes to the
-// framebuffer through FBInk right before the refresh). Color off is the gray path as before.
+// image), else the framebuffer path (X keeps its 8-bit gray; a colored region's RGB goes to the
+// framebuffer through FBInk right before the refresh, gray ones are X's alone). Color off is the
+// gray path as before.
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <fbink.h>
@@ -213,7 +214,8 @@ public:
             colored ? "" : "not ");
         put(r);
         // Without a flash (the test flashed the screen white before), as the app's own updates.
-        const bool shown = fb_ >= 0 && (path != ColorPath::Fb || writeFb(r)) && refresh(r, Waveform::Quality, wfm, colored);
+        const bool shown = fb_ >= 0 && (path != ColorPath::Fb || !fbWritesRegion(colored, true) || writeFb(r)) &&
+                           refresh(r, Waveform::Quality, wfm, colored);
         if (fb_ >= 0) {
             const auto t0 = std::chrono::steady_clock::now();
             const int rc = fbink_wait_for_complete(fb_, LAST_MARKER);
@@ -221,6 +223,8 @@ public:
             log(LogLevel::Info, "color test: refresh done in %lld ms (wait %d)", static_cast<long long>(ms.count()), rc);
         }
         path_ = saved;
+        if (!fbRawOk_) decideColor();  // a failed write ended the framebuffer path
+        else if (path_ != ColorPath::Fb) releaseFbBuffers();
         return shown;
     }
     // The window manager turns the screen for our window when the title's orientation field
@@ -459,8 +463,10 @@ private:
     void putAndRefresh(Rect r, Waveform w, bool colored) {
         put(r);
         if (fb_ < 0) return;
-        // Covered or behind: X's gray only (X clips it to what's visible; the framebuffer wouldn't).
-        if (path_ == ColorPath::Fb && (!gate_.allowed() || !writeFb(r))) colored = false;
+        // Only a colored region goes to the framebuffer, and only while nothing can be over the
+        // window (X clips its gray to what's visible; the framebuffer wouldn't). The rest is X's
+        // gray alone, as on a gray Kindle.
+        if (path_ == ColorPath::Fb && (!fbWritesRegion(colored, gate_.allowed()) || !writeFb(r))) colored = false;
         ColorWfm cw = path_ == ColorPath::Gray ? ColorWfm::Keep : colorWaveform(w, colored);
         if (cw != ColorWfm::Keep && wfmAuto_) cw = ColorWfm::Auto;
         refresh(r, w, cw, colored);
@@ -502,14 +508,15 @@ private:
     }
 
     // The framebuffer path may write again: the whole window once in color from rgb_ (what was
-    // shown meanwhile, under the keyboard or a dialog, went out gray).
+    // shown meanwhile, under the keyboard or a dialog, went out gray). A gray window: X has it.
     void recolor() {
         if (path_ != ColorPath::Fb || !gate_.allowed() || fb_ < 0 || rgb_.size() != (size_t)w_ * h_) return;
         const Rect all{0, 0, w_, h_};
-        waitIfColoredBefore();
         const bool colored = isColored(rgb_.data(), w_ * 4, all);
+        if (!fbWritesRegion(colored, true)) return;
+        waitIfColoredBefore();
         if (!writeFb(all)) return;
-        ColorWfm cw = colored ? ColorWfm::Gcc16 : ColorWfm::Gc16;
+        ColorWfm cw = ColorWfm::Gcc16;
         if (wfmAuto_) cw = ColorWfm::Auto;
         log(LogLevel::Info, "color: the window again in color (%s)", colorWfmName(cw));
         refresh(all, Waveform::Quality, cw, colored);
@@ -554,14 +561,23 @@ private:
         const int x = r.x + originX_ - fbView_.horiOrigin, y = r.y + originY_ - (fbView_.vertOrigin - fbView_.vertOffset);
         const int rc = fbink_print_raw_data(fb_, packed_.data(), r.w, r.h, packed_.size(), static_cast<short>(x),
                                             static_cast<short>(y), &rawCfg_);
-        if (rc == -ENOSYS) {
-            log(LogLevel::Warn, "color: FBInk was built without image support: no framebuffer path");
+        if (rc < 0) {
+            // Once, and for the session: the path is chosen again without the framebuffer (X's
+            // gray, which X has drawn already, or the X path), so no more writes or warnings.
+            if (rc == -ENOSYS) log(LogLevel::Warn, "color: FBInk was built without image support: no framebuffer path");
+            else
+                log(LogLevel::Warn, "color: writing %dx%d at (%d,%d) to the framebuffer failed (%d): no framebuffer path", r.w,
+                    r.h, x, y, rc);
             fbRawOk_ = false;
             decideColor();
-        } else if (rc < 0) {
-            log(LogLevel::Warn, "color: writing %dx%d at (%d,%d) to the framebuffer failed: %d", r.w, r.h, x, y, rc);
         }
         return rc >= 0;
+    }
+
+    // Off the framebuffer path, its buffers go (up to 4 + 3 bytes a pixel of the window).
+    void releaseFbBuffers() {
+        rgb_ = {};
+        packed_ = {};
     }
 
     // X's default visual: a 32-bit image of byte-wide channels on a 24-bit TrueColor one (the X
@@ -613,8 +629,9 @@ private:
             image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()), w_, h_,
                                   8, w_);
         }
+        packed_ = {};  // sized for the old window
         if (path_ == ColorPath::Fb) rgb_.assign((size_t)w_ * h_, 0xffffff);
-        else rgb_ = {};
+        else releaseFbBuffers();
     }
 
     // The framebuffer path may write the window's pixels: FBInk is up, can write images, and its
@@ -645,6 +662,7 @@ private:
         caps_ = decideColorCaps(panelFound_, colorSetting_, zkColor);
         path_ = chooseColorPath(caps_, x32_, fbWritable(), forced);
         if (caps_.on && path_ == ColorPath::Gray) caps_.on = false;  // no way to show it
+        if (path_ != ColorPath::Fb) releaseFbBuffers();
         log(LogLevel::Info,
             "color: panel %s, setting %s, ZK_COLOR=%s ZK_COLOR_PATH=%s ZK_COLOR_WFM=%s; X %s, framebuffer %s "
             "(view %dx%d, origin %d,%d offset %d; window %dx%d at %d,%d) -> path %s, color %s",

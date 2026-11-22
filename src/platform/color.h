@@ -82,6 +82,13 @@ private:
     FbWriteState s_;
 };
 
+// Whether the framebuffer path writes an update's RGB: only a colored region, and only while the
+// gate is open. Everything else (the UI, gray pages, anything while covered) is X's 8-bit gray
+// alone, exactly as on a gray Kindle; a gray update over what was colored is right that way too,
+// since X draws its gray into the framebuffer over the old color. A failed write ends the
+// framebuffer path for the session (x11_display: the path is chosen again without it).
+bool fbWritesRegion(bool colored, bool gateAllowed);
+
 // The masks fit toXrgb: each channel's bits contiguous, 1 to 8 of them, not overlapping.
 bool usableMasks(uint32_t rmask, uint32_t gmask, uint32_t bmask);
 

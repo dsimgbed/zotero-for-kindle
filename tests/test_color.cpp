@@ -293,6 +293,20 @@ TEST_CASE("color: the gate starts closed and asks for one repaint in color each 
     CHECK(gate.allowed());
 }
 
+TEST_CASE("color: the framebuffer path writes only colored regions, and only while the gate is open") {
+    CHECK(fbWritesRegion(true, true));
+    CHECK_FALSE(fbWritesRegion(false, true));   // the UI, a gray page: X's gray alone, as on a gray Kindle
+    CHECK_FALSE(fbWritesRegion(true, false));   // covered or behind: X's gray (X clips it)
+    CHECK_FALSE(fbWritesRegion(false, false));
+}
+
+TEST_CASE("color: after a failed framebuffer write the path is chosen without it, even when forced") {
+    const ColorCaps on{true, true};
+    CHECK(chooseColorPath(on, false, false, nullptr) == ColorPath::Gray);
+    CHECK(chooseColorPath(on, false, false, "fb") == ColorPath::Gray);
+    CHECK(chooseColorPath(on, true, false, "fb") == ColorPath::X);
+}
+
 TEST_CASE("color: a gray Kindle's device file gets no colorScreen key from saving other settings") {
     DeviceSettings dev("");
     Db db{Db::open(":memory:")};
