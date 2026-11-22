@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <string>
 
 #include "docs/document.h"
 
@@ -17,6 +18,23 @@ uint8_t shadeOf(const std::string& color) {
     if (c == "#e56eee") return 200;  // magenta
     if (c == "#f19837") return 210;  // orange
     return 200;                      // gray #aaaaaa and anything else
+}
+
+uint32_t zoteroRgb(const std::string& color) {
+    if (color.size() != 7 || color[0] != '#' ||
+        !std::all_of(color.begin() + 1, color.end(), [](unsigned char ch) { return std::isxdigit(ch); }))
+        return 0xaaaaaa;  // Zotero's gray
+    return static_cast<uint32_t>(std::stoul(color.substr(1), nullptr, 16));
+}
+
+uint32_t highlightTint(const std::string& color) {
+    const uint32_t c = zoteroRgb(color);
+    uint32_t out = 0;
+    for (int shift : {16, 8, 0}) {
+        const double v = 0.45 * ((c >> shift) & 0xff) + 0.55 * 255;
+        out |= static_cast<uint32_t>(v + 0.5) << shift;
+    }
+    return out;
 }
 
 }  // namespace zk

@@ -75,6 +75,13 @@ public:
         return out;
     }
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>& anns) override {
+        std::vector<HighlightBox> out = boxes(page, anns);
+        for (auto& b : out)  // each in its annotation's colour
+            for (const auto& a : anns)
+                if (a.key == b.annotationKey) b.color = a.color;
+        return out;
+    }
+    std::vector<HighlightBox> boxes(int page, const std::vector<AnnotationRecord>& anns) {
         std::vector<HighlightBox> out;
         for (const auto& a : anns)
             if (a.pageLabel == std::to_string(page) && a.type == "ink") {  // position: device points as drawn

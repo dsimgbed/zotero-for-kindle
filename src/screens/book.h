@@ -32,6 +32,7 @@ private:
     std::vector<AnnotationRecord> all_;
     Pager pager_{0, 1};
     bool loading_ = false;
+    bool color_ = false;  // a color screen (ColorCaps::on, at onShow): notes marked in their Zotero colours
     std::optional<UserError> error_;
 };
 

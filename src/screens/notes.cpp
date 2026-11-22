@@ -84,6 +84,7 @@ void NotesScreen::load(Library& lib) {
 }
 
 void NotesScreen::onShow(Nav& nav) {
+    color_ = nav.colorCaps().on;
     if (searching_) {
         nav.keyboard().show();
         const Rect kb = nav.keyboard().bounds();
@@ -176,7 +177,8 @@ void NotesScreen::draw(Canvas& canvas) {
             drawText(cr, lines_[i].itemTitle.empty() ? "Untitled" : lines_[i].itemTitle, {kSans, 7.5, 700, false, kSecondary},
                      {rects[i].x, rects[i].y + 22, rects[i].w, 44}, 1);
         else
-            drawNoteRow(cr, rects[i], lines_[i].note.annotation, true, lines_[i].author);
+            drawNoteRow(cr, rects[i], lines_[i].note.annotation, true, lines_[i].author,
+                        noteMarkColour(lines_[i].note.annotation, color_));
     }
     if (searching_) drawPageIndicator(cr, footerRect(), pager_.page(), pager_.pages());
     else drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());

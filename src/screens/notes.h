@@ -68,6 +68,7 @@ private:
     std::optional<JumpSheet> jump_;
     Pager pager_{0, 1};
     bool allOffline_ = false;
+    bool color_ = false;  // a color screen (ColorCaps::on, at onShow): notes marked in their Zotero colours
     std::string discardKey_;
     OpenBook open_;  // asking "Discard your Kindle change?" for this conflict
     bool searching_ = false;

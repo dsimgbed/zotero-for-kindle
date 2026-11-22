@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "docs/document.h"
 #include "platform/display.h"
 #include "screens/annotation_bar.h"
 #include "ui/canvas.h"
@@ -26,18 +27,6 @@ void fill(cairo_t* cr, Rect r, uint32_t c) {
     rgb(cr, c);
     cairo_rectangle(cr, r.x, r.y, r.w, r.h);
     cairo_fill(cr);
-}
-
-uint32_t parseHex(const std::string& s) { return static_cast<uint32_t>(std::stoul(s.substr(1), nullptr, 16)); }
-
-// Over white at 45%: the tint the reader gives highlights on color panels (spec, Highlights).
-uint32_t tint(uint32_t c) {
-    uint32_t out = 0;
-    for (int shift : {16, 8, 0}) {
-        const double v = 0.45 * ((c >> shift) & 0xff) + 0.55 * 255;
-        out |= static_cast<uint32_t>(v + 0.5) << shift;
-    }
-    return out;
 }
 
 Rect band(const Canvas& c, int top, int h) { return {kPad, top, c.width() - 2 * kPad, h}; }
@@ -91,9 +80,9 @@ void drawColorTestCard(Canvas& canvas, const std::string& caption) {
     const int top = 840, rowH = std::max(60, (canvas.height() - top - kPad) / 8);
     for (size_t i = 0; i < colours.size(); ++i) {
         const int y = top + static_cast<int>(i) * rowH;
-        const uint32_t c = parseHex(colours[i].hex);
-        fill(cr, {kPad, y + 6, 160, rowH - 12}, c);
-        fill(cr, {kPad + 190, y + 6, canvas.width() - 2 * kPad - 190, rowH - 12}, tint(c));
+        fill(cr, {kPad, y + 6, 160, rowH - 12}, zoteroRgb(colours[i].hex));
+        // The tint the reader gives highlights on color panels (highlightTint: 45% over white).
+        fill(cr, {kPad + 190, y + 6, canvas.width() - 2 * kPad - 190, rowH - 12}, highlightTint(colours[i].hex));
         centredText(cr, std::string(colours[i].name) + "  " + colours[i].hex + "  highlighted text", label,
                     {kPad + 210, y, canvas.width() - 2 * kPad - 230, rowH}, Align::Left);
     }

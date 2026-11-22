@@ -45,7 +45,10 @@ BookNotesScreen::BookNotesScreen(ItemRow row, std::function<void(const Annotatio
 
 BookNotesScreen::~BookNotesScreen() = default;
 
-void BookNotesScreen::onShow(Nav& nav) { reload(nav); }
+void BookNotesScreen::onShow(Nav& nav) {
+    color_ = nav.colorCaps().on;
+    reload(nav);
+}
 
 void BookNotesScreen::reload(Nav& nav) {
     all_ = nav.library().annotationsFor(row_.attachmentKey);
@@ -102,10 +105,10 @@ void BookNotesScreen::draw(Canvas& canvas) {
     auto rects = rowRects();
     for (size_t k = 0; k < rects.size(); ++k) {
         const AnnotationRecord& a = all_[static_cast<size_t>(pager_.offset()) + k];
-        drawNoteRow(cr, rects[k], a, false, authors_.count(a.key) ? authors_.at(a.key) : "");
+        drawNoteRow(cr, rects[k], a, false, authors_.count(a.key) ? authors_.at(a.key) : "", noteMarkColour(a, color_));
     }
     drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
-    if (editor_) editor_->draw(cr);
+    if (editor_) editor_->draw(cr, color_);
 }
 
 void BookNotesScreen::onGesture(const Gesture& g, Nav& nav) {

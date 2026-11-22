@@ -46,6 +46,21 @@ struct RenderEvent {
                                      // Placed: page (-1 if it can't be placed), chapter, progress
 };
 
+// Rendered pages kept around the current one (the current, then the next, then the previous) are
+// at most this many bytes: three gray pages of the largest screen (the Scribe's 1860 × 2480), as
+// always, but only two color ones on a Colorsoft (spec §Design 5: fewer pages, the same memory).
+constexpr size_t kPageCacheBytes = size_t{3} * 1860 * 2480;
+// The pages kept rendered around `current`, in the order they are drawn: it, the next, the previous,
+// while they fit kPageCacheBytes at `pageBytes` each (the current one always).
+std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes);
+
+// The saturation boost color pages get (spec §Design 4; page content only, never the UI): each
+// pixel moved away from its HSP brightness by `pct` percent; grays stay exactly as they are.
+// `rgb`: `px` pixels of R, G, B.
+void boostSaturation(uint8_t* rgb, size_t px, int pct);
+// ZK_COLOR_BOOST (`env`, nullptr when unset): 0..100, else the default 25.
+int colorBoostPct(const char* env);
+
 class RenderWorker {
 public:
     using Factory = std::function<std::unique_ptr<DocumentEngine>(DocType)>;
@@ -56,7 +71,11 @@ public:
     RenderWorker& operator=(const RenderWorker&) = delete;
 
     // `zoteroStart`: where to open when `start` is empty (Zotero's position, from another device).
-    void open(std::string path, DocType, Layout, DocPosition start, std::string zoteroStart = "");
+    // `color`: pages in color (DocumentEngine::setColor), boosted by `boostPct` (colorBoostPct).
+    void open(std::string path, DocType, Layout, DocPosition start, std::string zoteroStart = "", bool color = false,
+              int boostPct = 0);
+    // Display → Color changed: the pages are rendered again, in color or gray; the current one is posted.
+    void setColor(bool on, int boostPct);
     // Re-paginates; Opened again, at `keep`. Pages laid out with it carry the id (RenderEvent::layoutId).
     uint64_t setLayout(Layout, DocPosition keep);
     void show(int page);

@@ -33,6 +33,7 @@ public:
     int pageCount() override;
     int viewsPerPage() override;
     PageImage render(int page) override;
+    void setColor(bool on) override { color_ = on; }
     DocPosition positionOfPage(int page) override;
     int pageOf(const DocPosition&) override;
     std::vector<TocEntry> toc() override;
@@ -104,6 +105,7 @@ private:
 
     fz_context* ctx_ = nullptr;
     size_t storeBytes_ = 0;
+    bool color_ = false;  // pages in RGB (a color screen)
     fz_document* doc_ = nullptr;
     Layout layout_;
     std::vector<TocEntry> toc_;  // in PDF pages

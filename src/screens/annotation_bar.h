@@ -37,6 +37,9 @@ struct ZoteroColour {
     const char* name;
 };
 const std::array<ZoteroColour, 8>& zoteroColours();
+// The colour of a note row's mark (drawNoteRow): on a color screen (`color`) the annotation's
+// Zotero colour; nullopt (gray) otherwise.
+std::optional<uint32_t> noteMarkColour(const AnnotationRecord&, bool color);
 
 class Library;
 class Nav;
@@ -125,7 +128,8 @@ public:
     // A new selection's: a chip tapped marks or unmarks its tag (Create).
     void toggleTag(const std::string& tag);
 
-    void draw(cairo_t*) const;
+    // `color`: the dots in Zotero's colours (a color screen), else in their gray shades.
+    void draw(cairo_t*, bool color = false) const;
     Hit hit(Point) const;
 
     static constexpr int kH = 250 + 12 + TagRow::kH;
@@ -183,7 +187,7 @@ public:
     // True once since the last call if the annotation changed (the page's highlights need redoing).
     bool takeChanged();
 
-    void draw(cairo_t*) const;
+    void draw(cairo_t*, bool color = false) const;  // `color`: as AnnotationBar::draw
     Result onTap(Point, Nav&);
     Result onKey(const KeyEvent&, Nav&);
 

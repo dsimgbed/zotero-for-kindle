@@ -50,8 +50,14 @@ Send back the photos and `log/color-test.log`.
 
 Open a PDF with color figures and an EPUB with color images, make a highlight in each color, and then check:
 
+- **Pages and highlights:** the PDF's figures and the EPUB's pictures are in color, text stays black, and each
+  highlight shows its Zotero color as a light tint with readable text. Underlines, the annotation bar's color
+  dots and the color marks beside highlights in Notes are in the full color. Do page turns feel slower than
+  with Color off? (Color pages take three times the memory, so only the next page is drawn ahead, not the
+  previous one; on the Scribe Colorsoft's larger screen no page is drawn ahead.)
 - **Reader → Display:** the panel shows a **Color** row with On and Off, but only on a color panel. Turn it Off.
-  The whole screen should redraw in gray and look as it does on any other Kindle. Turn it On again.
+  The whole screen should redraw in gray and look as it does on any other Kindle, and the page should be drawn
+  again in gray. Turn it On again: the page comes back in color.
 - **Landscape:** turn to landscape in Display and look at the log. A line saying
   `color: the framebuffer's view … isn't turned as the window … gray here` means that on the framebuffer path
   the framebuffer doesn't turn with the window. The app then stays gray in landscape on purpose, so that it
@@ -75,7 +81,7 @@ Each override is set when Zotero starts, for example:
 | `ZK_COLOR=1` | Treats the device as a color panel even if FBInk says it isn't one. |
 | `ZK_COLOR_PATH=x` / `fb` | Forces that path where it is possible. The log says which path was taken. |
 | `ZK_COLOR_WFM=auto` | Lets the driver choose the waveform (AUTO) instead of GL16/GLRC16/GC16/GCC16, for comparison. |
-| `ZK_COLOR_BOOST=<pct>` | Sets the saturation boost of page images (default 25). Not active yet: it arrives with color pages. |
+| `ZK_COLOR_BOOST=<pct>` | Sets the saturation boost of page content, PDF pages and EPUB pictures (0 to 100, default 25). Try 0 and 50 if colors look washed out or garish. |
 
 ## What to report
 

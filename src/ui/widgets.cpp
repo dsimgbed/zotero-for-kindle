@@ -501,9 +501,17 @@ std::string noteRowQuietLine(const AnnotationRecord& a, const std::string& autho
     return "by " + author + (tags.empty() ? "" : " · " + tags);
 }
 
-void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons, const std::string& author) {
+void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons, const std::string& author,
+                 std::optional<uint32_t> markColour) {
     fillRect(cr, r, 255);
-    fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
+    if (markColour) {  // a color screen: the annotation's Zotero colour
+        const uint32_t v = *markColour;
+        cairo_set_source_rgb(cr, (v >> 16) / 255.0, ((v >> 8) & 0xff) / 255.0, (v & 0xff) / 255.0);
+        cairo_rectangle(cr, r.x, r.y + 20, 8, r.h - 40);
+        cairo_fill(cr);
+    } else {
+        fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
+    }
     const std::string mark = noteSyncMark(a);
     const std::string tags = noteRowQuietLine(a, author);
     constexpr int kTagsH = 44;

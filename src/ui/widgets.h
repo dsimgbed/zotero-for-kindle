@@ -2,6 +2,8 @@
 // Reusable pieces of the screens (mockup C): list rows, tab bar, chips, banner, toggle,
 // buttons, page indicator. Each draws into a rect; the matching *Rect functions hit-test.
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -96,7 +98,10 @@ void drawToast(cairo_t*, Rect, const std::string& text);
 constexpr int kNoteRowH = 220;
 // conflictButtons: only where a screen handles Re-apply · Discard (the Notes tab). author: another
 // member's name (a group's annotation, annotationAuthor()): "by Anna" in the quiet line under the comment.
-void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false, const std::string& author = "");
+// `markColour`: the colour (0xRRGGBB) of the mark beside the row: on a color screen the annotation's
+// Zotero colour (zoteroRgb); nullopt, a gray one.
+void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false, const std::string& author = "",
+                 std::optional<uint32_t> markColour = std::nullopt);
 std::string noteSyncMark(const AnnotationRecord&);  // "" when it is simply in Zotero
 std::string noteRowTags(const AnnotationRecord&);   // "#method · #to-cite" ("" without tags)
 // The quiet line under a note's comment: "by Anna · #method · #to-cite" ("" with neither).
