@@ -371,7 +371,9 @@ PageImage PdfEngine::render(int page) {
     PageImage img;
     img.width = layout_.width;
     img.height = layout_.height;
-    img.gray.assign(static_cast<size_t>(img.width) * img.height, 255);
+    const int n = color_ ? 3 : 1;  // bytes a pixel: RGB on a color screen, else gray
+    std::vector<uint8_t>& out = color_ ? img.rgb : img.gray;
+    out.assign(static_cast<size_t>(img.width) * img.height * n, 255);
     double scale, dx, dy;
     if (!fit(page, scale, dx, dy)) return img;
     // Drawn into a pixmap the page area's size: a view (column view) draws only what it shows,
@@ -387,7 +389,8 @@ PageImage PdfEngine::render(int page) {
         const fz_matrix ctm = fz_concat(fz_scale(static_cast<float>(scale), static_cast<float>(scale)),
                                         fz_translate(static_cast<float>(dx), static_cast<float>(dy)));
         pg = fz_load_page(ctx_, doc_, src(page));
-        pix = fz_new_pixmap_with_bbox(ctx_, fz_device_gray(ctx_), fz_make_irect(0, 0, img.width, img.height), nullptr, 0);
+        pix = fz_new_pixmap_with_bbox(ctx_, color_ ? fz_device_rgb(ctx_) : fz_device_gray(ctx_),
+                                      fz_make_irect(0, 0, img.width, img.height), nullptr, 0);
         fz_clear_pixmap_with_value(ctx_, pix, 255);
         dev = fz_new_draw_device(ctx_, fz_identity, pix);
         fz_run_page(ctx_, pg, dev, ctm, nullptr);
@@ -413,7 +416,8 @@ PageImage PdfEngine::render(int page) {
         for (int x = 0; x < pw; ++x) {
             const int tx = px + x;
             if (tx < 0 || tx >= img.width) continue;
-            img.gray[static_cast<size_t>(ty) * img.width + tx] = samples[y * stride + x];
+            const size_t to = (static_cast<size_t>(ty) * img.width + tx) * n;
+            for (int c = 0; c < n; ++c) out[to + c] = samples[y * stride + x * n + c];
         }
     }
     fz_drop_pixmap(ctx_, pix);
@@ -777,6 +781,7 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
         if (a.type == "ink") {  // strokes, boxed by their extent
             HighlightBox b{a.key, {}, shadeOf(a.color), false};
             b.kind = HighlightBox::Kind::Ink;
+            b.color = a.color;
             b.strokePx = std::max(3, static_cast<int>(std::lround(pos.width * scale)));
             Rect extent;
             for (const auto& xy : pos.paths) {
@@ -803,6 +808,7 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
             if (x1 <= x0 || y1 <= y0) continue;
             if (Rect{x0, y0, x1 - x0, y1 - y0}.intersected(frame).empty()) continue;  // on another view
             HighlightBox b{a.key, {x0, y0, x1 - x0, y1 - y0}, shadeOf(a.color), a.type == "underline"};
+            b.color = a.color;
             if (a.type == "text") {
                 b.kind = HighlightBox::Kind::Text;
                 b.text = a.comment;

@@ -357,6 +357,7 @@ void App::redrawAll(Waveform w) {
 
 void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& paint) {
     if (caller_ && caller_ != visibleTop()) return;
+    display_.setKeyboardShown(!keyboard_.bounds().empty());
     r = r.intersected({0, 0, canvas_.width(), canvas_.height()});
     if (r.empty()) return;
     cairo_t* cr = canvas_.cr();
@@ -371,6 +372,11 @@ void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& pain
     }
     inkDirty_ = inkDirty_.united(r);
     presentInk(false);
+}
+
+void App::setColorScreen(bool on) {
+    display_.setColorScreen(on);
+    redrawAll(Waveform::Full);  // everything again, in color or without, and no ghosts of the other
 }
 
 void App::setSystemInk(bool on) {
@@ -702,6 +708,7 @@ void App::step(int timeout_ms) {
 }
 
 void App::flush() {
+    display_.setKeyboardShown(!keyboard_.bounds().empty());  // before anything is shown under it
     if (pending_.empty() || !visibleTop()) return;
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
     Rect fast, ui, quality, full;

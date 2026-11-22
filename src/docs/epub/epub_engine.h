@@ -27,6 +27,7 @@ public:
     void setLayout(const Layout&) override;
     int pageCount() override;
     PageImage render(int page) override;
+    void setColor(bool on) override { color_ = on; }
     DocPosition positionOfPage(int page) override;
     int pageOf(const DocPosition&) override;
     int pageOfPlaced(const DocPosition&) override;
@@ -53,6 +54,7 @@ private:
     std::vector<Rect> windowRects(const ldomXPointer& start, const ldomXPointer& end);
     bool load(const std::string& path, UserError*, bool textOnly);
     bool textOnly_ = false;
+    bool color_ = false;  // pages in RGB (a color screen)
     bool html_ = false;  // a saved web page, not an EPUB  // opened with openForText: crengine's document cache is never used
     // The current page's <a> links (cached for one page): their element, href, text and boxes.
     struct PageLink {

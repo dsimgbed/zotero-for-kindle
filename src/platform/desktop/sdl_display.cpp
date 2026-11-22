@@ -1,9 +1,12 @@
 // Desktop display for development: an SDL window showing the 8-bit gray framebuffer at
-// half size. Mouse = finger. Waveforms are logged, not simulated.
+// half size. Mouse = finger. Waveforms are logged, not simulated. ZK_COLOR=1 imitates a color
+// panel (Colorsoft): with Display → Color on, the window shows the canvas's colors.
 #include <cmath>
 #include <SDL.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 
 #include "core/log.h"
 #include "core/wake.h"
@@ -45,6 +48,7 @@ public:
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
         tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
         gray_.assign((size_t)kW * kH, 0xff);
+        rgb_.assign((size_t)kW * kH, 0xffffff);
         gWakeEvent = SDL_RegisterEvents(1);
         setUiWaker(pushWake);
     }
@@ -62,6 +66,7 @@ public:
         SDL_DestroyTexture(tex_);
         tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
         gray_.assign((size_t)kW * kH, 0xff);
+        rgb_.assign((size_t)kW * kH, 0xffffff);
         resized_ = true;
     }
     Orientation orientation_ = Orientation::Portrait;
@@ -81,10 +86,37 @@ public:
     void present(const Canvas& canvas, Rect r, Waveform w) override {
         r = r.intersected({0, 0, kW, kH});
         if (r.empty()) return;
-        canvas.toGray(gray_.data(), kW, r);
-        log(LogLevel::Debug, "present %d,%d %dx%d %s", r.x, r.y, r.w, r.h,
-            w == Waveform::Fast || w == Waveform::Ink ? "fast" : w == Waveform::Ui ? "ui" : w == Waveform::Quality ? "quality" : "full");
+        const char* name =
+            w == Waveform::Fast || w == Waveform::Ink ? "fast" : w == Waveform::Ui ? "ui" : w == Waveform::Quality ? "quality" : "full";
+        if (colorCaps().on) {
+            const bool colored = toXrgb(canvas, reinterpret_cast<uint8_t*>(rgb_.data()), kW * 4, r, 0xff0000, 0x00ff00, 0x0000ff);
+            log(LogLevel::Debug, "present %d,%d %dx%d %s (color: %s)", r.x, r.y, r.w, r.h, name,
+                colorWfmName(colorWaveform(w, colored)));
+        } else {
+            canvas.toGray(gray_.data(), kW, r);
+            log(LogLevel::Debug, "present %d,%d %dx%d %s", r.x, r.y, r.w, r.h, name);
+        }
         upload();
+    }
+
+    ColorCaps colorCaps() const override { return decideColorCaps(false, colorSetting_, std::getenv("ZK_COLOR")); }
+    void setColorScreen(bool on) override { colorSetting_ = on; }
+    // The device test on the desktop: the window's RGB stands for the X path.
+    std::vector<ColorPath> colorPaths() const override {
+        return colorCaps().panel ? std::vector<ColorPath>{ColorPath::X} : std::vector<ColorPath>{};
+    }
+    bool presentWith(const Canvas& canvas, Rect r, ColorPath path, ColorWfm wfm) override {
+        r = r.intersected({0, 0, kW, kH});
+        if (path == ColorPath::Fb || (path == ColorPath::X && !colorCaps().panel)) return false;
+        const bool wasOn = colorSetting_;
+        colorSetting_ = path == ColorPath::X;
+        const ColorCaps caps = colorCaps();
+        if (caps.on) toXrgb(canvas, reinterpret_cast<uint8_t*>(rgb_.data()), kW * 4, r, 0xff0000, 0x00ff00, 0x0000ff);
+        else canvas.toGray(gray_.data(), kW, r);
+        log(LogLevel::Debug, "present %d,%d %dx%d with %s", r.x, r.y, r.w, r.h, colorWfmName(wfm));
+        upload();
+        colorSetting_ = wasOn;
+        return true;
     }
 
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
@@ -143,11 +175,16 @@ private:
     }
 
     void upload() {
+        const bool color = colorCaps().on;
         void* pixels;
         int pitch;
         SDL_LockTexture(tex_, nullptr, &pixels, &pitch);
         for (int y = 0; y < kH; ++y) {
             uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + y * pitch);
+            if (color) {
+                std::copy_n(rgb_.data() + (size_t)y * kW, kW, row);
+                continue;
+            }
             for (int x = 0; x < kW; ++x) {
                 uint32_t g = gray_[(size_t)y * kW + x];
                 row[x] = (g << 16) | (g << 8) | g;
@@ -162,6 +199,8 @@ private:
     SDL_Renderer* ren_ = nullptr;
     SDL_Texture* tex_ = nullptr;
     std::vector<uint8_t> gray_;
+    std::vector<uint32_t> rgb_;  // with color on: what the window shows
+    bool colorSetting_ = true;   // Display → Color
     bool down_ = false;
 };
 

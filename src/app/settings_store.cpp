@@ -32,6 +32,7 @@ AppSettings loadSettings(Library& lib, const DeviceSettings& dev) {
     s.flashEvery = intValue(dev, "flashEvery", s.flashEvery);
     s.twoColumns = intValue(dev, "twoColumns", s.twoColumns);
     if (const auto v = dev.get("landscapeReading")) s.landscapeReading = *v == "1";
+    if (const auto v = dev.get("colorScreen")) s.colorScreen = *v != "0";
     auto j = nlohmann::json::parse(lib.metaValue("settings"), nullptr, false);
     if (j.is_object() && j.contains("homeScreen") && j["homeScreen"].is_string()) s.homeScreen = j["homeScreen"].get<std::string>();
     return s;
@@ -42,6 +43,8 @@ void saveSettings(Library& lib, DeviceSettings& dev, const AppSettings& s) {
     dev.set("flashEvery", std::to_string(s.flashEvery));
     dev.set("landscapeReading", s.landscapeReading ? "1" : "0");
     dev.set("twoColumns", std::to_string(s.twoColumns));
+    // Written once it differs from the default (a gray Kindle's device.json stays as it was).
+    if (!s.colorScreen || dev.get("colorScreen")) dev.set("colorScreen", s.colorScreen ? "1" : "0");
     // Other keys of the account's JSON (a device key left from before the split included) stay as they are.
     auto j = nlohmann::json::parse(lib.metaValue("settings"), nullptr, false);
     if (!j.is_object()) j = nlohmann::json::object();

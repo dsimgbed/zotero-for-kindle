@@ -17,6 +17,7 @@ struct Metrics {
     // Screen pixels per layout pixel: 1 on 300-ppi screens; ppi / 300 elsewhere, where the window
     // above is the screen's size at 300 ppi and ScaledDisplay shrinks it (origin stays in screen pixels).
     double scale = 1.0;
+    bool colorPanel = false;  // a Colorsoft (ColorCaps::panel): Display offers Color
     Rect window() const { return {0, 0, width, height}; }
 };
 

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -26,6 +28,39 @@ int g_live = 0;
 
 }  // namespace
 
+size_t pageCacheBudget(size_t pageBytes) { return std::max(kPageCacheBytes, 2 * pageBytes); }
+
+std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes) {
+    std::vector<int> out{current};
+    size_t used = pageBytes;
+    for (int p : {current + 1, current - 1}) {
+        if (p < 0 || p >= pageCount) continue;
+        if (used + pageBytes > pageCacheBudget(pageBytes)) break;
+        used += pageBytes;
+        out.push_back(p);
+    }
+    return out;
+}
+
+void boostSaturation(uint8_t* rgb, size_t px, int pct) {
+    if (pct <= 0) return;
+    const float k = 1.0f + pct / 100.0f;
+    for (uint8_t* p = rgb; p < rgb + px * 3; p += 3) {
+        if (p[0] == p[1] && p[1] == p[2]) continue;  // gray: exactly as it was
+        const float r = p[0], g = p[1], b = p[2];
+        const float hsp = std::sqrt(0.299f * r * r + 0.587f * g * g + 0.114f * b * b);  // perceived brightness
+        for (int i = 0; i < 3; ++i) p[i] = static_cast<uint8_t>(std::clamp(hsp + (p[i] - hsp) * k + 0.5f, 0.0f, 255.0f));
+    }
+}
+
+int colorBoostPct(const char* env) {
+    if (!env || !*env) return 25;
+    char* end = nullptr;
+    const long v = std::strtol(env, &end, 10);
+    if (*end) return 25;
+    return static_cast<int>(std::clamp(v, 0L, 100L));
+}
+
 struct RenderWorker::Impl {
     struct Target {
         enum class Kind { None, Page, Position, Annotation, Zotero } kind = Kind::None;
@@ -39,6 +74,8 @@ struct RenderWorker::Impl {
         Layout layout;
         DocPosition start;
         std::string zoteroStart;
+        bool color = false;
+        int boostPct = 0;
     };
     struct Entry {
         std::shared_ptr<const PageImage> image;
@@ -79,9 +116,11 @@ struct RenderWorker::Impl {
     };
     std::deque<InkRequest> inkRequests;
     bool trimRequest = false;
+    std::optional<std::pair<bool, int>> colorRequest;  // Display → Color: on, boost
     std::deque<RenderEvent> events;
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
+    int boostPct = 0;  // color pages' saturation boost
     std::vector<AnnotationRecord> anns;
     std::vector<DocPosition> bookmarks;
     std::vector<std::pair<std::string, int>> bookmarkPlaces;  // of `bookmarks`, in the current layout
@@ -95,6 +134,29 @@ struct RenderWorker::Impl {
     int current = -1;
     int pageCount = 0;
     std::atomic<int64_t> wordPagesCounted{0};
+    std::atomic<size_t> peakCachedBytes{0};
+    // Before a page is rendered: the pages furthest from the current one go until the cache and the
+    // new page (sized as the cached ones) fit the budget, so a burst of turns or jumps (renders
+    // overtaken, never posted) can't pile pages up.
+    void makeRoom() {
+        if (cache.empty()) return;
+        const size_t each = pageBytes(*cache.begin()->second.image);
+        const size_t budget = pageCacheBudget(each);
+        size_t used = 0;
+        for (const auto& [p, e] : cache) used += pageBytes(*e.image);
+        while (!cache.empty() && used + each > budget) {
+            auto far = std::max_element(cache.begin(), cache.end(), [&](const auto& a, const auto& b) {
+                return std::abs(a.first - current) < std::abs(b.first - current);
+            });
+            used -= pageBytes(*far->second.image);
+            cache.erase(far);
+        }
+    }
+    void notePeak() {
+        size_t sum = 0;
+        for (const auto& [p, e] : cache) sum += pageBytes(*e.image);
+        if (sum > peakCachedBytes) peakCachedBytes = sum;
+    }
 
     void emit(RenderEvent e) {
         {
@@ -106,15 +168,30 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest || trimRequest;
+               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest || trimRequest ||
+               colorRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
         if (it != cache.end()) return it->second;
+        makeRoom();
         Entry e;
-        e.image = std::make_shared<const PageImage>(engine->render(page));
+        PageImage img = engine->render(page);
+        if (!img.rgb.empty()) boostSaturation(img.rgb.data(), img.rgb.size() / 3, boostPct);
+        e.image = std::make_shared<const PageImage>(std::move(img));
         e.highlights = engine->highlights(page, anns);
-        return cache[page] = std::move(e);
+        Entry& kept = cache[page] = std::move(e);
+        notePeak();
+        return kept;
+    }
+    // The pages pagesToKeep wants around the current one (sized as the current page) not rendered yet.
+    std::vector<int> toPrerender() {
+        std::vector<int> out;
+        const auto it = cache.find(current);
+        if (it == cache.end()) return out;
+        for (int p : pagesToKeep(current, pageCount, pageBytes(*it->second.image)))
+            if (!cache.count(p)) out.push_back(p);
+        return out;
     }
     int64_t words(int page) {
         auto it = wordsOnPage.find(page);
@@ -189,14 +266,12 @@ void RenderWorker::Impl::run() {
     for (;;) {
         {
             std::unique_lock<std::mutex> lock(mutex);
-            const bool prerenderLeft = engine && current >= 0 &&
-                                       ((current + 1 < pageCount && !cache.count(current + 1)) ||
-                                        (current > 0 && !cache.count(current - 1)));
+            const bool prerenderLeft = engine && current >= 0 && !toPrerender().empty();
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
                            selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest ||
-                           trimRequest;
+                           trimRequest || colorRequest;
                 });
             if (stop) break;
         }
@@ -229,6 +304,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<std::tuple<uint64_t, int, int>> linkAsk;
     bool landed = false;
     bool trim = false;
+    std::optional<std::pair<bool, int>> color;
     std::deque<InkRequest> inks;
     uint64_t gen = 0;
     {
@@ -257,6 +333,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         inks.swap(inkRequests);
         trim = trimRequest;
         trimRequest = false;
+        color = colorRequest;
+        colorRequest.reset();
         gen = generation;
     }
     if (o) {
@@ -269,6 +347,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
             return;
         }
         engine->setLayout(o->layout);
+        engine->setColor(o->color);
+        boostPct = o->boostPct;
         UserError err;
         if (!engine->open(o->path, &err)) {
             engine.reset();
@@ -286,6 +366,12 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     }
     if (!engine) return;
     if (trim) engine->trimCaches();
+    if (color) {  // every page again, in color or gray
+        engine->setColor(color->first);
+        boostPct = color->second;
+        cache.clear();
+        postCurrent = true;
+    }
     if (marks) {
         bookmarks = std::move(*marks);
         placeBookmarks();
@@ -374,19 +460,21 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.landed = landed;
         ev.layoutId = layoutId;
         postCurrent = false;
+        // Kept: what fits around the current page (pagesToKeep); the rest goes, posted or not.
+        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(*cache.at(current).image));
+        for (auto it = cache.begin(); it != cache.end();)
+            it = std::find(keep.begin(), keep.end(), it->first) == keep.end() ? cache.erase(it) : std::next(it);
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != gen) return;  // overtaken while rendering: don't post
         }
         emit(std::move(ev));
-        for (auto it = cache.begin(); it != cache.end();)
-            it = std::abs(it->first - current) > 1 ? cache.erase(it) : std::next(it);
         return;
     }
-    // Idle: pre-render the next page, then the previous one, unless something new arrives.
-    for (int p : {current + 1, current - 1}) {
+    // Idle: pre-render the next page, then the previous one (as fits), unless something new arrives.
+    for (int p : toPrerender()) {
         if (hasNewWork()) break;
-        if (p >= 0 && p < pageCount && !cache.count(p)) entry(p);
+        entry(p);
     }
 }
 
@@ -421,6 +509,7 @@ void RenderWorker::waitForAll(int timeoutMs) {
 }
 
 int64_t RenderWorker::wordPagesCounted() const { return impl_->wordPagesCounted; }
+size_t RenderWorker::peakCachedBytes() const { return impl_->peakCachedBytes; }
 
 namespace {
 
@@ -435,9 +524,15 @@ template <class F> void request(RenderWorker::Impl& impl, F&& change) {
 
 }  // namespace
 
-void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start, std::string zoteroStart) {
+void RenderWorker::setColor(bool on, int boostPct) {
+    request(*impl_, [&] { impl_->colorRequest = std::make_pair(on, boostPct); });
+}
+
+void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start, std::string zoteroStart, bool color,
+                        int boostPct) {
     request(*impl_, [&] {
-        impl_->open = Impl::OpenRequest{std::move(path), type, layout, std::move(start), std::move(zoteroStart)};
+        impl_->open = Impl::OpenRequest{std::move(path), type, layout, std::move(start), std::move(zoteroStart), color, boostPct};
+        impl_->colorRequest.reset();
         impl_->layout.reset();
         impl_->target = {};
         ++impl_->generation;

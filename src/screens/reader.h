@@ -263,6 +263,9 @@ private:
     Lipc* lipc_;
     std::unique_ptr<RenderWorker> worker_;
     std::shared_ptr<const PageImage> image_;
+    // Color shown (ColorCaps::on): pages rendered in color, highlights and the bar's dots in
+    // Zotero's colours. Followed in pumpEvents: a change renders the pages again.
+    bool colorOn_ = false;
     std::vector<HighlightBox> highlights_;
     std::vector<TocEntry> toc_;
     std::optional<UserError> error_;

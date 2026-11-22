@@ -21,7 +21,7 @@ bool isDeviceKey(const std::string& key) {
     static const std::set<std::string> keys = {
         "syncIntervalMinutes", "flashEvery",     "landscapeReading", "twoColumns",       "annotationColour",
         "penMode",             "penWidth",       "update:available", "update:checkedMs", "update:dismissed",
-        "update:failedMs"};
+        "update:failedMs",     "colorScreen"};
     return keys.count(key) > 0;
 }
 

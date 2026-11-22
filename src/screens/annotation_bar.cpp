@@ -150,6 +150,11 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
     return colours;
 }
 
+std::optional<uint32_t> noteMarkColour(const AnnotationRecord& a, bool color) {
+    if (!color) return std::nullopt;
+    return zoteroRgb(a.color);
+}
+
 std::string annotationAuthor(Library& lib, const AnnotationRecord& a) {
     if (a.lib == kMyLibrary || a.createdHere || a.authorName.empty()) return "";
     if (a.authorId != 0 && a.authorId == lib.userId()) return "";
@@ -226,7 +231,7 @@ Rect AnnotationBar::buttonRect(int i) const {
             kButtonH};
 }
 
-void AnnotationBar::draw(cairo_t* cr) const {
+void AnnotationBar::draw(cairo_t* cr, bool color) const {
     roundedRect(cr, rect_.x + 1.5, rect_.y + 1.5, rect_.w - 3, rect_.h - 3, 18);
     gray(cr, 255);
     cairo_fill_preserve(cr);
@@ -255,7 +260,12 @@ void AnnotationBar::draw(cairo_t* cr) const {
         const Rect d = dotRect(i);
         const auto& c = zoteroColours()[i];
         const double cx = d.x + d.w / 2.0, cy = d.y + 38;
-        gray(cr, shadeOf(c.hex));
+        if (color) {  // a color screen: the colour itself
+            const uint32_t v = zoteroRgb(c.hex);
+            cairo_set_source_rgb(cr, (v >> 16) / 255.0, ((v >> 8) & 0xff) / 255.0, (v & 0xff) / 255.0);
+        } else {
+            gray(cr, shadeOf(c.hex));
+        }
         cairo_arc(cr, cx, cy, 30, 0, 2 * 3.14159265);
         cairo_fill_preserve(cr);
         gray(cr, 120);
@@ -363,8 +373,8 @@ void AnnotationEditor::enter(State s, Nav& nav) {
     nav.damage(rect(), Waveform::Ui);
 }
 
-void AnnotationEditor::draw(cairo_t* cr) const {
-    if (state_ == State::Bar) return bar_.draw(cr);
+void AnnotationEditor::draw(cairo_t* cr, bool color) const {
+    if (state_ == State::Bar) return bar_.draw(cr, color);
     const Rect r = rect();
     roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, 18);
     gray(cr, 255);

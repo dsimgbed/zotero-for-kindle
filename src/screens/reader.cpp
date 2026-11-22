@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <set>
 #include <thread>
 
@@ -79,6 +80,12 @@ void blit(Canvas& c, const PageImage& img, int y0) {
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (int y = 0; y < img.height && y + y0 < c.height(); ++y) {
         auto* row = reinterpret_cast<uint32_t*>(data + (y + y0) * stride);
+        if (!img.rgb.empty()) {  // a color page (a color screen)
+            const uint8_t* src = img.rgb.data() + static_cast<size_t>(y) * img.width * 3;
+            for (int x = 0; x < img.width && x < c.width(); ++x, src += 3)
+                row[x] = 0xff000000u | (src[0] << 16) | (src[1] << 8) | src[2];
+            continue;
+        }
         const uint8_t* src = img.gray.data() + static_cast<size_t>(y) * img.width;
         for (int x = 0; x < img.width && x < c.width(); ++x) row[x] = 0xff000000u | (src[x] << 16) | (src[x] << 8) | src[x];
     }
@@ -105,22 +112,54 @@ std::vector<Rect> frameEdges(Rect r, int w) {
             {r.x + r.w - p, r.y - p, 2 * p, r.h + 2 * p}};
 }
 
-void strokeFrame(cairo_t* cr, Rect r, uint8_t shade, int w) {
-    gray(cr, shade);
+// A colour (0xRRGGBB) as cairo's source.
+void rgb(cairo_t* cr, uint32_t c) {
+    cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+}
+
+void strokeFrame(cairo_t* cr, Rect r, uint8_t shade, int w, std::optional<uint32_t> colour = std::nullopt) {
+    if (colour) rgb(cr, *colour);
+    else gray(cr, shade);
     cairo_set_line_width(cr, w);
     cairo_rectangle(cr, r.x + w / 2.0, r.y + w / 2.0, r.w - w, r.h - w);
     cairo_stroke(cr);
 }
 
+// The pixels of `r` multiplied by `tint` (0xRRGGBB), channel by channel: paper takes the tint, ink stays black.
+void multiply(unsigned char* data, int stride, Rect r, uint32_t tint) {
+    const uint32_t tr = (tint >> 16) & 0xff, tg = (tint >> 8) & 0xff, tb = tint & 0xff;
+    for (int y = r.y; y < r.y + r.h; ++y) {
+        auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
+        for (int x = r.x; x < r.x + r.w; ++x) {
+            const uint32_t p = row[x];
+            row[x] = 0xff000000u | (((p >> 16) & 0xff) * tr / 255) << 16 | (((p >> 8) & 0xff) * tg / 255) << 8 | (p & 0xff) * tb / 255;
+        }
+    }
+}
+
+// An area's tint on a color screen: its colour 15% over white, a third of a highlight's 45% (as in gray).
+uint32_t areaTint(const std::string& colour) {
+    const uint32_t c = zoteroRgb(colour);
+    uint32_t out = 0;
+    for (int shift : {16, 8, 0}) out |= static_cast<uint32_t>(0.15 * ((c >> shift) & 0xff) + 0.85 * 255 + 0.5) << shift;
+    return out;
+}
+
 // Zotero highlights (read-only): the page under the box is multiplied by the shade, so paper
-// darkens and ink stays black; underlines are a bar under the text.
-void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
+// darkens and ink stays black; underlines are a bar under the text. `color` (a color screen):
+// multiplied by the colour's tint instead (highlightTint), and underlines, areas' frames, notes'
+// icons and ink in the colour itself.
+void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes, bool color) {
     if (boxes.empty()) return;
     cairo_surface_flush(c.surface());
     unsigned char* data = cairo_image_surface_get_data(c.surface());
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (const auto& b : boxes) {
         const Rect r = b.rect.intersected(ReaderScreen::pageArea());
+        if (!r.empty() && b.kind == HighlightBox::Kind::Image && color) {
+            multiply(data, stride, r, areaTint(b.color));
+            continue;
+        }
         if (!r.empty() && b.kind == HighlightBox::Kind::Image) {  // an area: a light tint (its frame below)
             const uint32_t tint = 255 - (255 - b.shade) / 3;
             for (int y = r.y; y < r.y + r.h; ++y) {
@@ -134,10 +173,15 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
         }
         if (r.empty() || b.kind != HighlightBox::Kind::Highlight) continue;  // drawn below, with cairo
         if (b.underline) {
+            const uint32_t bar = color ? 0xff000000u | zoteroRgb(b.color) : 0xff3c3c3cu;
             for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < c.height(); ++y) {
                 auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
-                for (int x = r.x; x < r.x + r.w; ++x) row[x] = 0xff3c3c3cu;
+                for (int x = r.x; x < r.x + r.w; ++x) row[x] = bar;
             }
+            continue;
+        }
+        if (color) {
+            multiply(data, stride, r, highlightTint(b.color));
             continue;
         }
         for (int y = r.y; y < r.y + r.h; ++y) {
@@ -177,7 +221,8 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
                 cairo_line_to(cr, r - fold, btm);
                 cairo_line_to(cr, l, btm);
                 cairo_close_path(cr);
-                gray(cr, b.shade);
+                if (color) rgb(cr, zoteroRgb(b.color));
+                else gray(cr, b.shade);
                 cairo_fill_preserve(cr);
                 gray(cr, kInk);
                 cairo_set_line_width(cr, 3);
@@ -189,14 +234,16 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
                 cairo_restore(cr);
                 break;
             }
-            case HighlightBox::Kind::Image:  // the area: a 3 px frame, its colour as a darker shade
-                gray(cr, areaFrameShade(b.shade));
+            case HighlightBox::Kind::Image:  // the area: a 3 px frame, its colour as a darker shade (or itself)
+                if (color) rgb(cr, zoteroRgb(b.color));
+                else gray(cr, areaFrameShade(b.shade));
                 cairo_set_line_width(cr, 3);
                 cairo_rectangle(cr, b.rect.x + 1.5, b.rect.y + 1.5, b.rect.w - 3, b.rect.h - 3);
                 cairo_stroke(cr);
                 break;
             case HighlightBox::Kind::Ink:
-                gray(cr, kInk);
+                if (color && !b.color.empty()) rgb(cr, zoteroRgb(b.color));
+                else gray(cr, kInk);
                 cairo_set_line_width(cr, b.strokePx);
                 cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
                 cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
@@ -359,7 +406,8 @@ void ReaderScreen::onShow(Nav& nav) {
         remoteVersion_ = rp->remoteVersion;
     }
     worker_ = makeWorker_();
-    worker_->open(path_, type_, layout_, start, zoteroStart);
+    colorOn_ = nav.colorCaps().on;
+    worker_->open(path_, type_, layout_, start, zoteroStart, colorOn_, colorBoostPct(std::getenv("ZK_COLOR_BOOST")));
     if (!preview_) marks_ = nav.library().bookmarks(row_.attachmentKey);
     sendBookmarks();
     if (openAt_) {
@@ -410,6 +458,10 @@ void ReaderScreen::dropSelection() {
 
 void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
     if (!worker_) return;
+    if (nav.colorCaps().on != colorOn_) {  // Display → Color: the pages again, in color or gray (the app redraws the rest)
+        colorOn_ = !colorOn_;
+        worker_->setColor(colorOn_, colorBoostPct(std::getenv("ZK_COLOR_BOOST")));
+    }
     RenderEvent e;
     while (worker_->poll(e)) {
         switch (e.kind) {
@@ -1187,7 +1239,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         return;
     }
     blit(canvas, *image_, 0);
-    drawHighlights(canvas, highlights_);
+    drawHighlights(canvas, highlights_, colorOn_);
     {
         cairo_save(cr);
         const Rect pa = pageArea();
@@ -1207,10 +1259,13 @@ void ReaderScreen::draw(Canvas& canvas) {
         const Rect pa = pageArea();
         cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
         cairo_clip(cr);
+        auto frame = [&](Rect r, const std::string& colour) {
+            strokeFrame(cr, r, areaFrameShade(shadeOf(colour)), 3, colorOn_ ? std::optional(zoteroRgb(colour)) : std::nullopt);
+        };
         for (const auto& [id, s] : areaSent_)
-            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
+            if (s.page == page_) frame(s.rect, s.colour);
         for (const auto& s : areaSaved_)
-            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
+            if (s.page == page_) frame(s.rect, s.colour);
         if (auto r = drawnArea()) strokeFrame(cr, *r, kInk, 3);
         if (editor_)  // the area its bar is for: framed in ink while selected
             for (const auto& b : highlights_)
@@ -1237,9 +1292,9 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_stroke(cr);
     }
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {W() - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
-    if (bar_) bar_->draw(cr);
+    if (bar_) bar_->draw(cr, colorOn_);
     if (notePopup_) notePopup_->draw(cr);
-    if (editor_) editor_->draw(cr);
+    if (editor_) editor_->draw(cr, colorOn_);
     if (note_) {
         const Rect n = noteRect();
         roundedRect(cr, n.x + 1.5, n.y + 1.5, n.w - 3, n.h - 3, 18);

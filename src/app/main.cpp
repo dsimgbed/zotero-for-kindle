@@ -1,5 +1,6 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
+//   zotero --color-test            draw the Colorsoft test card through each color path and waveform (docs/colorsoft-test.md)
 //   zotero --plugins-dir DIR       (desktop) use DIR as the plugins folder; plugin logs go to stderr; a changed main.js reloads
 //          [--enable-plugin ID]... (desktop, with --plugins-dir) turn these plugins on in DIR
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
@@ -29,6 +30,7 @@
 #include "app/account_switch.h"
 #include "app/account_ui.h"
 #include "app/session.h"
+#include "app/color_test.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/home_tree.h"
@@ -413,6 +415,10 @@ int main(int argc, char** argv) {
         std::printf("%zu families in %.0f ms\n", fonts.size(), ms);
         return 0;
     }
+    if (argc > 1 && !std::strcmp(argv[1], "--color-test")) {  // the Colorsoft device test (docs/colorsoft-test.md)
+        auto display = makeDisplay();
+        return runColorTest(*display, [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); });
+    }
     for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--title")) gShotTitle = argv[i + 1];
         if (!std::strcmp(argv[i], "--home")) gShotHome = argv[i + 1];
@@ -460,6 +466,7 @@ int main(int argc, char** argv) {
     sessionDeps.wallMs = wallMs;
     sessionDeps.pluginDataInPluginsDir = gPluginDevLoop;  // the developer loop: the author's own folder
     std::unique_ptr<Display> display = makeDisplay();
+    display->setColorScreen(loadSettings(noAccountLib, device).colorScreen);  // Display → Color (a device key)
     {
         // The window, device and ppi everything lays out from (Plan 6).
         const DeviceProfile profile = profileFor(display->deviceName(), display->ppi());
@@ -472,7 +479,8 @@ int main(int argc, char** argv) {
             log(LogLevel::Info, "UI at 300 ppi shrunk to %d ppi: window %dx%d", profile.ppi, display->width(),
                 display->height());
         }
-        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name, scale});
+        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name, scale,
+                    display->colorCaps().panel});
     }
     NullSync nullSync;
     App app(*display, noAccountLib, nullSync, *keyboard);

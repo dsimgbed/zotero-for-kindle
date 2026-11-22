@@ -53,7 +53,10 @@ void BookScreen::load(Library& lib) {
     }
 }
 
-void BookScreen::onShow(Nav& nav) { load(nav.library()); }
+void BookScreen::onShow(Nav& nav) {
+    color_ = nav.colorCaps().on;
+    load(nav.library());
+}
 
 void BookScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
@@ -87,7 +90,8 @@ void BookScreen::draw(Canvas& canvas) {
     }
     for (int i = 0; i < pager_.perPage() && pager_.offset() + i < static_cast<int64_t>(all_.size()); ++i)
         drawNoteRow(cr, {kMargin, area.y + i * kNoteRowH, W() - 2 * kMargin, kNoteRowH},
-                    all_[static_cast<size_t>(pager_.offset() + i)], false, authors_[static_cast<size_t>(pager_.offset() + i)]);
+                    all_[static_cast<size_t>(pager_.offset() + i)], false, authors_[static_cast<size_t>(pager_.offset() + i)],
+                    noteMarkColour(all_[static_cast<size_t>(pager_.offset() + i)], color_));
     drawPageIndicator(cr, {0, area.y + area.h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 

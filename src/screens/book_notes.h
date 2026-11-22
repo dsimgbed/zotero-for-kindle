@@ -42,6 +42,7 @@ private:
     std::function<void(const AnnotationRecord&)> pick_;
     std::vector<AnnotationRecord> all_;
     std::map<std::string, std::string> authors_;  // another member's name, by annotation key
+    bool color_ = false;  // a color screen (ColorCaps::on, at onShow): notes marked in their Zotero colours
     Pager pager_{0, 1};
     std::string tag_;
     std::unique_ptr<AnnotationEditor> editor_;

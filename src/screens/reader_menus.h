@@ -62,6 +62,9 @@ public:
     static Rect pdfViewRect(int i);  // PDF, same row: 0 the Page, 1 Trim its margins, 2 Columns
     static Rect spacingRect(int i);  // 100, 120, 140 %
     static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape, 2 Two columns (EPUB in landscape)
+    // Color panels (Metrics::colorPanel): a Color row below Orientation, 0 On, 1 Off (empty if not shown).
+    static bool colorRowShown();
+    static Rect colorRect(int i);
     static Rect penRect(int i);
     static Rect penWidthRect(int i);     // PDF once a pen was used: 0 Thin, 1 Medium, 2 Thick          // PDF once a pen was used: 0 Write, 1 Tap
 
@@ -119,6 +122,8 @@ private:
     int light_ = -1;
     bool syncing_ = false;
     bool landscape_ = false;  // the setting, read when the menus open and changed by the row
+    bool colorOn_ = true;     // Display → Color, the same way
+    static int displayH();    // the Display panel's height: taller with the Color row
 };
 
 }  // namespace zk

@@ -85,6 +85,7 @@ public:
     std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& a) override {
         return guard([&] { return e_->annotationAt(page, p, a); }, std::optional<std::string>{});
     }
+    void setColor(bool on) override { guard([&] { e_->setColor(on); }); }
 
 private:
     template <class F, class T> T guard(F&& f, T fallback) {

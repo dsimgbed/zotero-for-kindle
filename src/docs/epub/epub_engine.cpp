@@ -259,10 +259,25 @@ PageImage EpubEngine::render(int page) {
     PageImage img;
     if (!view_) return img;
     view_->goToPage(crPage(page));
-    LVGrayDrawBuf buf(layout_.width, layout_.height, 8);
-    view_->Draw(buf, false);
     img.width = layout_.width;
     img.height = layout_.height;
+    if (color_) {  // 32-bit 0xAARRGGBB pixels, as R, G, B
+        LVColorDrawBuf buf(layout_.width, layout_.height, 32);
+        view_->Draw(buf, false);
+        img.rgb.resize(static_cast<size_t>(img.width) * img.height * 3);
+        uint8_t* out = img.rgb.data();
+        for (int y = 0; y < img.height; ++y) {
+            const auto* row = reinterpret_cast<const lUInt32*>(buf.GetScanLine(y));
+            for (int x = 0; x < img.width; ++x, out += 3) {
+                out[0] = static_cast<uint8_t>(row[x] >> 16);
+                out[1] = static_cast<uint8_t>(row[x] >> 8);
+                out[2] = static_cast<uint8_t>(row[x]);
+            }
+        }
+        return img;
+    }
+    LVGrayDrawBuf buf(layout_.width, layout_.height, 8);
+    view_->Draw(buf, false);
     img.gray.resize(static_cast<size_t>(img.width) * img.height);
     for (int y = 0; y < img.height; ++y)
         std::copy_n(buf.GetScanLine(y), img.width, img.gray.begin() + static_cast<size_t>(y) * img.width);
@@ -619,8 +634,10 @@ std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<Ann
     for (const auto& a : anns) {
         auto r = dom_->resolve(cfiOf(a));
         if (!r) continue;
-        for (const Rect& box : windowRects(r->start, r->end))
+        for (const Rect& box : windowRects(r->start, r->end)) {
             out.push_back({a.key, box, shadeOf(a.color), a.type == "underline"});
+            out.back().color = a.color;
+        }
     }
     return out;
 }

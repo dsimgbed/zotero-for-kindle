@@ -18,10 +18,16 @@ namespace zk {
 
 enum class DocType { Epub, Pdf };
 
+// A rendered page: `gray` (width*height, 0 = black), or `rgb` (width*height*3: R, G, B) when the
+// engine renders in color (setColor). Exactly one of them is filled.
 struct PageImage {
     int width = 0, height = 0;
-    std::vector<uint8_t> gray;  // width*height, 0 = black
+    std::vector<uint8_t> gray;
+    std::vector<uint8_t> rgb;
 };
+
+// The memory a page takes: a color page three times a gray one's.
+inline size_t pageBytes(const PageImage& p) { return p.gray.size() + p.rgb.size(); }
 
 struct DocPosition {
     std::string value;  // engine-native: crengine xpointer, or "p:<pageIndex>" for PDF
@@ -102,6 +108,7 @@ struct HighlightBox {
     int fontPx = 0;                         // Text: its font size on the page
     std::vector<std::vector<Point>> paths;  // Ink: device points
     int strokePx = 3;                       // Ink: pen width on the page
+    std::string color;                      // the Zotero colour ("#ffd400"): drawn in it on color screens
 };
 
 // Text the reader selected, with everything Zotero needs to place an annotation on it.
@@ -208,9 +215,15 @@ public:
             if (it->rect.contains(p)) return it->annotationKey;
         return std::nullopt;
     }
+    // Pages rendered from now on in color (PageImage::rgb) or, as by default, in gray.
+    virtual void setColor(bool /*on*/) {}
 };
 
 // Zotero's annotation colours as gray shades for the e-ink page.
 uint8_t shadeOf(const std::string& zoteroColor);
+// On color screens: the colour itself (0xRRGGBB; Zotero's gray #aaaaaa if it isn't "#rrggbb"), and
+// a highlight's tint, the colour blended 45% over white (multiplied with the page, so ink stays black).
+uint32_t zoteroRgb(const std::string& zoteroColor);
+uint32_t highlightTint(const std::string& zoteroColor);
 
 }  // namespace zk

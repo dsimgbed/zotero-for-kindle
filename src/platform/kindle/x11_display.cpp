@@ -1,12 +1,18 @@
 // Kindle display: an X11 window under the awesome WM + explicit e-ink refresh via FBInk.
 // See research/spikes/s2-s5-window-refresh.md.
+// Color (Colorsoft, platform/color.h): the X path when X has a 24-bit TrueColor visual (a 32-bit
+// image), else the framebuffer path (X keeps its 8-bit gray; a colored region's RGB goes to the
+// framebuffer through FBInk right before the refresh, gray ones are X's alone). Color off is the
+// gray path as before.
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <fbink.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
 
+#include <bit>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -16,6 +22,7 @@
 
 #include "core/log.h"
 #include "core/wake.h"
+#include "platform/color.h"
 #include "platform/display.h"
 #include "platform/keysym.h"
 #include "platform/kindle/evdev_pen.h"
@@ -71,8 +78,19 @@ public:
             fbink_get_state(&cfg_, &state);
             deviceName_ = state.device_name;
             ppi_ = state.screen_dpi;
+            panelFound_ = state.has_color_panel;
+            log(LogLevel::Info,
+                "FBInk: %s (%s, id %#x), view %ux%u, %u bpp, pixel format %u, rotation %u, color panel %s, MTK %s",
+                state.device_name, state.device_codename, static_cast<unsigned>(state.device_id), state.view_width,
+                state.view_height, state.bpp, static_cast<unsigned>(state.pixel_format), static_cast<unsigned>(state.current_rota),
+                state.has_color_panel ? "yes" : "no", state.is_mtk ? "yes" : "no");
         }
+        rawCfg_ = cfg_;  // writing pixels (the framebuffer path): no refresh of its own, RGB without alpha
+        rawCfg_.no_refresh = true;
+        rawCfg_.ignore_alpha = true;
+        wfmAuto_ = envIs("ZK_COLOR_WFM", "auto");
         int scr = DefaultScreen(dpy_);
+        readVisual(scr);
         w_ = DisplayWidth(dpy_, scr);
         h_ = DisplayHeight(dpy_, scr);
         win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, WhitePixel(dpy_, scr));
@@ -89,9 +107,8 @@ public:
         XMapWindow(dpy_, win_);
         gc_ = XCreateGC(dpy_, win_, 0, nullptr);
         waitForFinalGeometry();
-        backing_.assign((size_t)w_ * h_, 0xff);
-        image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()),
-                              w_, h_, 8, w_);
+        decideColor();
+        makeImage();
 
         {
             // The panel is portrait in its native orientation; the root window shows how it's turned now.
@@ -162,6 +179,54 @@ public:
     Point origin() const override { return {originX_, originY_}; }
     std::string deviceName() const override { return deviceName_; }
     int ppi() const override { return ppi_; }
+    ColorCaps colorCaps() const override { return caps_; }
+    void setColorScreen(bool on) override {
+        if (on == colorSetting_) return;
+        waitIfColoredBefore();  // the redraw that follows mustn't land on a color refresh under way
+        colorSetting_ = on;
+        decideColor();
+        if (path_ == ColorPath::Fb && rgb_.size() != (size_t)w_ * h_) rgb_.assign((size_t)w_ * h_, 0xffffff);
+    }
+    void setKeyboardShown(bool up) override {
+        if (gate(gate_.setKeyboardUp(up), up ? "the system keyboard is up" : "the system keyboard went")) recolor();
+    }
+    std::vector<ColorPath> colorPaths() const override {
+        std::vector<ColorPath> out;
+        if (x32_) out.push_back(ColorPath::X);
+        if (fbWritable()) out.push_back(ColorPath::Fb);
+        return out;
+    }
+    // The device test: the gray path as color off shows it, or a color path, with this waveform.
+    bool presentWith(const Canvas& canvas, Rect r, ColorPath path, ColorWfm wfm) override {
+        r = r.intersected({0, 0, w_, h_});
+        if (r.empty() || !dpy_) return false;
+        if ((path == ColorPath::X && !x32_) || (path == ColorPath::Fb && !fbWritable())) return false;
+        if (path == ColorPath::Fb && !gate_.allowed()) {
+            log(LogLevel::Warn, "color test: the window is covered or behind: no framebuffer writes");
+            return false;
+        }
+        const ColorPath saved = path_;
+        path_ = path;
+        if (path == ColorPath::Fb && rgb_.size() != (size_t)w_ * h_) rgb_.assign((size_t)w_ * h_, 0xffffff);
+        waitIfColoredBefore();
+        const bool colored = convert(canvas, r);
+        log(LogLevel::Info, "color test: path %s, %s, region %scolored", colorPathName(path), colorWfmName(wfm),
+            colored ? "" : "not ");
+        put(r);
+        // Without a flash (the test flashed the screen white before), as the app's own updates.
+        const bool shown = fb_ >= 0 && (path != ColorPath::Fb || !fbWritesRegion(colored, true) || writeFb(r)) &&
+                           refresh(r, Waveform::Quality, wfm, colored);
+        if (fb_ >= 0) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const int rc = fbink_wait_for_complete(fb_, LAST_MARKER);
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
+            log(LogLevel::Info, "color test: refresh done in %lld ms (wait %d)", static_cast<long long>(ms.count()), rc);
+        }
+        path_ = saved;
+        if (!fbRawOk_) decideColor();  // a failed write ended the framebuffer path
+        else if (path_ != ColorPath::Fb) releaseFbBuffers();
+        return shown;
+    }
     // The window manager turns the screen for our window when the title's orientation field
     // changes (O:U upright, O:L landscape; spike 2026-11-07); ConfigureNotify then brings the size.
     void setOrientation(Orientation o) override {
@@ -175,8 +240,13 @@ public:
     void present(const Canvas& canvas, Rect r, Waveform w) override {
         r = r.intersected({0, 0, w_, h_});
         if (r.empty() || !dpy_) return;
-        canvas.toGray(backing_.data(), w_, r);
-        putAndRefresh(r, w);
+        if (path_ == ColorPath::Gray && !x32_) {  // color off on an 8-bit X: as it always was
+            canvas.toGray(backing_.data(), w_, r);
+            putAndRefresh(r, w);
+            return;
+        }
+        waitIfColoredBefore();
+        putAndRefresh(r, w, convert(canvas, r));
     }
 
     bool repaintsOnForeground() const override { return true; }  // Expose: from the backing store
@@ -262,12 +332,22 @@ public:
                 case VisibilityNotify:
                     expose_.visibilityChanged(ev.xvisibility.state == VisibilityFullyObscured);
                     if (ev.xvisibility.state == VisibilityFullyObscured) setBackground(true, out);
+                    recolorDue_ |= gate(gate_.setUnobscured(ev.xvisibility.state == VisibilityUnobscured),
+                                        ev.xvisibility.state == VisibilityUnobscured ? "unobscured" : "covered");
                     break;
                 case Expose:
                     // Repaint the exposed area from the backing store: flash only after wake.
                     exposed_ = exposed_.united({ev.xexpose.x, ev.xexpose.y, ev.xexpose.width, ev.xexpose.height});
                     if (ev.xexpose.count == 0) {
-                        putAndRefresh(exposed_.intersected({0, 0, w_, h_}), expose_.onExpose());
+                        const Rect shown = exposed_.intersected({0, 0, w_, h_});
+                        const Waveform w = expose_.onExpose();
+                        if (path_ == ColorPath::Gray) {
+                            putAndRefresh(shown, w);
+                        } else if (!shown.empty()) {
+                            waitIfColoredBefore();
+                            putAndRefresh(shown, w, coloredNow(shown));
+                            if (shown == Rect{0, 0, w_, h_} && gate_.allowed()) recolorDue_ = false;  // done just now
+                        }
                         exposed_ = {};
                     }
                     setBackground(false, out);
@@ -286,6 +366,10 @@ public:
                 case DestroyNotify: return false;
                 default: break;
             }
+        }
+        if (recolorDue_) {
+            recolorDue_ = false;
+            recolor();
         }
         return true;
     }
@@ -314,6 +398,7 @@ private:
     void setBackground(bool background, std::vector<InputEvent>& out) {
         if (background == background_) return;
         background_ = background;
+        recolorDue_ |= gate(gate_.setForeground(!background), background ? "in the background" : "in front");
         InputEvent e;
         e.kind = background ? InputEvent::Kind::Background : InputEvent::Kind::Foreground;
         out.push_back(e);
@@ -332,6 +417,7 @@ private:
                     w_ = ev.xconfigure.width;
                     h_ = ev.xconfigure.height;
                 }
+                if (ev.type == VisibilityNotify) gate_.setUnobscured(ev.xvisibility.state == VisibilityUnobscured);
             }
             if (h_ < DisplayHeight(dpy_, DefaultScreen(dpy_))) break;
         }
@@ -346,14 +432,9 @@ private:
         h_ = h;
         Window child;
         XTranslateCoordinates(dpy_, win_, DefaultRootWindow(dpy_), 0, 0, &originX_, &originY_, &child);
-        if (image_) {
-            image_->data = nullptr;
-            XDestroyImage(image_);
-        }
-        backing_.assign((size_t)w_ * h_, 0xff);
-        image_ = XCreateImage(dpy_, DefaultVisual(dpy_, DefaultScreen(dpy_)), 8, ZPixmap, 0,
-                              reinterpret_cast<char*>(backing_.data()), w_, h_, 8, w_);
         if (fb_ >= 0 && fbink_reinit(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk reinit after a turn failed");
+        decideColor();  // the framebuffer may not turn with the window
+        makeImage();
         updatePenView();
         // The canvas as the screen is turned now, from the window (Xlib's DisplayWidth keeps the
         // size from when the display was opened and doesn't follow a turn).
@@ -364,6 +445,7 @@ private:
         out.push_back(e);
     }
 
+    // The gray path (color off): the image to X, then the refresh with the waveform's mode.
     void putAndRefresh(Rect r, Waveform w) {
         XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
         XSync(dpy_, False);
@@ -376,11 +458,249 @@ private:
         fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
     }
 
+    // A color path (or gray on a 32-bit X): the image to X, the RGB to the framebuffer on that
+    // path, then the refresh with the color panel's waveform for `w`.
+    void putAndRefresh(Rect r, Waveform w, bool colored) {
+        put(r);
+        if (fb_ < 0) return;
+        // Only a colored region goes to the framebuffer, and only while nothing can be over the
+        // window (X clips its gray to what's visible; the framebuffer wouldn't). The rest is X's
+        // gray alone, as on a gray Kindle.
+        if (path_ == ColorPath::Fb && (!fbWritesRegion(colored, gate_.allowed()) || !writeFb(r))) colored = false;
+        ColorWfm cw = path_ == ColorPath::Gray ? ColorWfm::Keep : colorWaveform(w, colored);
+        if (cw != ColorWfm::Keep && wfmAuto_) cw = ColorWfm::Auto;
+        refresh(r, w, cw, colored);
+    }
+
+    void put(Rect r) {
+        XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
+        XSync(dpy_, False);  // X has drawn it (into the framebuffer) before we write or refresh
+    }
+
+    bool refresh(Rect r, Waveform w, ColorWfm cw, bool colored) {
+        switch (cw) {
+            case ColorWfm::Gl16: cfg_.wfm_mode = WFM_GL16; break;
+            case ColorWfm::Glrc16: cfg_.wfm_mode = WFM_GLRC16; break;
+            case ColorWfm::Gc16: cfg_.wfm_mode = WFM_GC16; break;
+            case ColorWfm::Gcc16: cfg_.wfm_mode = WFM_GCC16; break;
+            case ColorWfm::Auto: cfg_.wfm_mode = WFM_AUTO; break;
+            case ColorWfm::Keep:
+                cfg_.wfm_mode = w == Waveform::Ink ? WFM_A2 : w == Waveform::Fast ? WFM_DU : w == Waveform::Ui ? WFM_GL16 : WFM_GC16;
+                break;
+        }
+        cfg_.is_flashing = w == Waveform::Full;
+        const int rc = fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
+        log(rc < 0 ? LogLevel::Warn : LogLevel::Debug, "refresh %d,%d %dx%d path %s %s%s%s: %d", r.x, r.y, r.w, r.h,
+            colorPathName(path_), colorWfmName(cw), cfg_.is_flashing ? " flashing" : "", colored ? " colored" : "", rc);
+        // The driver works asynchronously: the next update waits until a colored one has finished
+        // (KOReader does the same on these panels), so nothing lands over it half-way.
+        if (colored && cw != ColorWfm::Keep) waitBeforeNext_ = true;
+        return rc >= 0;
+    }
+
+    // Logs a change of whether the framebuffer path may write (on that path); passes `reopened` on.
+    bool gate(bool reopened, const char* why) {
+        if (path_ == ColorPath::Fb && gate_.allowed() != fbGateLogged_) {
+            fbGateLogged_ = gate_.allowed();
+            log(LogLevel::Info, "color: framebuffer writes %s (%s)", fbGateLogged_ ? "resumed" : "held", why);
+        }
+        return reopened;
+    }
+
+    // The framebuffer path may write again: the whole window once in color from rgb_ (what was
+    // shown meanwhile, under the keyboard or a dialog, went out gray). A gray window: X has it.
+    void recolor() {
+        if (path_ != ColorPath::Fb || !gate_.allowed() || fb_ < 0 || rgb_.size() != (size_t)w_ * h_) return;
+        const Rect all{0, 0, w_, h_};
+        const bool colored = isColored(rgb_.data(), w_ * 4, all);
+        if (!fbWritesRegion(colored, true)) return;
+        waitIfColoredBefore();
+        if (!writeFb(all)) return;
+        ColorWfm cw = ColorWfm::Gcc16;
+        if (wfmAuto_) cw = ColorWfm::Auto;
+        log(LogLevel::Info, "color: the window again in color (%s)", colorWfmName(cw));
+        refresh(all, Waveform::Quality, cw, colored);
+    }
+
+    void waitIfColoredBefore() {
+        if (!waitBeforeNext_ || fb_ < 0) return;
+        waitBeforeNext_ = false;
+        const int rc = fbink_wait_for_complete(fb_, LAST_MARKER);
+        if (rc < 0) log(LogLevel::Debug, "waiting for the colored refresh: %d", rc);
+    }
+
+    // The region of the canvas into this path's buffers; whether it is colored.
+    bool convert(const Canvas& canvas, Rect r) {
+        auto* image32 = reinterpret_cast<uint8_t*>(backing32_.data());
+        switch (path_) {
+            case ColorPath::X: return toXrgb(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
+            case ColorPath::Fb:
+                if (x32_) toXgray(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
+                else canvas.toGray(backing_.data(), w_, r);
+                return toXrgb(canvas, reinterpret_cast<uint8_t*>(rgb_.data()), w_ * 4, r, 0xff0000, 0x00ff00, 0x0000ff);
+            case ColorPath::Gray: break;
+        }
+        if (x32_) toXgray(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
+        else canvas.toGray(backing_.data(), w_, r);
+        return false;
+    }
+
+    // Whether what is already in this path's buffers is colored (an Expose repaints from them).
+    // The X image's channels are whole bytes (readVisual), and chroma doesn't care which is which.
+    bool coloredNow(Rect r) const {
+        if (path_ == ColorPath::X) return isColored(backing32_.data(), w_ * 4, r);
+        if (path_ == ColorPath::Fb) return isColored(rgb_.data(), w_ * 4, r);
+        return false;
+    }
+
+    // The framebuffer path: the region's RGB over the gray X just drew, without a refresh.
+    bool writeFb(Rect r) {
+        packed_.resize((size_t)r.w * r.h * 3);
+        packRgb(rgb_.data(), w_ * 4, r, packed_.data());
+        // FBInk adds its view's origin (row 0: minus its row offset) to the position: taken off here.
+        const int x = r.x + originX_ - fbView_.horiOrigin, y = r.y + originY_ - (fbView_.vertOrigin - fbView_.vertOffset);
+        const int rc = fbink_print_raw_data(fb_, packed_.data(), r.w, r.h, packed_.size(), static_cast<short>(x),
+                                            static_cast<short>(y), &rawCfg_);
+        if (rc < 0) {
+            // Once, and for the session: the path is chosen again without the framebuffer (X's
+            // gray, which X has drawn already, or the X path), so no more writes or warnings.
+            if (rc == -ENOSYS) log(LogLevel::Warn, "color: FBInk was built without image support: no framebuffer path");
+            else
+                log(LogLevel::Warn, "color: writing %dx%d at (%d,%d) to the framebuffer failed (%d): no framebuffer path", r.w,
+                    r.h, x, y, rc);
+            fbRawOk_ = false;
+            decideColor();
+        }
+        return rc >= 0;
+    }
+
+    // Off the framebuffer path, its buffers go (up to 4 + 3 bytes a pixel of the window).
+    void releaseFbBuffers() {
+        rgb_ = {};
+        packed_ = {};
+    }
+
+    // X's default visual: a 32-bit image of byte-wide channels on a 24-bit TrueColor one (the X
+    // path); else the 8-bit image as always.
+    void readVisual(int scr) {
+        Visual* v = DefaultVisual(dpy_, scr);
+        const int depth = DefaultDepth(dpy_, scr);
+        rmask_ = v->red_mask;
+        gmask_ = v->green_mask;
+        bmask_ = v->blue_mask;
+        const bool trueColor = v->c_class == TrueColor;
+        // Each channel a whole byte of the low three (RGB or BGR): what coloredNow reads.
+        const auto r = static_cast<uint32_t>(rmask_), g = static_cast<uint32_t>(gmask_), b = static_cast<uint32_t>(bmask_);
+        const bool byteChannels = (r | g | b) == 0xffffff && usableMasks(r, g, b) && std::popcount(r) == 8 &&
+                                  std::popcount(g) == 8 && std::popcount(b) == 8;
+        int bpp = 0, count = 0;
+        if (XPixmapFormatValues* f = XListPixmapFormats(dpy_, &count)) {
+            for (int i = 0; i < count; ++i)
+                if (f[i].depth == depth) bpp = f[i].bits_per_pixel;
+            XFree(f);
+        }
+        x32_ = depth >= 24 && trueColor && byteChannels && bpp == 32;
+        std::string depths;
+        int n = 0;
+        if (int* ds = XListDepths(dpy_, scr, &n)) {
+            for (int i = 0; i < n; ++i) depths += (i ? "," : "") + std::to_string(ds[i]);
+            XFree(ds);
+        }
+        static const char* classes[] = {"StaticGray", "GrayScale", "StaticColor", "PseudoColor", "TrueColor", "DirectColor"};
+        log(LogLevel::Info, "X: default visual depth %d (%d bpp), %s, masks %06lx/%06lx/%06lx; depths %s: %s image", depth, bpp,
+            v->c_class >= 0 && v->c_class < 6 ? classes[v->c_class] : "?", static_cast<unsigned long>(rmask_),
+            static_cast<unsigned long>(gmask_), static_cast<unsigned long>(bmask_), depths.c_str(), x32_ ? "32-bit color" : "8-bit gray");
+        if (depth != 8 && !x32_) log(LogLevel::Warn, "X: a depth-%d visual the app can't draw in color: the 8-bit image as always", depth);
+    }
+
+    void makeImage() {
+        if (image_) {
+            image_->data = nullptr;
+            XDestroyImage(image_);
+        }
+        const int scr = DefaultScreen(dpy_);
+        if (x32_) {
+            backing32_.assign((size_t)w_ * h_, rmask_ | gmask_ | bmask_);  // white
+            image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), DefaultDepth(dpy_, scr), ZPixmap, 0,
+                                  reinterpret_cast<char*>(backing32_.data()), w_, h_, 32, w_ * 4);
+            if (image_) image_->byte_order = std::endian::native == std::endian::little ? LSBFirst : MSBFirst;  // our uint32s
+        } else {
+            backing_.assign((size_t)w_ * h_, 0xff);
+            image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()), w_, h_,
+                                  8, w_);
+        }
+        packed_ = {};  // sized for the old window
+        if (path_ == ColorPath::Fb) rgb_.assign((size_t)w_ * h_, 0xffffff);
+        else releaseFbBuffers();
+    }
+
+    // The framebuffer path may write the window's pixels: FBInk is up, can write images, and its
+    // view is turned as the window is (in landscape, if the framebuffer stays portrait, the window
+    // isn't where FBInk would write: no framebuffer path then).
+    bool fbWritable() const {
+        if (fb_ < 0 || !fbRawOk_ || !fbView_.known) return false;
+        const bool windowLandscape = originX_ + w_ > originY_ + h_;
+        const bool viewLandscape = fbView_.width > fbView_.height;
+        return windowLandscape == viewLandscape && originX_ + w_ <= fbView_.width && originY_ + h_ <= fbView_.height;
+    }
+
+    static bool envIs(const char* name, const char* value) {
+        const char* v = std::getenv(name);
+        return v && std::strcmp(v, value) == 0;
+    }
+
+    // Color caps and path from the panel, the setting, X, FBInk's view and the overrides; logged.
+    void decideColor() {
+        if (fb_ >= 0) {
+            FBInkState state{};
+            fbink_get_state(&cfg_, &state);
+            fbView_ = {true, static_cast<int>(state.view_width), static_cast<int>(state.view_height), state.view_hori_origin,
+                       state.view_vert_origin, state.view_vert_offset};
+        }
+        const char* zkColor = std::getenv("ZK_COLOR");
+        const char* forced = std::getenv("ZK_COLOR_PATH");
+        caps_ = decideColorCaps(panelFound_, colorSetting_, zkColor);
+        path_ = chooseColorPath(caps_, x32_, fbWritable(), forced);
+        if (caps_.on && path_ == ColorPath::Gray) caps_.on = false;  // no way to show it
+        if (path_ != ColorPath::Fb) releaseFbBuffers();
+        log(LogLevel::Info,
+            "color: panel %s, setting %s, ZK_COLOR=%s ZK_COLOR_PATH=%s ZK_COLOR_WFM=%s; X %s, framebuffer %s "
+            "(view %dx%d, origin %d,%d offset %d; window %dx%d at %d,%d) -> path %s, color %s",
+            caps_.panel ? "yes" : "no", colorSetting_ ? "on" : "off", zkColor ? zkColor : "-", forced ? forced : "-",
+            wfmAuto_ ? "auto" : "-", x32_ ? "32-bit" : "8-bit", fbWritable() ? "writable" : "not writable", fbView_.width,
+            fbView_.height, fbView_.horiOrigin, fbView_.vertOrigin, fbView_.vertOffset, w_, h_, originX_, originY_,
+            colorPathName(path_), caps_.on ? "on" : "off");
+        if (caps_.panel && colorSetting_ && !x32_ && fb_ >= 0 && fbRawOk_ && !fbWritable())
+            log(LogLevel::Warn, "color: the framebuffer's view (%dx%d) isn't turned as the window (%dx%d at %d,%d): gray here",
+                fbView_.width, fbView_.height, w_, h_, originX_, originY_);
+    }
+
     ::Display* dpy_ = nullptr;
     Window win_ = 0;
     GC gc_ = nullptr;
     XImage* image_ = nullptr;
-    std::vector<uint8_t> backing_;
+    std::vector<uint8_t> backing_;     // the 8-bit image's pixels (an 8-bit X)
+    std::vector<uint32_t> backing32_;  // the 32-bit image's (a 24-bit TrueColor X)
+    std::vector<uint32_t> rgb_;        // the framebuffer path: the window's colors, 0x00RRGGBB
+    std::vector<uint8_t> packed_;      // a region of rgb_ as FBInk takes it
+    bool x32_ = false;
+    unsigned long rmask_ = 0, gmask_ = 0, bmask_ = 0;
+    bool panelFound_ = false;   // FBInk's has_color_panel
+    bool colorSetting_ = true;  // Display → Color
+    ColorCaps caps_;
+    ColorPath path_ = ColorPath::Gray;
+    bool fbRawOk_ = true;          // FBInk can write pixels (built with image support)
+    bool wfmAuto_ = false;         // ZK_COLOR_WFM=auto
+    bool waitBeforeNext_ = false;  // a colored refresh is on its way
+    // The framebuffer path writes only while nothing can be over the window (platform/color.h).
+    FbColorGate gate_;
+    bool fbGateLogged_ = false;  // what was last logged about it
+    bool recolorDue_ = false;    // it opened again during this poll: the window in color once
+    struct FbView {
+        bool known = false;
+        int width = 0, height = 0, horiOrigin = 0, vertOrigin = 0, vertOffset = 0;
+    } fbView_;
+    FBInkConfig rawCfg_;
     int w_ = 0, h_ = 0, originX_ = 0, originY_ = 0;
     int fb_ = -1;
     bool fingerDown_ = false;
