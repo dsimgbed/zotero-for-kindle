@@ -43,7 +43,8 @@ void saveSettings(Library& lib, DeviceSettings& dev, const AppSettings& s) {
     dev.set("flashEvery", std::to_string(s.flashEvery));
     dev.set("landscapeReading", s.landscapeReading ? "1" : "0");
     dev.set("twoColumns", std::to_string(s.twoColumns));
-    dev.set("colorScreen", s.colorScreen ? "1" : "0");
+    // Written once it differs from the default (a gray Kindle's device.json stays as it was).
+    if (!s.colorScreen || dev.get("colorScreen")) dev.set("colorScreen", s.colorScreen ? "1" : "0");
     // Other keys of the account's JSON (a device key left from before the split included) stay as they are.
     auto j = nlohmann::json::parse(lib.metaValue("settings"), nullptr, false);
     if (!j.is_object()) j = nlohmann::json::object();

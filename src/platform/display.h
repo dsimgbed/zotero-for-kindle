@@ -53,6 +53,9 @@ public:
     // The desktop imitates a color panel with ZK_COLOR=1.
     virtual ColorCaps colorCaps() const { return {}; }
     virtual void setColorScreen(bool /*on*/) {}  // the Display → Color setting
+    // The system keyboard is up over the window (the app says so before every update): the
+    // Kindle's framebuffer color path doesn't write then (it would draw over the keyboard).
+    virtual void setKeyboardShown(bool /*up*/) {}
     // The device test (zotero --color-test): the ways color can reach the screen here, and showing
     // `r` through one of them with a given waveform (false: not possible here).
     virtual std::vector<ColorPath> colorPaths() const { return {}; }

@@ -37,6 +37,11 @@ public:
         input.push_back(e);
     }
     void present(const Canvas&, Rect r, Waveform w) override { presents.push_back({r, w}); }
+    // What the app said about the system keyboard, each change once.
+    void setKeyboardShown(bool up) override {
+        if (keyboardChanges.empty() ? up : keyboardChanges.back() != up) keyboardChanges.push_back(up);
+    }
+    std::vector<bool> keyboardChanges;
     // As the Kindle's display: back in front, it has repainted the window itself (Expose).
     bool repaints = false;
     bool repaintsOnForeground() const override { return repaints; }

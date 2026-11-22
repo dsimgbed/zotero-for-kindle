@@ -229,6 +229,8 @@ TEST_CASE("color: the device test shows the card through every path with every w
             CHECK(d.shown[1 + p * 5 + w].wfm == wfms[w]);
         }
     CHECK(waits == std::vector<int>(11, 3000));
+    // Before each step the display hears what happened to its window (covered, in the background).
+    CHECK(d.timeouts == std::vector<int>(11, 0));
     // Each card comes after a flashing white screen, so no step inherits the last one's picture.
     REQUIRE(d.presents.size() == 11);
     for (const auto& p : d.presents) CHECK(p.waveform == Waveform::Full);
@@ -262,4 +264,46 @@ TEST_CASE("color: the test card matches the reviewed golden") {
     Canvas c(1236, 1547);
     drawColorTestCard(c, "2/11  path x  waveform GL16");
     test::checkGolden(c, "tests/golden/color-test-card.png");
+}
+
+// ---- The framebuffer path writes past X's clipping: only over a window nothing covers ----
+
+TEST_CASE("color: the framebuffer path writes only in front, fully unobscured, without the keyboard") {
+    CHECK(fbColorAllowed({true, true, false}));
+    CHECK_FALSE(fbColorAllowed({false, true, false}));  // the screensaver, a system dialog in front
+    CHECK_FALSE(fbColorAllowed({true, false, false}));  // partly covered (the status-bar pulldown)
+    CHECK_FALSE(fbColorAllowed({true, true, true}));    // the system keyboard over the window
+    CHECK_FALSE(fbColorAllowed({false, false, true}));
+}
+
+TEST_CASE("color: the gate starts closed and asks for one repaint in color each time it opens again") {
+    FbColorGate gate;
+    CHECK_FALSE(gate.allowed());              // nothing known about the window yet
+    CHECK(gate.setUnobscured(true));          // mapped and visible: open, repaint
+    CHECK(gate.allowed());
+    CHECK_FALSE(gate.setUnobscured(true));    // no change, no repaint
+    CHECK_FALSE(gate.setKeyboardUp(true));    // closes
+    CHECK_FALSE(gate.allowed());
+    CHECK(gate.setKeyboardUp(false));         // the keyboard went: repaint in color
+    CHECK_FALSE(gate.setForeground(false));   // the screensaver
+    CHECK_FALSE(gate.setUnobscured(false));
+    CHECK_FALSE(gate.setForeground(true));    // back in front, still covered: stays closed
+    CHECK_FALSE(gate.allowed());
+    CHECK(gate.setUnobscured(true));          // uncovered: open, repaint
+    CHECK(gate.allowed());
+}
+
+TEST_CASE("color: a gray Kindle's device file gets no colorScreen key from saving other settings") {
+    DeviceSettings dev("");
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    AppSettings s = loadSettings(lib, dev);
+    s.flashEvery = 3;
+    saveSettings(lib, dev, s);
+    CHECK_FALSE(dev.get("colorScreen"));
+    s.colorScreen = false;
+    saveSettings(lib, dev, s);
+    s.colorScreen = true;
+    saveSettings(lib, dev, s);
+    CHECK(dev.get("colorScreen") == "1");  // once there, it is kept up to date
 }

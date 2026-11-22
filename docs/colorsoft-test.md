@@ -56,6 +56,11 @@ Open a PDF with color figures and an EPUB with color images, make a highlight in
   `color: the framebuffer's view … isn't turned as the window … gray here` means that on the framebuffer path
   the framebuffer doesn't turn with the window. The app then stays gray in landscape on purpose, so that it
   never writes outside its window. Say whether you saw this line.
+- **Nothing drawn over the system's windows**, which matters most on the `fb` path. With Color on, open
+  the keyboard (Search) and type, pull down the quick settings from the top, and let the screensaver
+  come on while a sync runs. The app must never draw over the keyboard, the pulldown or the screensaver.
+  The log shows `color: framebuffer writes held (…)` while something covers the window and `resumed` after.
+  When the keyboard closes, the window should show in color again (`color: the window again in color`).
 - **Menus and typing** should be as fast as on other Kindles. Color waveforms are only used where there is
   color.
 
@@ -70,7 +75,7 @@ Each override is set when Zotero starts, for example:
 | `ZK_COLOR=1` | Treats the device as a color panel even if FBInk says it isn't one. |
 | `ZK_COLOR_PATH=x` / `fb` | Forces that path where it is possible. The log says which path was taken. |
 | `ZK_COLOR_WFM=auto` | Lets the driver choose the waveform (AUTO) instead of GL16/GLRC16/GC16/GCC16, for comparison. |
-| `ZK_COLOR_BOOST=<pct>` | Sets the saturation boost of page images (default 25). |
+| `ZK_COLOR_BOOST=<pct>` | Sets the saturation boost of page images (default 25). Not active yet: it arrives with color pages. |
 
 ## What to report
 

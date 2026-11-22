@@ -144,6 +144,8 @@ void packRgb(const uint32_t* rgb24, int stride, Rect r, uint8_t* out) {
     }
 }
 
+bool fbColorAllowed(const FbWriteState& s) { return s.foreground && s.unobscured && !s.keyboardUp; }
+
 bool usableMasks(uint32_t rmask, uint32_t gmask, uint32_t bmask) {
     for (uint32_t m : {rmask, gmask, bmask}) {
         if (!m) return false;

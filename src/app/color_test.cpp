@@ -115,6 +115,8 @@ int runColorTest(Display& d, const std::function<void(int ms)>& wait) {
     const Rect all{0, 0, d.width(), d.height()};
     for (size_t i = 0; i < steps.size(); ++i) {
         const Step& s = steps[i];
+        std::vector<InputEvent> ignored;
+        d.pollEvents(ignored, 0);  // what happened to the window (covered, behind): the framebuffer path asks
         fill(canvas.cr(), all, 0xffffff);
         d.present(canvas, all, Waveform::Full);  // a flash to white: this step starts clean
         char caption[96];

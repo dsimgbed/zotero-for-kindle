@@ -54,6 +54,34 @@ void toXgray(const Canvas&, uint8_t* dst, int dstStride, Rect r, uint32_t rmask,
 // bytes, row after row (r.w * r.h * 3): what fbink_print_raw_data takes.
 void packRgb(const uint32_t* rgb24, int stride, Rect r, uint8_t* out);
 
+// The framebuffer path writes past X's clipping: only where nothing can be over the window. In
+// front, not covered at all (VisibilityUnobscured), and without the system keyboard up.
+struct FbWriteState {
+    bool foreground = true;
+    bool unobscured = false;
+    bool keyboardUp = false;
+};
+bool fbColorAllowed(const FbWriteState&);
+
+// The state as it changes; closed until X says the window is unobscured. Each setter returns true
+// when that change opened the gate again: the window is then shown once more in color (what was
+// presented meanwhile went out gray).
+class FbColorGate {
+public:
+    bool setForeground(bool on) { return change(s_.foreground, on); }
+    bool setUnobscured(bool on) { return change(s_.unobscured, on); }
+    bool setKeyboardUp(bool on) { return change(s_.keyboardUp, on); }
+    bool allowed() const { return fbColorAllowed(s_); }
+
+private:
+    bool change(bool& field, bool on) {
+        const bool before = allowed();
+        field = on;
+        return !before && allowed();
+    }
+    FbWriteState s_;
+};
+
 // The masks fit toXrgb: each channel's bits contiguous, 1 to 8 of them, not overlapping.
 bool usableMasks(uint32_t rmask, uint32_t gmask, uint32_t bmask);
 

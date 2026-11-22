@@ -231,3 +231,19 @@ TEST_CASE("app shell: what a sync or a push has to tell (a refused read tag) is 
     rig.run(1);
     CHECK(rig.app.lastToast() == "first (and 1 more)");
 }
+
+TEST_CASE("app shell: the display hears that the system keyboard is up before anything is shown under it") {
+    struct Typing : StubScreen {
+        using StubScreen::StubScreen;
+        bool wantsKeyboard() const override { return true; }
+    };
+    Rig rig;
+    CHECK(rig.display.keyboardChanges.empty());
+    rig.app.push(std::make_unique<Typing>("typing", &rig.log));
+    rig.run(1);
+    REQUIRE(rig.display.keyboardChanges == std::vector<bool>{true});
+    REQUIRE_FALSE(rig.display.presents.empty());
+    rig.app.pop();
+    rig.run(1);
+    CHECK(rig.display.keyboardChanges == std::vector<bool>{true, false});
+}

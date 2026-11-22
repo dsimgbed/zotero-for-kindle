@@ -181,9 +181,13 @@ public:
     ColorCaps colorCaps() const override { return caps_; }
     void setColorScreen(bool on) override {
         if (on == colorSetting_) return;
+        waitIfColoredBefore();  // the redraw that follows mustn't land on a color refresh under way
         colorSetting_ = on;
         decideColor();
         if (path_ == ColorPath::Fb && rgb_.size() != (size_t)w_ * h_) rgb_.assign((size_t)w_ * h_, 0xffffff);
+    }
+    void setKeyboardShown(bool up) override {
+        if (gate(gate_.setKeyboardUp(up), up ? "the system keyboard is up" : "the system keyboard went")) recolor();
     }
     std::vector<ColorPath> colorPaths() const override {
         std::vector<ColorPath> out;
@@ -196,6 +200,10 @@ public:
         r = r.intersected({0, 0, w_, h_});
         if (r.empty() || !dpy_) return false;
         if ((path == ColorPath::X && !x32_) || (path == ColorPath::Fb && !fbWritable())) return false;
+        if (path == ColorPath::Fb && !gate_.allowed()) {
+            log(LogLevel::Warn, "color test: the window is covered or behind: no framebuffer writes");
+            return false;
+        }
         const ColorPath saved = path_;
         path_ = path;
         if (path == ColorPath::Fb && rgb_.size() != (size_t)w_ * h_) rgb_.assign((size_t)w_ * h_, 0xffffff);
@@ -320,6 +328,8 @@ public:
                 case VisibilityNotify:
                     expose_.visibilityChanged(ev.xvisibility.state == VisibilityFullyObscured);
                     if (ev.xvisibility.state == VisibilityFullyObscured) setBackground(true, out);
+                    recolorDue_ |= gate(gate_.setUnobscured(ev.xvisibility.state == VisibilityUnobscured),
+                                        ev.xvisibility.state == VisibilityUnobscured ? "unobscured" : "covered");
                     break;
                 case Expose:
                     // Repaint the exposed area from the backing store: flash only after wake.
@@ -332,6 +342,7 @@ public:
                         } else if (!shown.empty()) {
                             waitIfColoredBefore();
                             putAndRefresh(shown, w, coloredNow(shown));
+                            if (shown == Rect{0, 0, w_, h_} && gate_.allowed()) recolorDue_ = false;  // done just now
                         }
                         exposed_ = {};
                     }
@@ -351,6 +362,10 @@ public:
                 case DestroyNotify: return false;
                 default: break;
             }
+        }
+        if (recolorDue_) {
+            recolorDue_ = false;
+            recolor();
         }
         return true;
     }
@@ -379,6 +394,7 @@ private:
     void setBackground(bool background, std::vector<InputEvent>& out) {
         if (background == background_) return;
         background_ = background;
+        recolorDue_ |= gate(gate_.setForeground(!background), background ? "in the background" : "in front");
         InputEvent e;
         e.kind = background ? InputEvent::Kind::Background : InputEvent::Kind::Foreground;
         out.push_back(e);
@@ -397,6 +413,7 @@ private:
                     w_ = ev.xconfigure.width;
                     h_ = ev.xconfigure.height;
                 }
+                if (ev.type == VisibilityNotify) gate_.setUnobscured(ev.xvisibility.state == VisibilityUnobscured);
             }
             if (h_ < DisplayHeight(dpy_, DefaultScreen(dpy_))) break;
         }
@@ -442,7 +459,8 @@ private:
     void putAndRefresh(Rect r, Waveform w, bool colored) {
         put(r);
         if (fb_ < 0) return;
-        if (path_ == ColorPath::Fb && !writeFb(r)) colored = false;  // the framebuffer has X's gray
+        // Covered or behind: X's gray only (X clips it to what's visible; the framebuffer wouldn't).
+        if (path_ == ColorPath::Fb && (!gate_.allowed() || !writeFb(r))) colored = false;
         ColorWfm cw = path_ == ColorPath::Gray ? ColorWfm::Keep : colorWaveform(w, colored);
         if (cw != ColorWfm::Keep && wfmAuto_) cw = ColorWfm::Auto;
         refresh(r, w, cw, colored);
@@ -472,6 +490,29 @@ private:
         // (KOReader does the same on these panels), so nothing lands over it half-way.
         if (colored && cw != ColorWfm::Keep) waitBeforeNext_ = true;
         return rc >= 0;
+    }
+
+    // Logs a change of whether the framebuffer path may write (on that path); passes `reopened` on.
+    bool gate(bool reopened, const char* why) {
+        if (path_ == ColorPath::Fb && gate_.allowed() != fbGateLogged_) {
+            fbGateLogged_ = gate_.allowed();
+            log(LogLevel::Info, "color: framebuffer writes %s (%s)", fbGateLogged_ ? "resumed" : "held", why);
+        }
+        return reopened;
+    }
+
+    // The framebuffer path may write again: the whole window once in color from rgb_ (what was
+    // shown meanwhile, under the keyboard or a dialog, went out gray).
+    void recolor() {
+        if (path_ != ColorPath::Fb || !gate_.allowed() || fb_ < 0 || rgb_.size() != (size_t)w_ * h_) return;
+        const Rect all{0, 0, w_, h_};
+        waitIfColoredBefore();
+        const bool colored = isColored(rgb_.data(), w_ * 4, all);
+        if (!writeFb(all)) return;
+        ColorWfm cw = colored ? ColorWfm::Gcc16 : ColorWfm::Gc16;
+        if (wfmAuto_) cw = ColorWfm::Auto;
+        log(LogLevel::Info, "color: the window again in color (%s)", colorWfmName(cw));
+        refresh(all, Waveform::Quality, cw, colored);
     }
 
     void waitIfColoredBefore() {
@@ -633,6 +674,10 @@ private:
     bool fbRawOk_ = true;          // FBInk can write pixels (built with image support)
     bool wfmAuto_ = false;         // ZK_COLOR_WFM=auto
     bool waitBeforeNext_ = false;  // a colored refresh is on its way
+    // The framebuffer path writes only while nothing can be over the window (platform/color.h).
+    FbColorGate gate_;
+    bool fbGateLogged_ = false;  // what was last logged about it
+    bool recolorDue_ = false;    // it opened again during this poll: the window in color once
     struct FbView {
         bool known = false;
         int width = 0, height = 0, horiOrigin = 0, vertOrigin = 0, vertOffset = 0;
