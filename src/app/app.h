@@ -55,6 +55,8 @@ public:
     bool systemInk() const override { return display_.systemInk(); }
     void setSystemInk(bool on) override;
     void setSystemInkWidth(int px) override { display_.setSystemInkWidth(px); }
+    ColorCaps colorCaps() const override { return display_.colorCaps(); }
+    void setColorScreen(bool on) override;
     // Palm rejection: touches are ignored while the pen is in range and this long after it left.
     static constexpr int64_t kPalmMs = 700;
     // No pen event this long: not near any more (a Leave may have been lost). A pen held still

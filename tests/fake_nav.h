@@ -74,6 +74,13 @@ public:
     PluginEntries* pluginEntries() override { return entries; }
     CatalogService* catalog() override { return catalogService; }
     void wakeAt(int64_t ms) override { wakeAts.push_back(ms); }
+    ColorCaps colorCaps() const override { return caps; }
+    void setColorScreen(bool on) override {
+        colorScreenSets.push_back(on);
+        caps.on = caps.panel && on;
+    }
+    ColorCaps caps;                    // a gray panel unless a test says otherwise
+    std::vector<bool> colorScreenSets;  // what Display → Color asked, in order
     std::vector<int64_t> wakeAts;  // the times screens asked the loop to run by
     CatalogService* catalogService = nullptr;
     RecordingSink pluginSink;

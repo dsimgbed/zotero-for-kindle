@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/geometry.h"
+#include "platform/color.h"
 #include "platform/input.h"
 #include "ui/canvas.h"
 
@@ -48,6 +49,14 @@ public:
     virtual bool systemInk() const { return false; }
     virtual bool setSystemInk(bool /*on*/) { return true; }  // false: not done, ask again
     virtual void setSystemInkWidth(int /*px*/) {}            // the system's line, as wide as the app's
+    // Color (Colorsoft, platform/color.h): whether the screen is a color one and color is shown.
+    // The desktop imitates a color panel with ZK_COLOR=1.
+    virtual ColorCaps colorCaps() const { return {}; }
+    virtual void setColorScreen(bool /*on*/) {}  // the Display → Color setting
+    // The device test (zotero --color-test): the ways color can reach the screen here, and showing
+    // `r` through one of them with a given waveform (false: not possible here).
+    virtual std::vector<ColorPath> colorPaths() const { return {}; }
+    virtual bool presentWith(const Canvas&, Rect, ColorPath, ColorWfm) { return false; }
 };
 
 // Backend chosen at build time (-Dplatform=desktop|kindle).

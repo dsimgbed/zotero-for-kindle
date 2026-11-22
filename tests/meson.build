@@ -5,6 +5,7 @@ test_sources = files(
   'test_geometry.cpp',
   'test_gesture.cpp',
   'test_canvas.cpp',
+  'test_color.cpp',
   'test_text.cpp',
   'test_x_touch.cpp',
   'test_pen_decoder.cpp',

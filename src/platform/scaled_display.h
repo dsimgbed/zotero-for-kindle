@@ -26,6 +26,9 @@ public:
     bool repaintsOnForeground() const override { return screen_->repaintsOnForeground(); }
     bool systemInk() const override { return screen_->systemInk(); }
     bool setSystemInk(bool on) override { return screen_->setSystemInk(on); }
+    // Shrinking averages to gray (no color panel is scaled: the Colorsofts are 300 ppi).
+    ColorCaps colorCaps() const override { return {screen_->colorCaps().panel, false}; }
+    void setColorScreen(bool on) override { screen_->setColorScreen(on); }
 
 private:
     Point toApp(Point p) const;

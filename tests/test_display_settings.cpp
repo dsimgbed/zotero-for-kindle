@@ -6,6 +6,7 @@
 #include "fake_nav.h"
 #include "fixture_library.h"
 #include "golden.h"
+#include "platform/color.h"
 #include "screens/reader.h"
 #include "screens/reader_menus.h"
 #include "store/db.h"
@@ -334,4 +335,59 @@ TEST_CASE("font pop-up: where the Fast group can't fit on a page, its heading co
         r->onGesture(tapAt(m.fontPickerNextRect().center()), rig.nav);
     }
     CHECK(fastPages >= 2);
+}
+
+// ---- Color (Colorsoft): a row of the Display panel on color panels only ----
+
+namespace {
+
+// The PW5's window on a color panel, as ZK_COLOR=1 makes the desktop.
+Metrics colorPanelMetrics() {
+    Metrics m = kPw5;
+    m.colorPanel = decideColorCaps(false, true, "1").panel;
+    return m;
+}
+
+}  // namespace
+
+TEST_CASE("display panel: no Color row on a gray panel") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    CHECK_FALSE(ReaderMenus::colorRowShown());
+    CHECK(ReaderMenus::displayPanelRect().h == 580);
+}
+
+TEST_CASE("display panel: a color panel offers Color, on by default; Off is kept and asked of the app") {
+    ScopedMetrics m(colorPanelMetrics());
+    Rig rig;
+    rig.nav.caps = {true, true};
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    REQUIRE(ReaderMenus::colorRowShown());
+    CHECK(ReaderMenus::displayPanelRect().contains(ReaderMenus::colorRect(1).center()));
+    CHECK(ReaderMenus::colorRect(0).y > ReaderMenus::orientationRect(0).y);
+    r->onGesture(tapAt(ReaderMenus::colorRect(1).center()), rig.nav);
+    CHECK(rig.nav.device().get("colorScreen") == "0");
+    CHECK(rig.nav.colorScreenSets == std::vector<bool>{false});
+    CHECK_FALSE(rig.nav.caps.on);
+    r->onGesture(tapAt(ReaderMenus::colorRect(0).center()), rig.nav);
+    CHECK(rig.nav.device().get("colorScreen") == "1");
+    CHECK(rig.nav.colorScreenSets == std::vector<bool>{false, true});
+}
+
+TEST_CASE("display panel on a color panel matches the reviewed golden") {
+    if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
+    addFontDir("assets/fonts-device");
+    ScopedMetrics m(colorPanelMetrics());
+    Rig rig;
+    rig.nav.caps = {true, true};
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    Canvas c(1236, 1547);
+    r->draw(c);
+    test::checkGolden(c, "tests/golden/display-panel-color.png");
 }

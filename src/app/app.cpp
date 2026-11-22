@@ -373,6 +373,11 @@ void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& pain
     presentInk(false);
 }
 
+void App::setColorScreen(bool on) {
+    display_.setColorScreen(on);
+    redrawAll(Waveform::Full);  // everything again, in color or without, and no ghosts of the other
+}
+
 void App::setSystemInk(bool on) {
     if (on && confirmShown()) return;  // no wet ink over the app's question
     if (on && (background_ || (caller_ && caller_ != visibleTop()))) return;

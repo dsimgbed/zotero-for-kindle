@@ -67,6 +67,10 @@ public:
     // worker's wake (core/wake.h), so a screen whose onTick waits for time asks on every tick
     // while it does. Results from worker threads need no timer: their wake runs the loop.
     virtual void wakeAt(int64_t /*ms*/) {}
+    // Color (Colorsoft): what the display can do and shows (platform/color.h), and the Display →
+    // Color setting turned on or off (the app shows everything again).
+    virtual ColorCaps colorCaps() const { return {}; }
+    virtual void setColorScreen(bool /*on*/) {}
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.

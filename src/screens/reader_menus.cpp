@@ -29,6 +29,7 @@ constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
 const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area", "Add note"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
 constexpr int kDisplayH = 580;
+constexpr int kColorRowH = 110;  // Color, below Orientation, on color panels
 const char* kMarginNames[] = {"Narrow", "Normal", "Wide", "Extra wide"};
 const int kSpacings[] = {100, 120, 140};
 constexpr double kMinSize = 7, kMaxSize = 16, kSizeStep = 0.5;
@@ -70,25 +71,34 @@ Rect ReaderMenus::cell(int kind) const {
 Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kLightH}; }
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
-Rect ReaderMenus::displayPanelRect() { return {0, H() - kPanelH - kDisplayH, W(), kDisplayH}; }
-Rect ReaderMenus::fontRowRect() { return {kMargin, H() - kPanelH - kDisplayH + 24, W() - 2 * kMargin, 90}; }
-Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, H() - kPanelH - kDisplayH + 134, 160, 90}; }
-Rect ReaderMenus::sizePlusRect() { return {W() - kMargin - 160, H() - kPanelH - kDisplayH + 134, 160, 90}; }
+// The Color row shows on color panels where the taller panel still leaves the top bar clear (not
+// in landscape on a PW5-sized screen): turned off there, color is turned on again in portrait.
+bool ReaderMenus::colorRowShown() { return metrics().colorPanel && H() - kPanelH - kDisplayH - kColorRowH >= kTopH; }
+int ReaderMenus::displayH() { return kDisplayH + (colorRowShown() ? kColorRowH : 0); }
+Rect ReaderMenus::displayPanelRect() { return {0, H() - kPanelH - displayH(), W(), displayH()}; }
+Rect ReaderMenus::fontRowRect() { return {kMargin, H() - kPanelH - displayH() + 24, W() - 2 * kMargin, 90}; }
+Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, H() - kPanelH - displayH() + 134, 160, 90}; }
+Rect ReaderMenus::sizePlusRect() { return {W() - kMargin - 160, H() - kPanelH - displayH() + 134, 160, 90}; }
 Rect ReaderMenus::marginRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 4;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 244, w - 12, 90};
 }
 Rect ReaderMenus::pdfViewRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 244, w - 12, 90};
 }
 Rect ReaderMenus::orientationRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 464, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 464, w - 12, 90};
+}
+Rect ReaderMenus::colorRect(int i) {
+    if (!colorRowShown()) return {};
+    const int w = (W() - 2 * kMargin - 240) / 2;
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 574, w - 12, 90};
 }
 Rect ReaderMenus::spacingRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 354, w - 12, 90};
 }
 
 bool ReaderMenus::showsTextOptions() const { return reader_.type() != DocType::Pdf; }
@@ -96,11 +106,11 @@ bool ReaderMenus::showsPenOptions() const { return reader_.type() == DocType::Pd
 // PDF: in the row EPUB uses for the text size.
 Rect ReaderMenus::penWidthRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 134, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 134, w - 12, 90};
 }
 Rect ReaderMenus::penRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 2;
-    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 354, w - 12, 90};
 }
 
 namespace {
@@ -310,6 +320,15 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
         return true;
     }
     for (int i = 0; i < 2; ++i)
+        if (colorRect(i).contains(p)) {
+            AppSettings s = loadSettings(nav.library(), nav.device());
+            s.colorScreen = colorOn_ = i == 0;
+            saveSettings(nav.library(), nav.device(), s);
+            nav.damage(displayPanelRect(), Waveform::Ui);
+            nav.setColorScreen(colorOn_);  // the app shows everything again
+            return true;
+        }
+    for (int i = 0; i < 2; ++i)
         if (orientationRect(i).contains(p)) {
             AppSettings s = loadSettings(nav.library(), nav.device());
             s.landscapeReading = landscape_ = i == 1;
@@ -377,10 +396,16 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
     centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));
     if (reader_.landscape() && showsTextOptions()) drawButton(cr, orientationRect(2), "Two columns", reader_.twoColumns());
+    if (colorRowShown()) {
+        centredText(cr, "Color", label, {kMargin, colorRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 2; ++i) drawButton(cr, colorRect(i), i ? "Off" : "On", colorOn_ == (i == 0));
+    }
 }
 
 void ReaderMenus::open(Nav& nav) {
-    landscape_ = loadSettings(nav.library(), nav.device()).landscapeReading;
+    const AppSettings settings = loadSettings(nav.library(), nav.device());
+    landscape_ = settings.landscapeReading;
+    colorOn_ = settings.colorScreen;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(topBarRect(), Waveform::Ui);
     nav.damage(panelRect(), Waveform::Ui);

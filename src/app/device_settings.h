@@ -27,7 +27,7 @@ private:
     std::map<std::string, std::string> values_;
 };
 
-// The device keys: syncIntervalMinutes, flashEvery, landscapeReading, twoColumns, the reader's
+// The device keys: syncIntervalMinutes, flashEvery, landscapeReading, twoColumns, colorScreen, the reader's
 // annotationColour / penMode / penWidth, and the update notice's update:* keys.
 bool isDeviceKey(const std::string& key);
 
