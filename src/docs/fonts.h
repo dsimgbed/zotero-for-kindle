@@ -2,6 +2,7 @@
 // Reading fonts: the families found in the font directories (spec §3: v1 offers the fonts on
 // the device; more fonts later = dropping files into /mnt/us/zotero/fonts).
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,10 @@ std::vector<std::string> readingFonts(const std::vector<std::string>& dirs);
 inline std::vector<std::string> readingFontDirs() {
 #ifdef ZK_KINDLE
     // The Kindle's own, the app's (Fast Font; replaced by updates), the user's own.
-    return {"/usr/java/lib/fonts", "/mnt/us/zotero/share/fonts", "/mnt/us/zotero/fonts"};
+    const char* envHome = std::getenv("ZK_HOME");
+    std::string home = (envHome && *envHome) ? std::string(envHome) : "/mnt/us/zotero";
+    while (home.size() > 1 && home.back() == '/') home.pop_back();
+    return {"/usr/java/lib/fonts", home + "/share/fonts", home + "/fonts"};
 #else
     return {"assets/fonts-device", "assets/fonts-fast", "local/fonts"};
 #endif

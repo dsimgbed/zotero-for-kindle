@@ -52,8 +52,16 @@ using namespace zk;
 namespace {
 
 #ifdef ZK_KINDLE
-const char* kDefaultCa = "/mnt/us/zotero/share/cacert.pem";
-const char* kCrengineData = "/mnt/us/zotero/share/crengine";
+std::string kindleHome() {
+    const char* v = std::getenv("ZK_HOME");
+    std::string s = (v && *v) ? std::string(v) : "/mnt/us/zotero";
+    while (s.size() > 1 && s.back() == '/') s.pop_back();
+    return s;
+}
+const std::string kDefaultCaStr = kindleHome() + "/share/cacert.pem";
+const std::string kCrengineDataStr = kindleHome() + "/share/crengine";
+const char* kDefaultCa = kDefaultCaStr.c_str();
+const char* kCrengineData = kCrengineDataStr.c_str();
 #else
 const char* kDefaultCa = "";
 const char* kCrengineData = "third_party/crengine/cr3gui/data";

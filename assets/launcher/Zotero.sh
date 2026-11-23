@@ -19,7 +19,10 @@
 ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
 ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
-ZK_ACCOUNTS=${ZK_ACCOUNTS:-$(dirname "$ZK_CONFIG")/accounts.json}
+ZK_CONFIG_DIR=${ZK_CONFIG_DIR:-$(dirname "$ZK_CONFIG")}
+ZK_ACCOUNTS=${ZK_ACCOUNTS:-$ZK_CONFIG_DIR/accounts.json}
+export ZK_HOME ZK_LAUNCHER ZK_CONFIG_DIR
+[ -n "${ZK_NO_UPDATES:-}" ] && export ZK_NO_UPDATES
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
 ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
 ZK_PIDFILE=${ZK_PIDFILE:-/tmp/zotero.pid}  # the running app's pid; /tmp is emptied at boot

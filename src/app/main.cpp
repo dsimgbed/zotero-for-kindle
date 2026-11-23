@@ -99,8 +99,15 @@ int64_t wallMs() {
 // The engines' data and fonts (the device's). crengine's document cache is the open account's
 // (AccountSession::engineEnv); without one (the screenshot tools, the plugins' full text) none.
 #ifdef ZK_KINDLE
-const char* kCaBundle = "/mnt/us/zotero/share/cacert.pem";
-const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), ""};
+std::string kindleHome() {
+    const char* v = std::getenv("ZK_HOME");
+    std::string s = (v && *v) ? std::string(v) : "/mnt/us/zotero";
+    while (s.size() > 1 && s.back() == '/') s.pop_back();
+    return s;
+}
+const std::string kCaBundleStr = kindleHome() + "/share/cacert.pem";
+const char* kCaBundle = kCaBundleStr.c_str();
+const EngineEnv kEngineEnv{kindleHome() + "/share/crengine", readingFontDirs(), ""};
 #else
 const char* kCaBundle = "";
 const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), ""};
