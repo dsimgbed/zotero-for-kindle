@@ -121,7 +121,7 @@ PluginManifest parseObject(const json& j) {
         {"net:*", Permission::NetAny},                  {"zotero:create-items", Permission::CreateItems},
         {"zotero:collections", Permission::Collections}, {"zotero:tags", Permission::Tags},
         {"zotero:notes", Permission::Notes},            {"zotero:remove", Permission::Remove},
-        {"background", Permission::Background}};
+        {"background", Permission::Background},         {"grimoire:bridge", Permission::GrimoireBridge}};
     std::set<std::string> seen;
     for (const auto& p : *perms) {
         if (!p.is_string()) bad("every permission must be text");
@@ -294,6 +294,7 @@ std::string permissionText(Permission p, const std::string& host) {
         case Permission::Remove:
             return "May ask to move items to the trash or remove tags and notes \xE2\x80\x94 each time with your yes";
         case Permission::Background: return "Works in the background (hourly)";
+        case Permission::GrimoireBridge: return "Exchanges citations and return-to-essay handoffs with Grimoire";
     }
     return "";
 }

@@ -114,6 +114,11 @@ public:
     // A system dialog or the screensaver is over the app (the Kindle may be asleep).
     bool inBackground() const { return background_; }
     void quit() override { quit_ = true; }
+    // A clean handoff: finish the current loop iteration, then leave the app with this code.
+    void exitWithCode(int code) {
+        exitCode_ = code;
+        quit_ = true;
+    }
     void restart() override {
         exitCode_ = 75;
         quit_ = true;

@@ -266,6 +266,9 @@ void installZotero(PluginCtx&);
 void installEntry(PluginCtx&);
 // zk.reader (bindings_reader.cpp, 0.9). Throws std::runtime_error on an internal error.
 void installReader(PluginCtx&);
+// zk.bridge (bindings_bridge.cpp): the Grimoire workspace switch and citation inbox. It takes no
+// path from JavaScript and needs the "grimoire:bridge" permission for every operation.
+void installBridge(PluginCtx&);
 // zk.screen and zk.ui (bindings_ui.cpp). Throws std::runtime_error on an internal error.
 void installUi(PluginCtx&);
 // Empties <storageDir>/data/ and storage.db (an account's, see PluginCtx::storageDir). `loaded`, if the plugin is loaded: its queued writes

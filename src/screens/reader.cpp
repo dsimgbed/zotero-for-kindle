@@ -469,6 +469,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 pageCount_ = e.pageCount;
                 views_ = std::max(1, e.viewsPerPage);
                 toc_ = e.toc;
+                if (pendingBridgeJump_) applyBridgeJump();
                 if (!openedSent_ && !preview_) {  // the book really opened (not again after a re-layout)
                     openedSent_ = true;
                     plugins::bookEvent(nav.plugins(), nav.library(), "bookOpened", row_.key, row_.attachmentKey);
@@ -707,6 +708,31 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
     commitInk();
     turning_ = true;
     worker_->showAnnotation(a);
+}
+
+void ReaderScreen::jumpToBridgeTarget(int page1, const std::string& locator) {
+    pendingBridgeJump_ = PendingBridgeJump{page1, locator};
+    if (worker_ && pageCount_ > 0) applyBridgeJump();  // already open (a handoff into a visible reader)
+}
+
+void ReaderScreen::applyBridgeJump() {
+    if (!worker_) return;
+    auto jump = std::move(pendingBridgeJump_);
+    if (!jump) return;
+    if (jump->page1 > 0) {
+        int page = jump->page1;
+        if (pageCount_ > 0 && page > pageCount_) page = pageCount_;
+        turnTo(page - 1);  // turnTo counts views from 0
+    }
+    if (!jump->locator.empty()) {
+        std::string value = jump->locator;
+        const bool digits = std::all_of(value.begin(), value.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
+        if (digits) value = "p:" + value;  // a PDF's native position is 1-based
+        markJumpOrigin();
+        commitInk();
+        turning_ = true;
+        worker_->showPosition(DocPosition{value});
+    }
 }
 
 void ReaderScreen::onResize(Nav& nav) {

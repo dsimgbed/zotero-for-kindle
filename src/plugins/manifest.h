@@ -14,7 +14,7 @@ namespace zk {
 
 enum class Permission {
     LibraryRead, AnnotationsRead, NotesRead, FulltextRead, Net, NetAny,
-    CreateItems, Collections, Tags, Notes, Remove, Background
+    CreateItems, Collections, Tags, Notes, Remove, Background, GrimoireBridge
 };
 
 struct PluginManifest {

@@ -43,6 +43,7 @@
 #include "platform/device_profile.h"
 #include "ui/metrics.h"
 #include "app/startup.h"
+#include "bridge/grimoire_bridge.h"
 #include "core/log.h"
 #include "net/errors.h"
 #include "net/http.h"
@@ -362,6 +363,9 @@ int screenshot(std::string screen, const std::string& out, const std::string& db
 
 int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero %s starting (backend=%s)", ZK_VERSION, ZK_BACKEND);
+    bool wantBridgeHandoff = false;  // --handoff: the trampoline launched us for a Grimoire handoff
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--handoff")) wantBridgeHandoff = true;
     addFontDir(fontDir());
     Paths paths = defaultPaths();
     // A session of days (the Kindle sleeps, the app stays) would otherwise grow the log without
@@ -660,6 +664,7 @@ int main(int argc, char** argv) {
             confirmSafeModeStart(paths.pluginsDir);
         }
         pluginEvents.poll(app);
+        if (plugins && plugins->bridgeReturnRequested()) app.exitWithCode(43);
         catalogService.poll();
         backgroundRound.tick(app.nowMs());
         updateConfirm.tick(app.nowMs(), !app.inBackground());
@@ -1020,9 +1025,18 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--open") && switcher.session())
             if (auto att = app.library().attachment(argv[i + 1]))
                 if (auto row = app.library().rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key)) flow.open(*row, app);
+    if (wantBridgeHandoff) {
+        std::string why;
+        if (auto handoff = bridge::consumeZoteroHandoff(bridge::bridgeDir(), &why)) {
+            if (!openZoteroHandoff(*handoff, app.library(), flow, app))
+                log(LogLevel::Warn, "grimoire handoff: its item isn't in this library");
+        } else if (!why.empty() && why != "missing") {
+            log(LogLevel::Warn, "grimoire handoff: %s", why.c_str());  // short, non-sensitive
+        }
+    }
     const int rc = app.run();
     if (safeMode.counting) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
-    if (rc == 0) updateConfirm.cleanEnd();                          // for an update too
+    if (rc == 0 || rc == 43) updateConfirm.cleanEnd();               // 43 is a clean Grimoire handoff
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     // As a switch leaves an account (account_switch.h), without the push: every screen first...

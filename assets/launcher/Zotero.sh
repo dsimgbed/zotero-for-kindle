@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2317
 # Name: Zotero
 # Author: zotero-for-kindle
 # Icon: /mnt/us/zotero/share/icon.png
@@ -105,7 +106,7 @@ mkdir -p "$(dirname "$ZK_PIDFILE")"
 rotate_log() {
     [ -f log/zotero.log ] || return 0
     size=$(wc -c < log/zotero.log 2>/dev/null) || return 0
-    [ -n "$size" ] && [ $size -gt 1048576 ] && mv -f log/zotero.log log/zotero.log.1
+    [ -n "$size" ] && [ "$size" -gt 1048576 ] && mv -f log/zotero.log log/zotero.log.1
     return 0
 }
 
@@ -180,7 +181,7 @@ restore() {
 # Looks at update/state before a start: rolls back if needed, marks a first start as tried.
 check_update() {
     [ -f "$U/state" ] || return 0
-    word= from= to=
+    word=""; from=""; to=""
     read -r word from to < "$U/state"
     case "$word" in
         installing|tried) restore "$from" "$to" || note "rollback from $to failed; will try again" ;;
@@ -204,13 +205,13 @@ while [ "$starts" -lt 5 ]; do
     check_update
     chmod +x bin/* 2>/dev/null  # copied over USB, the programs may have lost their execute bit
     # The shell writes its own pid, then becomes the app: the file is there before the app runs.
-    DISPLAY=$ZK_DISPLAY sh -c 'echo $$ > "$1" && exec ./bin/zotero' sh "$ZK_PIDFILE" >> log/zotero.log 2>&1 &
+    DISPLAY=$ZK_DISPLAY sh -c 'echo $$ > "$0" && exec ./bin/zotero "$@"' "$ZK_PIDFILE" "$@" >> log/zotero.log 2>&1 &
     wait $!
     code=$?
     rm -f "$ZK_PIDFILE"
     # How it ended, for the log: 139 a crash (SIGSEGV), 134 an abort, 137 killed (often out of
     # memory), 3 the app's own stall exit; 0 and 75 are normal.
-    case "$code" in 0|75) ;; *) note "the app ended with code $code" ;; esac
+    case "$code" in 0|43|75) ;; *) note "the app ended with code $code" ;; esac
     [ "$code" = 75 ] && continue
     # A new version that ended before confirming: go back now, and start the old one.
     if [ -f "$U/state" ] && read -r word rest < "$U/state" && [ "$word" = tried ]; then
@@ -222,7 +223,10 @@ done
 # An end that skipped the app's own clean-up (killed, out of memory): the Scribe's wet ink may be
 # left on over a window that's gone. Turn it off, only if the app left its session open (an older
 # app, after a rollback, would take the flag for a normal start).
-if [ "$code" != 0 ] && [ "$code" != 75 ] && [ -e "$ZK_INK_MARK" ]; then
+if [ "$code" != 0 ] && [ "$code" != 43 ] && [ "$code" != 75 ] && [ -e "$ZK_INK_MARK" ]; then
     DISPLAY=$ZK_DISPLAY ./bin/zotero --reset-system-ink >> log/zotero.log 2>&1
+fi
+if [ "$code" = 43 ]; then
+    exit 43  # clean handoff to Grimoire: let the trampoline see 43
 fi
 exit 0  # finish: whatever happened to the app, the Kindle may sleep again

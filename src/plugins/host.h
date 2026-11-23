@@ -4,6 +4,7 @@
 // runBackground, answer, reload, setEnabled) and polls PluginHostEvents, like sync and render
 // events. See plugin_ctx.h for how bindings (zk.*) plug in.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -135,7 +136,7 @@ struct PluginHostEvent {
     enum class Kind {
         Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
         ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError,
-        ActionResult, ActionError, ReaderOpen, ReaderClosed, ItemOpen
+        ActionResult, ActionError, ReaderOpen, ReaderClosed, ItemOpen, BridgeReturn
     } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
@@ -266,6 +267,9 @@ public:
     // `timeoutMs`. Any thread. Throws plugins::FetchError (also when the plugin isn't listed).
     HttpResponse previewDownload(const std::string& pluginId, HttpRequest req, size_t maxBytes, int timeoutMs) const;
     bool poll(PluginHostEvent&);
+    // Set when a plugin posts BridgeReturn (zk.bridge.returnToGrimoire). The screen thread sees it
+    // without waiting for JavaScript and starts the clean exit 43 handoff.
+    bool bridgeReturnRequested() const;
     std::vector<PluginStatus> status() const;
     // A plugin's package: the folder its files are in (<pluginsDir>/<id>), where its screens'
     // images are. Any thread.

@@ -22,6 +22,8 @@ cp -R third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epu
 cp assets/launcher/icon.png "$CA" "$Z/share/"
 cp assets/fonts-fast/* "$Z/share/fonts/"  # Fast Font (MIT), with its LICENSE
 cp assets/launcher/Zotero.sh "$STAGE/documents/"
+mkdir -p "$Z/plugins/grimoire-bridge"
+cp plugins/grimoire-bridge/plugin.json plugins/grimoire-bridge/main.js "$Z/plugins/grimoire-bridge/"
 cp LICENSE "$Z/"
 chmod +x "$Z"/bin/* "$STAGE/documents/Zotero.sh"
 mkdir -p dist

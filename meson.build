@@ -92,6 +92,14 @@ store_lib = static_library('zk-store',
   dependencies : [net_dep, sqlite_dep, dependency('glib-2.0')])  # glib: Unicode folding for sort keys
 store_dep = declare_dependency(link_with : store_lib, dependencies : [net_dep, sqlite_dep, dependency('glib-2.0')])
 
+# Grimoire × Zotero bridge (schema_version 1 IPC). Kept apart from the app and plugins so every
+# writer/reader shares the same strict validation and atomic file I/O.
+bridge_lib = static_library('zk-bridge', 'src/bridge/grimoire_bridge.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [core_dep, store_dep])
+bridge_dep = declare_dependency(link_with : bridge_lib, dependencies : [core_dep, store_dep],
+  include_directories : inc)
+
 zotero_lib = static_library('zk-zotero',
   'src/zotero/parse.cpp',
   'src/zotero/api.cpp',
@@ -200,11 +208,12 @@ plugins_lib = static_library('zk-plugins',
   'src/plugins/bindings_entry.cpp',
   'src/plugins/bindings_ui.cpp',
   'src/plugins/bindings_reader.cpp',
+  'src/plugins/bindings_bridge.cpp',
   'src/plugins/plugin_http.cpp',
   'src/plugins/ui_tree.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep])  # ui: zk.display reads the metrics
-plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep],
+  dependencies : [core_dep, store_dep, bridge_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep])  # ui: zk.display reads the metrics
+plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, bridge_dep, docs_dep, quickjs_dep, plugin_events_dep, ui_dep],
   include_directories : include_directories('third_party', is_system : true))
 
 # Plugin catalog (part 3): the signed registry, the release check and the installer.
@@ -266,9 +275,9 @@ screens_lib = static_library('zk-screens',
   'src/app/catalog_service.cpp',
   'src/app/settings_store.cpp', 'src/app/device_settings.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
-  dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep])
+  dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep, bridge_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep, catalog_dep, bridge_dep])
 
 app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp', 'src/app/color_test.cpp',
@@ -283,8 +292,8 @@ app_lib = static_library('zk-app',
   'src/app/account_switch.cpp',
   'src/app/account_ui.cpp',
   include_directories : ui_incs,
-  dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
-app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
+  dependencies : [screens_dep, services_dep, sync_dep, plugins_dep, bridge_dep])
+app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep, bridge_dep])
 
 if backend == 'kindle'
   fbink_lib = meson.get_compiler('cpp').find_library('fbink',
@@ -295,10 +304,14 @@ if backend == 'kindle'
     dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
   platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
 else
-  platform_lib = static_library('zk-platform', 'src/platform/desktop/sdl_display.cpp',
-    'src/platform/desktop/sdl_keyboard.cpp',
-    include_directories : ui_incs, dependencies : [ui_dep, services_dep, dependency('sdl2')])
-  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('sdl2')])
+  # Tests must build on machines without SDL2; the desktop app itself needs it.
+  sdl2_dep = dependency('sdl2', required : false)
+  if sdl2_dep.found()
+    platform_lib = static_library('zk-platform', 'src/platform/desktop/sdl_display.cpp',
+      'src/platform/desktop/sdl_keyboard.cpp',
+      include_directories : ui_incs, dependencies : [ui_dep, services_dep, sdl2_dep])
+    platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, sdl2_dep])
+  endif
 endif
 
 # ---- Readers (Plan 4): each engine is a shared module loaded at runtime ---------------------
@@ -374,9 +387,11 @@ if fs.exists(deps_prefix / 'lib' / 'libmupdf.a')
     install : true, install_dir : 'lib')
 endif
 
-executable('zotero', 'src/app/main.cpp',
-  dependencies : [app_dep, platform_dep],
-  install : true)
+if is_variable('platform_dep')
+  executable('zotero', 'src/app/main.cpp',
+    dependencies : [app_dep, platform_dep],
+    install : true)
+endif
 
 executable('zk-sync', 'src/app/zk_sync.cpp',
   include_directories : include_directories('third_party', is_system : true),

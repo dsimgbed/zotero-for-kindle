@@ -15,6 +15,19 @@
 
 namespace zk {
 
+class Library;
+
+namespace bridge {
+struct HandoffRequest;
+}
+
+// A Grimoire → Zotero handoff's open request. `page` is 1-based (0: no jump); `locator` is an
+// optional position hint. Neither ever comes from a config or account file.
+struct BridgeOpenTarget {
+    std::string itemKey, attachmentKey, locator;
+    uint32_t page = 0;
+};
+
 class OpenFlow {
 public:
     explicit OpenFlow(std::function<int64_t()> wallMs) : wallMs_(std::move(wallMs)) {}
@@ -26,6 +39,9 @@ public:
     // outcome. Opening what is already downloading joins that download: both hear its outcome.
     using Done = std::function<void(const std::string& error)>;
     void open(const ItemRow&, Nav&, std::optional<AnnotationRecord> at = std::nullopt, Done done = {});  // at: show this highlight
+    // Opens the already-resolved row without asking "Open which file?", carrying a Grimoire page/locator
+    // to the reader (also when the file still has to download).
+    void openAt(const ItemRow&, Nav&, BridgeOpenTarget target, Done done = {});
     void onSyncEvent(const SyncEvent&, Nav&);  // from App::setEventHook
     // By the file downloading, or by the row's file of an item whose other file is.
     std::string statusFor(const std::string& attachmentKey) const;
@@ -44,15 +60,23 @@ private:
         std::string status;
         bool running = false;  // false: it failed (its error shows until a retry)
         std::optional<AnnotationRecord> at;
+        std::optional<BridgeOpenTarget> bridgeTarget;  // a page/locator to apply in the reader
         std::string listKey;  // the attachment key of the row it was tapped on
         std::vector<Done> done;  // who waits for the outcome
     };
-    void start(const ItemRow&, Nav&, std::optional<AnnotationRecord> at, const std::string& listKey, Done done);
-    void openNow(const ItemRow&, Nav&, const std::optional<AnnotationRecord>& at = std::nullopt);
+    void start(const ItemRow&, Nav&, std::optional<AnnotationRecord> at, const std::string& listKey, Done done,
+               std::optional<BridgeOpenTarget> target = std::nullopt);
+    void openNow(const ItemRow&, Nav&, const std::optional<AnnotationRecord>& at = std::nullopt,
+                 const std::optional<BridgeOpenTarget>& target = std::nullopt);
 
     std::function<int64_t()> wallMs_;
     ReaderFactory readerFactory_;
     std::map<std::string, Pending> pending_;  // by attachment key
 };
+
+// Resolves a validated handoff against `lib` and opens it with OpenFlow::openAt. False when the
+// item (or the explicitly named attachment) isn't in the library; nothing is opened then.
+bool openZoteroHandoff(const bridge::HandoffRequest& handoff, Library& lib, OpenFlow& flow, Nav& nav,
+                       OpenFlow::Done done = {});
 
 }  // namespace zk

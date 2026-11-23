@@ -323,6 +323,7 @@ struct PluginHost::Impl {
     std::set<std::string> held;                    // its files are being swapped: not loaded (hold/release)
     std::map<std::string, std::string> withdrawn;  // id → why the catalog withdrew it
     std::deque<PluginHostEvent> events;
+    std::atomic<bool> bridgeReturn{false};  // zk.bridge.returnToGrimoire asked for a clean exit 43
     std::string webdavHost;  // zk.fetch refuses it; the app may change it (setWebdavHost)
     std::mutex runningMu;
     js::Runtime* running = nullptr;  // whose code is running (stop() interrupts it)
@@ -380,6 +381,7 @@ struct PluginHost::Impl {
     }
 
     void postEvent(PluginHostEvent ev) {
+        if (ev.kind == PluginHostEvent::Kind::BridgeReturn) bridgeReturn.store(true);
         if (ev.kind == PluginHostEvent::Kind::Badge) ++version;
         {
             std::lock_guard<std::mutex> lock(mu);
@@ -615,6 +617,7 @@ struct PluginHost::Impl {
             installEntry(p);
             installUi(p);
             installReader(p);
+            installBridge(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -2185,6 +2188,8 @@ HttpResponse PluginHost::previewDownload(const std::string& pluginId, HttpReques
 void PluginHost::answer(uint64_t requestId, bool yes) {
     impl_->post([requestId, yes](Impl& h) { h.answer(requestId, yes); });
 }
+
+bool PluginHost::bridgeReturnRequested() const { return impl_->bridgeReturn.load(); }
 
 bool PluginHost::poll(PluginHostEvent& out) {
     std::lock_guard<std::mutex> lock(impl_->mu);

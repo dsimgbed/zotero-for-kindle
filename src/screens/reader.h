@@ -135,6 +135,9 @@ public:
     void turnTo(int page);
     void jumpTo(const DocPosition&);            // from Contents (menus close)
     void jumpToAnnotation(const AnnotationRecord&);  // from Notes
+    // A Grimoire handoff's page (1-based, clamped to the opened book) and optional locator. Applied
+    // once the document reports Opened; before that there's no page count to clamp against.
+    void jumpToBridgeTarget(int page1, const std::string& locator);
     void closeMenus(Nav&);
     bool menusOpen() const { return menus_ != nullptr; }
     ReaderMenus* menus() { return menus_.get(); }
@@ -286,6 +289,11 @@ private:
         int page = 0, count = 0, views = 1;  // asked for, in the pages counted then
     };
     std::optional<PendingGo> pendingGo_;  // turnTo while re-paginating
+    struct PendingBridgeJump {
+        int page1 = 0;
+        std::string locator;
+    };
+    std::optional<PendingBridgeJump> pendingBridgeJump_;
     // Selection mode.
     bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
     Point selAnchor_;
@@ -302,6 +310,7 @@ private:
     void tickResult(Nav&);
     void dropSelection();  // selection and bar gone (no repaint); a first run still going is stopped
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
+    void applyBridgeJump();  // the pending Grimoire page/locator, once pages are known
     void markJumpOrigin();  // before a jump: where Back returns to
     void back(Nav&);
     void toggleBookmark(Nav&);

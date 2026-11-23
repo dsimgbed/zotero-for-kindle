@@ -1,0 +1,80 @@
+name: Build Zotero for Kindle
+
+on:
+  push:
+    branches: [feat/grimoire-bridge, master, main]
+  workflow_dispatch:
+
+jobs:
+  build-kindle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake meson ninja-build pkg-config \
+            zstd zip unzip curl git ca-certificates \
+            libarchive-dev nettle-dev zlib1g-dev libbz2-dev liblzma-dev libssl-dev \
+            automake autoconf libtool gperf shellcheck nodejs
+
+      - name: Install koxtoolchain (kindlehf)
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/koreader/koxtoolchain/releases/download/2026.08/kindlehf.tar.zst" \
+            -o /tmp/kindlehf.tar.zst
+          tar --zstd -xf /tmp/kindlehf.tar.zst -C "$HOME"
+          rm -f /tmp/kindlehf.tar.zst
+          echo "$HOME/x-tools/arm-kindlehf-linux-gnueabihf/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Kindle SDK sysroot
+        run: |
+          git clone --recursive --depth 1 https://github.com/KindleModding/kindle-sdk.git /tmp/kindle-sdk
+          cd /tmp/kindle-sdk
+          chmod +x gen-sdk.sh
+          ./gen-sdk.sh kindlehf
+          rm -rf /tmp/kindle-sdk
+
+      - name: Verify plugin & launcher scripts
+        run: |
+          node --check plugins/grimoire-bridge/main.js
+          node plugins/grimoire-bridge/test_plugin.mjs
+          shellcheck assets/launcher/Zotero.sh tools/package.sh
+
+      - name: Build Kindle static dependencies
+        run: |
+          ./tools/build-fbink.sh
+          ./tools/build-crengine.sh kindle
+          ./tools/build-net-deps.sh
+          ./tools/build-mupdf.sh kindle
+
+      - name: Cross-compile Zotero for Kindle
+        run: |
+          TC="$HOME/x-tools/arm-kindlehf-linux-gnueabihf"
+          meson setup build-kindle \
+            --cross-file "$TC/meson-crosscompile.txt" \
+            -Dplatform=kindle \
+            -Dtests=false
+          ninja -C build-kindle
+          mkdir -p build-kindle/dist
+          for f in zotero zk-sync libzk-epub.so libzk-pdf.so; do
+            "$TC/bin/arm-kindlehf-linux-gnueabihf-strip" -o "build-kindle/dist/$f" "build-kindle/$f"
+          done
+
+      - name: Package zotero-for-kindle.zip
+        run: |
+          ./tools/package.sh
+          ls -lh dist/zotero-for-kindle.zip
+
+      - name: Upload Kindle package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zotero-for-kindle-kindle
+          path: dist/zotero-for-kindle.zip
+          if-no-files-found: error

@@ -1,0 +1,11 @@
+{
+  "id": "grimoire-bridge",
+  "name": "Grimoire Bridge",
+  "version": "0.1.0",
+  "api": 0,
+  "minApp": "0.14.0",
+  "author": "Grimoire x Zotero Bridge",
+  "description": "Send citations and quotes to Grimoire and switch seamlessly back to your active essay.",
+  "main": "main.js",
+  "permissions": ["library:read", "grimoire:bridge"]
+}

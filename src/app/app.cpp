@@ -5,6 +5,7 @@
 #include <climits>
 
 #include "app/session.h"
+#include "bridge/grimoire_bridge.h"
 #include "core/log.h"
 #include "ui/metrics.h"
 #include "store/db.h"
@@ -652,6 +653,8 @@ void App::step(int timeout_ms) {
             caller_ = nullptr;
             guard([&] { hook_(ev, *this); });
         }
+        if (ev.kind == SyncEvent::Kind::SyncFinished && bridge::bridgeActive())
+            bridge::exportLibraryIndex(library(), bridge::bridgeDir());
         const bool reloads = ev.kind == SyncEvent::Kind::SyncFinished || ev.kind == SyncEvent::Kind::PushFinished ||
                              ev.kind == SyncEvent::Kind::AnnotationsReady;
         // Something to tell though nothing failed (a refused read tag): whichever screen is up.
@@ -753,6 +756,7 @@ void App::flush() {
 }
 
 int App::run() {
+    if (bridge::bridgeActive()) bridge::exportLibraryIndexIfAbsent(library(), bridge::bridgeDir());
     while (!quit_ && !closed_ && visibleTop()) step(nextTimeoutMs());
     return exitCode_;
 }
