@@ -115,7 +115,7 @@ public:
     bool inBackground() const { return background_; }
     void quit() override { quit_ = true; }
     // A clean handoff: finish the current loop iteration, then leave the app with this code.
-    void exitWithCode(int code) {
+    void exitWithCode(int code) override {
         exitCode_ = code;
         quit_ = true;
     }

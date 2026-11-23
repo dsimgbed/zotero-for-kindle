@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "app/settings_store.h"
+#include "bridge/grimoire_bridge.h"
 #include "core/log.h"
 #include "screens/annotation_bar.h"
 #include "screens/book_search.h"
@@ -883,16 +884,24 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (editor_) {
         if (editor_->commenting() && g.type != GestureType::Tap) return;  // typing: only a tap ends it
-        if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
-            if (editor_->takeChanged()) {
-                refreshHighlights(nav);
-                nav.sync().pushSoon();
-                if (editor_->key() == newAreaKey_ && editor_->bar().colour() != colour_) {  // as a new highlight's
-                    colour_ = editor_->bar().colour();
-                    nav.device().set(kColourKey, colour_);
-                }
+        if (g.type == GestureType::Tap) {
+            const AnnotationEditor::Result res = editor_->onTap(g.pos, nav);
+            if (res == AnnotationEditor::Result::Grimoire) {
+                const auto ann = editor_->annotation();
+                citeAndJumpToGrimoire(nav, ann.text, ann.comment, ann.pageLabel);
+                return;
             }
-            return;
+            if (res == AnnotationEditor::Result::Open) {
+                if (editor_->takeChanged()) {
+                    refreshHighlights(nav);
+                    nav.sync().pushSoon();
+                    if (editor_->key() == newAreaKey_ && editor_->bar().colour() != colour_) {  // as a new highlight's
+                        colour_ = editor_->bar().colour();
+                        nav.device().set(kColourKey, colour_);
+                    }
+                }
+                return;
+            }
         }
         closeEditor(nav);
         if (g.type == GestureType::Tap) return;
@@ -1098,7 +1107,7 @@ void ReaderScreen::showBar(Nav& nav) {
     if (!web_ && !preview_) refuseReadOnly(nav, false);
     bar_ = web_ || readOnly_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
                 : std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
-                                                  TagRow(selectionChips(nav), selTags_));
+                                                  TagRow(selectionChips(nav), selTags_), bridge::bridgeActive());
     bar_->setWorking(result_ && result_->running());
     nav.damage(bar_->rect(), Waveform::Ui);
 }
@@ -1133,6 +1142,10 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             break;
         case AnnotationBar::Action::Underline:
             saveSelection("underline", "", nav);
+            break;
+        case AnnotationBar::Action::Grimoire:
+            if (!selection_) break;
+            citeAndJumpToGrimoire(nav, selection_->text, "", selection_->pageLabel);
             break;
         case AnnotationBar::Action::Search: {
             const std::string query = selection_ ? selection_->text : std::string{};
@@ -1176,16 +1189,19 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             }
             if (!e || !selection_ || (!preview_ && (!item || !att))) break;
             const auto pageLabel = selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(selection_->pageLabel);
+            const int currentPage = (type_ == DocType::Pdf ? shownPage(page_) : page_ + 1);
             nlohmann::ordered_json target;
             if (preview_) {  // not in the library: no item, no attachment; what it is instead (0.9)
                 target = {{"text", selection_->text}, {"item", nullptr}, {"attachment", nullptr}, {"pageLabel", pageLabel},
+                          {"page", currentPage},
                           {"preview", {{"title", row_.title}, {"url", preview_->url.empty() ? nlohmann::ordered_json(nullptr)
                                                                                            : nlohmann::ordered_json(preview_->url)}}}};
             } else {
                 target = {{"text", selection_->text},
                           {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib), nav.library().readingInfo(row_.key))},
                           {"attachment", plugins::attachmentJson(*att)},
-                          {"pageLabel", pageLabel}};
+                          {"pageLabel", pageLabel},
+                          {"page", currentPage}};
             }
             result_ = std::make_unique<PluginResult>(*e, chosen, "selectionAction", std::move(target),
                                                      pageArea());
@@ -1231,6 +1247,49 @@ void ReaderScreen::closeSelection(Nav& nav) {
     if (note_) nav.keyboard().hide();
     dropSelection();
     nav.damage(pageArea(), Waveform::Quality);
+}
+
+void ReaderScreen::citeAndJumpToGrimoire(Nav& nav, const std::string& quote, const std::string& note,
+                                         const std::string& pageLabel) {
+    const uint32_t pageNum = (type_ == DocType::Pdf ? static_cast<uint32_t>(shownPage(page_))
+                                                    : static_cast<uint32_t>(page_ + 1));
+    uint32_t citePage = 0;
+    if (!pageLabel.empty()) {
+        std::string digits;
+        for (char c : pageLabel)
+            if (!std::isspace(static_cast<unsigned char>(c))) digits += c;
+        if (!digits.empty() && std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c); })) {
+            citePage = static_cast<uint32_t>(std::strtoul(digits.c_str(), nullptr, 10));
+        }
+    }
+    if (citePage == 0) citePage = pageNum;
+
+    const std::string locator = !pageLabel.empty() ? pageLabel : (citePage > 0 ? "p. " + std::to_string(citePage) : "");
+
+    auto item = nav.library().item(row_.key);
+    const std::string title = item && !item->title.empty() ? item->title : row_.title;
+    const std::string authors = item ? bridge::formatAuthors(item->creators) : "";
+    const std::string year = item && !item->year.empty() ? item->year : (row_.year > 0 ? std::to_string(row_.year) : "");
+    const std::string shortCite = bridge::formatShortCite(authors, year, title, citePage);
+
+    bridge::CitationEvent cite;
+    cite.itemKey = row_.key;
+    cite.attachmentKey = row_.attachmentKey;
+    cite.shortCite = shortCite;
+    cite.title = title;
+    cite.authors = authors;
+    cite.year = year;
+    cite.page = citePage;
+    cite.locator = locator;
+    cite.quote = bridge::normalizeQuoteText(quote);
+    cite.note = bridge::sanitiseText(note, 4096);
+
+    std::string why;
+    bridge::appendCitation(cite, &why);
+    flushInk(nav);
+    const auto target = bridge::readReturnContext().value_or(bridge::ReturnContext{});
+    bridge::writeReturnToGrimoireHandoff(target, {}, &why);
+    nav.exitWithCode(43);
 }
 
 void ReaderScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {

@@ -1,5 +1,6 @@
 #include "screens/annotation_bar.h"
 
+#include "bridge/grimoire_bridge.h"
 #include "platform/device_profile.h"
 #include "ui/metrics.h"
 
@@ -179,8 +180,9 @@ void AnnotationBar::setView(std::string label, std::string comment) {
     place(height());
 }
 
-AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags)
-    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && (mode == Mode::Create || mode == Mode::Text)), tags_(std::move(tags)) {
+AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags, bool bridge)
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && (mode == Mode::Create || mode == Mode::Text)),
+      bridge_(bridge && (mode == Mode::Create || mode == Mode::Edit)), tags_(std::move(tags)) {
     place(height());
 }
 
@@ -226,8 +228,9 @@ Rect AnnotationBar::dotRect(int i) const {
 
 Rect AnnotationBar::buttonRect(int i) const {
     const int n = buttons();
-    const int w = (rect_.w - 2 * kPad - (n - 1) * kGap) / n;
-    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + (hasColours() ? kDotRowH + 6 + TagRow::kH + kTagGap : 0), w,
+    const int gap = n >= 5 ? 16 : kGap;
+    const int w = (rect_.w - 2 * kPad - (n - 1) * gap) / n;
+    return {rect_.x + kPad + i * (w + gap), rect_.y + kPad + (hasColours() ? kDotRowH + 6 + TagRow::kH + kTagGap : 0), w,
             kButtonH};
 }
 
@@ -280,13 +283,23 @@ void AnnotationBar::draw(cairo_t* cr, bool color) const {
         centredText(cr, c.name, {kSans, 6, colour_ == c.hex ? 700 : 400, false, kSecondary}, {d.x, d.y + 84, d.w, 40});
     }
     if (hasColours()) tags_.draw(cr);  // Text: no tag row
-    static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
-    static const char* edit[] = {"Comment", "Delete"};
-    static const char* text[] = {"Search", "More…"};
+    std::vector<std::string> labels;
+    if (mode_ == Mode::Create) {
+        labels.push_back("Highlight");
+        labels.push_back("Underline");
+        labels.push_back("Note");
+        if (bridge_) labels.push_back("Grimoire");
+        if (more_) labels.push_back(working_ ? "Working…" : "More…");
+    } else if (mode_ == Mode::Edit) {
+        labels.push_back("Comment");
+        if (bridge_) labels.push_back("Grimoire");
+        labels.push_back("Delete");
+    } else if (mode_ == Mode::Text) {
+        labels.push_back("Search");
+        if (more_) labels.push_back(working_ ? "Working…" : "More…");
+    }
     for (int i = 0; i < buttons(); ++i) {
-        const char* label = mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i];
-        const bool more = mode_ != Mode::Edit && i == buttons() - 1 && more_;
-        drawButton(cr, buttonRect(i), more && working_ ? "Working…" : label, false);
+        drawButton(cr, buttonRect(i), labels[static_cast<size_t>(i)], false);
     }
 }
 
@@ -300,19 +313,31 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
         if (dotRect(i).contains(p)) return {Action::Colour, i};
     if (const int t = hasColours() ? tags_.hit(p) : -1; t == TagRow::kAdd) return {Action::AddTag, -1};
     else if (t >= 0) return {Action::Tag, t};
-    static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
-    static const Action edit[] = {Action::Comment, Action::Delete};
-    static const Action text[] = {Action::Search, Action::More};
+    std::vector<Action> actions;
+    if (mode_ == Mode::Create) {
+        actions.push_back(Action::Highlight);
+        actions.push_back(Action::Underline);
+        actions.push_back(Action::Note);
+        if (bridge_) actions.push_back(Action::Grimoire);
+        if (more_) actions.push_back(Action::More);
+    } else if (mode_ == Mode::Edit) {
+        actions.push_back(Action::Comment);
+        if (bridge_) actions.push_back(Action::Grimoire);
+        actions.push_back(Action::Delete);
+    } else if (mode_ == Mode::Text) {
+        actions.push_back(Action::Search);
+        if (more_) actions.push_back(Action::More);
+    }
     for (int i = 0; i < buttons(); ++i)
         if (buttonRect(i).contains(p))
-            return {mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i], -1};
+            return {actions[static_cast<size_t>(i)], -1};
     return {};
 }
 
 AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips, std::string readOnly)
     : annotation_(std::move(a)),
       bar_(readOnly.empty() ? AnnotationBar::Mode::Edit : AnnotationBar::Mode::View, anchor, annotation_.color, false,
-           readOnly.empty() ? TagRow(std::move(chips), annotation_.tags) : TagRow()),
+           readOnly.empty() ? TagRow(std::move(chips), annotation_.tags) : TagRow(), bridge::bridgeActive()),
       self_(std::make_shared<AnnotationEditor*>(this)) {
     if (!readOnly.empty()) bar_.setView(std::move(readOnly), annotation_.type == "note" ? "" : annotation_.comment);
 }
@@ -464,6 +489,8 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             e->bar_.tags().setChips(recentChips(n->library()));
             e->bar_.tags().setOn(*tags);
         });
+    } else if (hit.action == AnnotationBar::Action::Grimoire) {
+        return Result::Grimoire;
     } else if (hit.action == AnnotationBar::Action::Comment) {
         enter(State::Comment, nav);
     } else if (hit.action == AnnotationBar::Action::Delete) {

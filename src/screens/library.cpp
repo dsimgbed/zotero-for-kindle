@@ -1,5 +1,6 @@
 #include "screens/library.h"
 
+#include "bridge/grimoire_bridge.h"
 #include "screens/goto_page.h"
 #include "screens/read_tag.h"
 #include "ui/metrics.h"
@@ -30,6 +31,10 @@ LibraryScreen::LibraryScreen(std::function<void(const ItemRow&)> openItem, Statu
 
 Rect LibraryScreen::sortButtonRect() { return {W() - kMargin - kHeaderButtonW, 22, kHeaderButtonW, 80}; }
 Rect LibraryScreen::filterButtonRect() { return {sortButtonRect().x - 20 - kHeaderButtonW, 22, kHeaderButtonW, 80}; }
+Rect LibraryScreen::grimoireButtonRect() {
+    if (!bridge::bridgeActive()) return {};
+    return {filterButtonRect().x - 20 - kHeaderButtonW, 22, kHeaderButtonW, 80};
+}
 Rect LibraryScreen::segmentRect(int index) {
     return segmentRects({kMargin, kTitleRowH, kSegmentW, kSegmentH}, 2)[static_cast<size_t>(index == 1)];
 }
@@ -103,8 +108,9 @@ void LibraryScreen::closeSheets() {
 
 void LibraryScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, W(), H()}, 255);
-    drawHeader(cr, "Library", false, 2 * kHeaderButtonW + 40);
+    const int reserve = (bridge::bridgeActive() ? 3 : 2) * kHeaderButtonW + (bridge::bridgeActive() ? 60 : 40);
+    drawHeader(cr, "Library", false, reserve);
+    if (bridge::bridgeActive()) drawButton(cr, grimoireButtonRect(), "Grimoire", false);
     drawButton(cr, filterButtonRect(), "Filter", false);
     drawButton(cr, sortButtonRect(), "Sort", false);
     drawSegments(cr, {kMargin, kTitleRowH, kSegmentW, kSegmentH}, {"All", "Downloaded"}, view_.downloaded ? 1 : 0);
@@ -215,6 +221,13 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type == GestureType::Tap) {
+        if (bridge::bridgeActive() && grimoireButtonRect().contains(g.pos)) {
+            const auto target = bridge::readReturnContext().value_or(bridge::ReturnContext{});
+            std::string why;
+            bridge::writeReturnToGrimoireHandoff(target, {}, &why);
+            nav.exitWithCode(43);
+            return;
+        }
         if (filterButtonRect().contains(g.pos)) {
             filter_.emplace(view_, libraries_);
             nav.damage(sheetArea(), Waveform::Ui);

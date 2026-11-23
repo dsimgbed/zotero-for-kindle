@@ -90,6 +90,7 @@ public:
     static Rect settingsRect();
     // The puzzle-piece icon left of the gear (Plugins, the launcher): only when some plugin has a
     // main screen; a dot on it when a plugin has a badge or plugin updates are waiting.
+    static Rect grimoireRect();
     static Rect pluginsRect();
     bool pluginsIcon() const { return pluginsIcon_; }
     bool pluginsDot() const { return pluginsDot_; }

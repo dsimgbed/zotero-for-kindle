@@ -33,6 +33,7 @@ public:
     static Rect topBarRect();
     static Rect panelRect();
     static Rect backRect();
+    static Rect grimoireRect();
     static Rect searchRect();
     static Rect contentsIconRect();
     static Rect markAreaRect();  // PDF: "Mark area", the sixth cell

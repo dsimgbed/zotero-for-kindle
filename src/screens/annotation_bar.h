@@ -95,7 +95,7 @@ void pickAnnotationTag(Nav&, std::function<void(const std::string& tag)> chosen,
 class AnnotationBar {
 public:
     enum class Mode { Create, Edit, Text, View };
-    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag, Search };
+    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag, Search, Grimoire };
     struct Hit {
         Action action = Action::None;
         int colour = -1;  // Colour: the dot; Plugin: the action's index; Tag: the chip's
@@ -104,13 +104,15 @@ public:
     // `anchor`: the selection or highlight; the bar sits above it, or below if there's no room.
     // `more`: the More… button (Create and Text; some plugin has selection actions). `tags`: its tag
     // row (none in Text: nothing is highlighted there).
-    AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false, TagRow tags = {});
+    AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false, TagRow tags = {}, bool bridge = false);
 
     Mode mode() const { return mode_; }
     Rect rect() const { return rect_; }
     Rect dotRect(int i) const;     // 0..7, Zotero's order (none in Text)
-    Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Search
+    Rect buttonRect(int i) const;  // Create: Highlight, Underline, Note, [Grimoire], [More…]; Edit: Comment, [Grimoire], Delete; Text: Search, [More…]
     bool hasColours() const { return mode_ == Mode::Create || mode_ == Mode::Edit; }
+    bool bridge() const { return bridge_; }
+    void setBridge(bool b) { bridge_ = b; }
     // View: the line it shows ("by Anna"), and the comment under it ("" none).
     const std::string& label() const { return label_; }
     void setView(std::string label, std::string comment);
@@ -135,10 +137,13 @@ public:
     static constexpr int kH = 250 + 12 + TagRow::kH;
     static constexpr int kTextH = 124;  // Text: the buttons' row alone
 
-private:
     int buttons() const {
-        return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : mode_ == Mode::View ? 0 : 2;
+        return mode_ == Mode::Create ? 3 + (bridge_ ? 1 : 0) + more_
+                                     : mode_ == Mode::Text ? 1 + more_
+                                                           : mode_ == Mode::View ? 0 : 2 + (bridge_ ? 1 : 0);
     }
+
+private:
     int height() const {
         return mode_ == Mode::Text ? kTextH : mode_ == Mode::View ? (comment_.empty() ? kTextH : kViewLabelH + commentH_ + 44) : kH;
     }
@@ -149,7 +154,7 @@ private:
     Rect anchor_, rect_;
     std::string colour_, label_, comment_;
     int commentH_ = 0;  // View: the comment's height (two lines at most)
-    bool more_ = false, working_ = false;
+    bool more_ = false, working_ = false, bridge_ = false;
     std::vector<PluginAction> actions_;
     TagRow tags_;
 };
@@ -160,7 +165,7 @@ private:
 // refreshes the page's highlights when changed() and repaints the page when it closes.
 class AnnotationEditor {
 public:
-    enum class Result { Open, Closed };
+    enum class Result { Open, Closed, Grimoire };
 
     // `chips`: the tag row's (recentChips()). `readOnly` (annotationReadOnly()): the annotation can't
     // be changed here; the bar only says so ("by Anna"), and the comment and Delete don't open.

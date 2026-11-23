@@ -332,6 +332,85 @@ bool writeJson(const std::string& dir, const char* name, const json& j, std::str
 bool validUtf8(const std::string& s) { return validUtf8Impl(s); }
 std::string sanitiseText(const std::string& s, size_t maxBytes) { return sanitiseImpl(s, maxBytes); }
 
+std::string normalizeQuoteText(const std::string& text, size_t maxBytes) {
+    std::string out;
+    out.reserve(text.size());
+    bool inSpaceRun = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+            if (!inSpaceRun) {
+                out.push_back(' ');
+                inSpaceRun = true;
+            }
+        } else if (c < 0x20 || c == 0x7f) {
+            continue;
+        } else {
+            out.push_back(static_cast<char>(c));
+            inSpaceRun = false;
+        }
+    }
+    size_t start = 0;
+    while (start < out.size() && out[start] == ' ') ++start;
+    size_t end = out.size();
+    while (end > start && out[end - 1] == ' ') --end;
+    if (start > 0 || end < out.size()) {
+        out = out.substr(start, end - start);
+    }
+    if (out.size() > maxBytes) {
+        size_t cut = maxBytes;
+        while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80) {
+            --cut;
+        }
+        out.resize(cut);
+        while (!out.empty() && out.back() == ' ') {
+            out.pop_back();
+        }
+    }
+    return out;
+}
+
+std::string formatAuthors(const std::vector<Creator>& creators) {
+    std::vector<std::string> names;
+    for (const auto& c : creators) {
+        if (!c.type.empty() && c.type != "author") continue;
+        std::string name;
+        if (!c.name.empty()) {
+            name = c.name;
+        } else if (!c.last.empty()) {
+            name = c.last;
+        } else if (!c.first.empty()) {
+            name = c.first;
+        }
+        if (name.empty()) continue;
+        size_t lastSpace = name.find_last_of(" \t\r\n");
+        if (lastSpace != std::string::npos && lastSpace + 1 < name.size()) {
+            name = name.substr(lastSpace + 1);
+        }
+        names.push_back(std::move(name));
+    }
+    if (names.empty()) return "";
+    if (names.size() == 1) return names[0];
+    if (names.size() == 2) return names[0] + " & " + names[1];
+    return names[0] + " et al.";
+}
+
+std::string formatShortCite(const std::string& authors, const std::string& year, const std::string& title,
+                            uint32_t page) {
+    std::string cite;
+    if (!authors.empty() && !year.empty()) {
+        cite = authors + " " + year;
+    } else if (!title.empty()) {
+        cite = title;
+    } else {
+        cite = "Untitled";
+    }
+    if (page > 0) {
+        cite += ", p. " + std::to_string(page);
+    }
+    return cite;
+}
+
 std::string bridgeDir() {
     const char* v = std::getenv("GZ_BRIDGE_DIR");
     return v && *v ? std::string(v) : std::string(kDefaultDir);

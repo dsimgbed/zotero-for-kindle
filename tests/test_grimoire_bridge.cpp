@@ -20,8 +20,12 @@
 #include "fake_plugins.h"
 #include "fixture_library.h"
 #include "plugins/host.h"
+#include "screens/annotation_bar.h"
+#include "screens/home.h"
+#include "screens/library.h"
 #include "screens/open_flow.h"
 #include "screens/reader.h"
+#include "screens/reader_menus.h"
 #include "store/db.h"
 
 using namespace zk;
@@ -504,4 +508,220 @@ TEST_CASE("bridge deep links: a handoff picks its file and applies the reader pa
     again->onShow(nav);
     REQUIRE(waitReady(*again, nav));  // the page count arrives with Opened, asynchronously
     REQUIRE(waitPage(*again, nav, again->pageCount() - 1));
+}
+
+TEST_CASE("bridge: normalizeQuoteText preserves word boundaries and safely truncates UTF-8") {
+    // 1. Multi-line, carriage returns, tabs: words never glued together
+    const std::string raw = "  The \r\n structure  \t of \n\n scientific \r revolutions.  ";
+    const std::string normalized = bridge::normalizeQuoteText(raw);
+    CHECK(normalized == "The structure of scientific revolutions.");
+
+    // 2. Control characters stripped
+    const std::string withControls = "Word1\x01\x02\x05 Word2\x1f\x7f Word3";
+    CHECK(bridge::normalizeQuoteText(withControls) == "Word1 Word2 Word3");
+
+    // 3. UTF-8 boundary safe truncation
+    // "Hello " (6 bytes) + "€" (3 bytes: \xE2\x82\xAC) + " world"
+    const std::string euroStr = "Hello \xE2\x82\xAC world";
+    // Truncate at 7 bytes (inside the 3-byte euro character): must cut back to "Hello" (5 bytes, trailing space trimmed)
+    CHECK(bridge::normalizeQuoteText(euroStr, 7) == "Hello");
+    // Truncate at 9 bytes (exact end of euro): keeps "Hello €"
+    CHECK(bridge::normalizeQuoteText(euroStr, 9) == "Hello \xE2\x82\xAC");
+
+    // 4-byte emoji: "Hi " (3 bytes) + 😀 (\xF0\x9F\x98\x80, 4 bytes)
+    const std::string emojiStr = "Hi \xF0\x9F\x98\x80 there";
+    // Truncate at 4, 5, or 6 bytes (in middle of emoji): must truncate cleanly before emoji
+    CHECK(bridge::normalizeQuoteText(emojiStr, 4) == "Hi");
+    CHECK(bridge::normalizeQuoteText(emojiStr, 5) == "Hi");
+    CHECK(bridge::normalizeQuoteText(emojiStr, 6) == "Hi");
+    // Truncate at 7 bytes: keeps emoji
+    CHECK(bridge::normalizeQuoteText(emojiStr, 7) == "Hi \xF0\x9F\x98\x80");
+
+    // Enforce 4096-byte cap
+    const std::string huge(5000, 'x');
+    CHECK(bridge::normalizeQuoteText(huge).size() == 4096);
+}
+
+TEST_CASE("bridge: formatAuthors and formatShortCite cleanly match main.js format") {
+    // 1 author
+    std::vector<Creator> c1 = {{"Thomas", "Kuhn", "", "author"}};
+    CHECK(bridge::formatAuthors(c1) == "Kuhn");
+    CHECK(bridge::formatShortCite("Kuhn", "1962", "The Structure of Scientific Revolutions", 42) == "Kuhn 1962, p. 42");
+
+    // 2 authors
+    std::vector<Creator> c2 = {{"Jerome", "Adda", "", "author"}, {"Russell", "Cooper", "", "author"}};
+    CHECK(bridge::formatAuthors(c2) == "Adda & Cooper");
+    CHECK(bridge::formatShortCite("Adda & Cooper", "2003", "Dynamic Economics", 15) == "Adda & Cooper 2003, p. 15");
+
+    // 3+ authors
+    std::vector<Creator> c3 = {{"M.", "Raissi", "", "author"}, {"P.", "Perdikaris", "", "author"}, {"G.", "Karniadakis", "", "author"}};
+    CHECK(bridge::formatAuthors(c3) == "Raissi et al.");
+    CHECK(bridge::formatShortCite("Raissi et al.", "2019", "Physics-informed neural networks", 0) == "Raissi et al. 2019");
+
+    // Single-field author (name only)
+    std::vector<Creator> cSingle = {{"", "", "Plato", "author"}};
+    CHECK(bridge::formatAuthors(cSingle) == "Plato");
+    CHECK(bridge::formatShortCite("Plato", "", "The Republic", 10) == "The Republic, p. 10");
+
+    // Non-author creators ignored
+    std::vector<Creator> cEditor = {{"John", "Editor", "", "editor"}};
+    CHECK(bridge::formatAuthors(cEditor) == "");
+    CHECK(bridge::formatShortCite("", "", "Some Collected Works", 5) == "Some Collected Works, p. 5");
+
+    // Completely empty
+    CHECK(bridge::formatShortCite("", "", "", 0) == "Untitled");
+}
+
+TEST_CASE("bridge: 1-tap Grimoire jump buttons in Reader, Library, and Home") {
+    SUBCASE("active bridge surfaces buttons and exits with 43") {
+        BridgeDir dir;
+        REQUIRE(bridge::bridgeActive());
+
+        // Set up return context
+        bridge::ReturnContext ctx{"NB_ACTIVE", 12, 4};
+        REQUIRE(bridge::writeReturnContext(ctx));
+
+        Db db = Db::open(":memory:");
+        Library lib(db);
+        fillFixtureLibrary(lib, 5);
+        FakeNav nav(lib);
+
+        // 1. Reader top bar Grimoire button
+        const auto pdf = lib.rowFor("IT000001");
+        REQUIRE(pdf);
+        auto reader = fakeReader(*pdf, nav);
+        reader->onShow(nav);
+        ReaderMenus menus(*reader, nullptr);
+        const Rect rGrimoire = ReaderMenus::grimoireRect();
+        CHECK_FALSE(rGrimoire.empty());
+        CHECK(rGrimoire.x + rGrimoire.w < ReaderMenus::searchRect().x);
+
+        // Tap Grimoire button
+        menus.onGesture(tapAt({rGrimoire.x + 10, rGrimoire.y + 10}), nav);
+        CHECK(nav.quitted);
+        CHECK(nav.exitCode == 43);
+
+        // Verify handoff was written with target grimoire and return context
+        std::string why;
+        std::string handoffStr;
+        REQUIRE(bridge::readFileSafe(dir.file("handoff.json"), bridge::kMaxJsonBytes, &handoffStr, &why));
+        const auto h = bridge::parseHandoff(handoffStr, &why);
+        REQUIRE(h);
+        CHECK(h->target == "grimoire");
+        CHECK(h->notebookId == "NB_ACTIVE");
+        CHECK(h->pageId == 12);
+        CHECK(h->pageIndex == 4);
+
+        // 2. Library header Grimoire button
+        FakeNav navLib(lib);
+        LibraryScreen libScreen([](const ItemRow&) {}, [](const std::string&) { return ""; });
+        const Rect lGrimoire = LibraryScreen::grimoireButtonRect();
+        CHECK_FALSE(lGrimoire.empty());
+        CHECK(lGrimoire.x + lGrimoire.w < LibraryScreen::filterButtonRect().x);
+
+        libScreen.onGesture(tapAt({lGrimoire.x + 10, lGrimoire.y + 10}), navLib);
+        CHECK(navLib.quitted);
+        CHECK(navLib.exitCode == 43);
+
+        // 3. Home header Grimoire button
+        FakeNav navHome(lib);
+        SyncStatus syncStatus;
+        HomeScreen homeScreen(syncStatus, {}, [] { return 1'000'000; });
+        const Rect hGrimoire = HomeScreen::grimoireRect();
+        CHECK_FALSE(hGrimoire.empty());
+        CHECK(hGrimoire.x + hGrimoire.w < HomeScreen::pluginsRect().x);
+
+        homeScreen.onGesture(tapAt({hGrimoire.x + 10, hGrimoire.y + 10}), navHome);
+        CHECK(navHome.quitted);
+        CHECK(navHome.exitCode == 43);
+    }
+
+    SUBCASE("absent bridge hides buttons completely (zero UI regressions)") {
+        ::unsetenv(bridge::kEnvVar);
+        REQUIRE_FALSE(bridge::bridgeActive());
+
+        CHECK(ReaderMenus::grimoireRect().empty());
+        CHECK(LibraryScreen::grimoireButtonRect().empty());
+        CHECK(HomeScreen::grimoireRect().empty());
+    }
+}
+
+TEST_CASE("bridge: 1-tap Grimoire Cite-and-Jump on Selection & Existing Highlight") {
+    BridgeDir dir;
+    REQUIRE(bridge::bridgeActive());
+
+    bridge::ReturnContext ctx{"ESSAY_NB", 99, 1};
+    REQUIRE(bridge::writeReturnContext(ctx));
+
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    fillFixtureLibrary(lib, 5);
+    FakeNav nav(lib);
+
+    const auto pdf = lib.rowFor("IT000001");
+    REQUIRE(pdf);
+    lib.setFileState(pdf->attachmentKey, AttachmentRecord::State::Local, "/tmp/paper.pdf");
+    auto reader = fakeReader(*pdf, nav);
+    reader->onShow(nav);
+    REQUIRE(waitReady(*reader, nav));
+
+    // 1. Text Selection Bar: 5 buttons when bridgeActive()
+    AnnotationBar bar(AnnotationBar::Mode::Create, {100, 200, 400, 50}, "#ffd400", true, {}, true);
+    CHECK(bar.buttonRect(3).w > 100);
+    // Button 3 is Grimoire
+    const auto hitGrimoire = bar.hit({bar.buttonRect(3).x + 10, bar.buttonRect(3).y + 10});
+    CHECK(hitGrimoire.action == AnnotationBar::Action::Grimoire);
+
+    // Test Reader citeAndJumpToGrimoire
+    reader->citeAndJumpToGrimoire(nav, "Multi-line\r\nquote\tacross lines", "User note", "42");
+    CHECK(nav.quitted);
+    CHECK(nav.exitCode == 43);
+
+    // Verify inbox event
+    size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(dir.file("inbox"))) {
+        if (entry.path().extension() == ".json") {
+            ++count;
+            const auto parsed = bridge::parseCitation(BridgeDir::read(entry.path().string()));
+            REQUIRE(parsed);
+            CHECK(parsed->quote == "Multi-line quote across lines");
+            CHECK(parsed->note == "User note");
+            CHECK(parsed->page == 42);
+            CHECK(parsed->locator == "42");
+            CHECK(parsed->shortCite.find("p. 42") != std::string::npos);
+        }
+    }
+    CHECK(count >= 1);
+
+    // 2. Existing highlight edit bar: 3 buttons when bridgeActive()
+    AnnotationRecord ann;
+    ann.key = "HL0001";
+    ann.parentKey = pdf->attachmentKey;
+    ann.type = "highlight";
+    ann.text = "Existing highlight text\r\nwith newline";
+    ann.comment = "Thoughtful reflection";
+    ann.color = "#ffd400";
+    ann.pageLabel = "15";
+    lib.createAnnotation(ann);
+
+    AnnotationEditor editor(ann, {100, 200, 400, 50});
+    CHECK(editor.bar().buttons() == 3);
+    // Button 1 is Grimoire
+    const Rect btnGrimoire = editor.bar().buttonRect(1);
+    const auto hitEditGrimoire = editor.bar().hit({btnGrimoire.x + 5, btnGrimoire.y + 5});
+    CHECK(hitEditGrimoire.action == AnnotationBar::Action::Grimoire);
+
+    // Tapping it via AnnotationEditor::onTap yields Result::Grimoire
+    FakeNav navEdit(lib);
+    const auto editRes = editor.onTap({btnGrimoire.x + 5, btnGrimoire.y + 5}, navEdit);
+    CHECK(editRes == AnnotationEditor::Result::Grimoire);
+
+    // 3. Standalone mode (bridge inactive)
+    ::unsetenv(bridge::kEnvVar);
+    REQUIRE_FALSE(bridge::bridgeActive());
+    AnnotationBar barStandalone(AnnotationBar::Mode::Create, {100, 200, 400, 50}, "#ffd400", true, {}, false);
+    CHECK(barStandalone.buttons() == 4); // Highlight, Underline, Note, More... (no Grimoire)
+
+    AnnotationBar editStandalone(AnnotationBar::Mode::Edit, {100, 200, 400, 50}, "#ffd400", false, {}, false);
+    CHECK(editStandalone.buttons() == 2); // Comment, Delete (no Grimoire)
 }

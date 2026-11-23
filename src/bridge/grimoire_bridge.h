@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
+
+#include "store/records.h"
 
 namespace zk {
 
@@ -52,6 +55,24 @@ struct CitationPayload {
     uint32_t page = 0;
     std::string locator, quote, note;
 };
+
+using CitationEvent = CitationPayload;
+
+// Normalizes quote text: replaces \r, \n, \t runs with single spaces, strips remaining ASCII
+// control characters (< 0x20 or 0x7f), collapses repeated spaces, trims whitespace, and safely
+// truncates to <= maxBytes without splitting a multi-byte UTF-8 character.
+std::string normalizeQuoteText(const std::string& text, size_t maxBytes = 4096);
+
+// Formats an author citation string matching main.js:
+// 1 author: "Kuhn"
+// 2 authors: "Adda & Cooper"
+// 3+ authors: "Raissi et al."
+std::string formatAuthors(const std::vector<Creator>& creators);
+
+// Formats short_cite cleanly matching main.js:
+// "<Author> <Year>, p. <page>" / "<Author> <Year>" / "<Title>, p. <page>" / "<Title>" / "Untitled"
+std::string formatShortCite(const std::string& authors, const std::string& year, const std::string& title,
+                            uint32_t page = 0);
 
 // Where the bridge lives: GZ_BRIDGE_DIR when non-empty, else the on-device default. The supplied
 // directory (when non-empty) always wins; no function here creates a directory on its own except
@@ -102,6 +123,11 @@ std::optional<HandoffRequest> consumeZoteroHandoff(const std::string& dir = {}, 
 // Writes inbox/<epoch_ms>-<nonce>.json. `idOut`, if given, receives the file's id.
 bool queueCitation(const CitationPayload& c, const std::string& dir = {}, std::string* idOut = nullptr,
                    std::string* why = nullptr);
+
+// 1-tap helper to append citation into the inbox
+inline bool appendCitation(const CitationEvent& c, std::string* why = nullptr, const std::string& dir = {}) {
+    return queueCitation(c, dir, nullptr, why);
+}
 
 // Exports only non-sensitive bibliographic fields from `lib`. Never touches config/accounts.
 bool exportLibraryIndex(Library& lib, const std::string& dir = {}, std::string* why = nullptr,

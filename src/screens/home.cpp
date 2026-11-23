@@ -2,6 +2,7 @@
 
 #include "app/catalog_service.h"
 #include "app/settings_store.h"
+#include "bridge/grimoire_bridge.h"
 
 #include "screens/item_details.h"
 #include "screens/plugin_body.h"
@@ -43,11 +44,16 @@ Rect HomeScreen::closeRect() { return {W() - kMargin - 80, 34, 80, 96}; }
 Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 180, 34, 80, 96}; }
 Rect HomeScreen::settingsRect() { return {W() - kMargin - 280, 34, 80, 96}; }
 Rect HomeScreen::pluginsRect() { return {W() - kMargin - 380, 34, 80, 96}; }
+constexpr int kGrimoireBtnW = 190, kGrimoireBtnH = 80;
+Rect HomeScreen::grimoireRect() {
+    if (!bridge::bridgeActive()) return {};
+    return {pluginsRect().x - 20 - kGrimoireBtnW, 42, kGrimoireBtnW, kGrimoireBtnH};
+}
 Rect HomeScreen::chipRect() const {
     if (chip_.empty()) return {};
     const TextStyle title{kSans, 17, 700}, chip{kSans, 8.5, 500};
     const int x = kMargin + measureText("Zotero", title, 600, 1).width + 30;
-    const int right = pluginsRect().x - 20;
+    const int right = (bridge::bridgeActive() ? grimoireRect().x : pluginsRect().x) - 20;
     const int w = std::min(measureText(chip_ + " ▾", chip, 2000, 1).width + 60, right - x);
     return {x, 46, std::max(0, w), 72};
 }
@@ -235,6 +241,9 @@ void HomeScreen::draw(Canvas& canvas) {
         puzzleIcon(cr, pr.x + pr.w / 2.0, pr.y + pr.h / 2.0, kSecondary);
         if (pluginsDot_) puzzleBadge(cr, pr.x + pr.w / 2.0, pr.y + pr.h / 2.0);
     }
+    if (bridge::bridgeActive()) {
+        drawButton(cr, grimoireRect(), "Grimoire", false);
+    }
     status_.drawIndicator(cr, syncIndicatorRect());
     const Rect x = closeRect();
     closeIcon(cr, x.x + x.w / 2.0, x.y + x.h / 2.0, kSecondary);
@@ -393,6 +402,13 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (pluginsIcon_ && pluginsRect().contains(g.pos)) {
         nav.push(std::make_unique<PluginLauncherScreen>());
+        return;
+    }
+    if (bridge::bridgeActive() && grimoireRect().contains(g.pos)) {
+        const auto target = bridge::readReturnContext().value_or(bridge::ReturnContext{});
+        std::string why;
+        bridge::writeReturnToGrimoireHandoff(target, {}, &why);
+        nav.exitWithCode(43);
         return;
     }
     if (searchFieldRect().contains(g.pos)) {

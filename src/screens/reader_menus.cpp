@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "app/settings_store.h"
+#include "bridge/grimoire_bridge.h"
 #include "docs/fonts.h"
 #include "platform/lipc.h"
 #include "screens/book_notes.h"
@@ -39,6 +40,11 @@ constexpr double kMinSize = 7, kMaxSize = 16, kSizeStep = 0.5;
 Rect ReaderMenus::topBarRect() { return {0, 0, W(), kTopH}; }
 Rect ReaderMenus::panelRect() { return {0, H() - kPanelH, W(), kPanelH}; }
 Rect ReaderMenus::backRect() { return {0, 0, 320, kTopH}; }
+Rect ReaderMenus::grimoireRect() {
+    if (!bridge::bridgeActive()) return {};
+    constexpr int w = 190, h = 80;
+    return {searchRect().x - 20 - w, 30, w, h};
+}
 Rect ReaderMenus::searchRect() { return {W() - kMargin - 190, 30, 80, 80}; }
 Rect ReaderMenus::contentsIconRect() { return {W() - kMargin - 90, 30, 90, 80}; }
 Rect ReaderMenus::markAreaRect() { return buttonRect(5, 7); }
@@ -526,6 +532,14 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         nav.pop();
         return;
     }
+    if (bridge::bridgeActive() && grimoireRect().contains(g.pos)) {
+        reader_.flushInk(nav);
+        const bridge::ReturnContext target = bridge::readReturnContext().value_or(bridge::ReturnContext{});
+        std::string why;
+        bridge::writeReturnToGrimoireHandoff(target, {}, &why);
+        nav.exitWithCode(43);
+        return;
+    }
     if (searchRect().contains(g.pos)) {
         nav.push(std::make_unique<BookSearchScreen>(reader_));
         return;
@@ -591,8 +605,10 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_stroke(cr);
     centredText(cr, reader_.preview() ? "Back" : "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
     const std::string title = reader_.row().title.empty() ? "Untitled" : reader_.row().title;
+    const Rect gr = grimoireRect();
+    const int titleRight = !gr.empty() ? gr.x - 10 : searchRect().x - 10;
+    const Rect room{320, 30, std::max(0, titleRight - 320), 90};
     if (reader_.preview()) {  // the title, and a quiet "Preview" badge: it isn't in the library
-        const Rect room{320, 30, W() - 320 - 260, 90};
         const TextStyle badge{kSans, 6, 700};
         const int bw = measureText("Preview", badge, room.w, 1).width + 36;
         const int tw = std::min(room.w - bw - 20, measureText(title, {kSerif, 9, 700}, room.w, 1).width);
@@ -602,7 +618,10 @@ void ReaderMenus::draw(Canvas& canvas) {
         fillRect(cr, b, 235);
         centredText(cr, "Preview", badge, {b.x + 18, b.y, b.w - 36, b.h});
     } else {
-        centredText(cr, title, {kSerif, 9, 700}, {320, 30, W() - 320 - 260, 90});
+        centredText(cr, title, {kSerif, 9, 700}, room);
+    }
+    if (!gr.empty()) {
+        drawButton(cr, gr, "Grimoire", false);
     }
     const Rect sr = searchRect();
     searchIcon(cr, sr.x + sr.w / 2.0 - 4, sr.y + sr.h / 2.0 - 4, kInk);

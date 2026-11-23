@@ -61,7 +61,12 @@ public:
     Keyboard& keyboard() override { return keyboardFake; }
     int64_t nowMs() const override { return now; }
     void quit() override { quitted = true; }
+    void exitWithCode(int code) override {
+        exitCode = code;
+        quitted = true;
+    }
     void restart() override { restarted = true; }
+    std::optional<int> exitCode;
     void toast(const std::string& text) override { toasts.push_back(text); }
     const Screen* top() const override { return visible; }
     void orientationChanged() override { ++orientationChanges; }

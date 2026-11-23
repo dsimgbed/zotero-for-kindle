@@ -133,5 +133,24 @@ loadMain(zk2);
 const resPreview = await reg2.selectionActions["cite-to-grimoire"].run({ item: null, text: "q", pageLabel: null });
 assert(typeof resPreview === "string" && resPreview.includes("not in your library"), "preview message: " + resPreview);
 
+// multi-line / tabbed quote normalization & word boundary preservation + EPUB page fallback
+sendCalls = [];
+const multiLineText = "First line\r\nsecond line\tthird\n\nline   with   spaces\x01\x02\x7f";
+const epubSel = {
+  item: kuhn,
+  attachment: { key: "ATT_EPUB" },
+  text: multiLineText,
+  pageLabel: "",
+  page: 27,
+};
+const resEpub = await reg2.selectionActions["cite-to-grimoire"].run(epubSel);
+assert(typeof resEpub === "object", "epub selection succeeds");
+assert(sendCalls.length === 1, "sendCitation called for epub");
+const epubPayload = sendCalls[0];
+assert(epubPayload.quote === "First line second line third line with spaces", "quote normalization preserved word boundaries: " + JSON.stringify(epubPayload.quote));
+assert(epubPayload.page === 27, "epub page extracted: " + epubPayload.page);
+assert(epubPayload.locator === "p. 27", "epub locator formatted: " + epubPayload.locator);
+assert(epubPayload.short_cite === "Kuhn 1962, p. 27", "epub short_cite with page fallback: " + epubPayload.short_cite);
+
 console.log("ALL TESTS PASSED");
-console.log("plugin.json valid; main.js loaded; selection/item/screen/missing-bridge/truncation/multi-author OK");
+console.log("plugin.json valid; main.js loaded; selection/item/screen/missing-bridge/truncation/multi-author/quoteText/epubPage OK");

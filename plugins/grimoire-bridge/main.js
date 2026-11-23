@@ -94,13 +94,13 @@ function attachmentKeyOf(sel) {
 
 function quoteText(text) {
   var q = typeof text === "string" ? text : "";
-  var clean = q.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  var replaced = q.replace(/[\r\n\t]+/g, " ");
+  var clean = replaced.replace(/[\u0000-\u001f\u007f]/g, "").replace(/ +/g, " ").trim();
   if (clean.length > MAX_QUOTE) clean = clean.slice(0, MAX_QUOTE);
   return clean;
 }
 
 function pageNumber(pageLabel, page) {
-  if (typeof page === "number" && page > 0) return page;
   if (typeof pageLabel === "string" && pageLabel.length > 0) {
     var digits = pageLabel.replace(/\s+/g, "");
     if (/^[0-9]+$/.test(digits)) {
@@ -108,6 +108,7 @@ function pageNumber(pageLabel, page) {
       if (n > 0) return n;
     }
   }
+  if (typeof page === "number" && page > 0) return Math.floor(page);
   return 0;
 }
 
@@ -219,6 +220,9 @@ zk.selectionAction({
       page = pageNumber(pageLabel, sel.page);
     }
     var shortCite = formatShortCite(item, pageLabel, page);
+    var loc = "";
+    if (pageLabel && String(pageLabel).trim().length > 0) loc = String(pageLabel).trim();
+    else if (page > 0) loc = "p. " + page;
     var payload = {
       item_key: item.key,
       attachment_key: attachmentKeyOf(sel),
@@ -227,7 +231,7 @@ zk.selectionAction({
       authors: authorCite(authorNames(item)),
       year: item.year != null ? String(item.year) : "",
       page: page,
-      locator: "",
+      locator: loc,
       quote: text,
       note: "",
     };

@@ -138,6 +138,7 @@ public:
     // A Grimoire handoff's page (1-based, clamped to the opened book) and optional locator. Applied
     // once the document reports Opened; before that there's no page count to clamp against.
     void jumpToBridgeTarget(int page1, const std::string& locator);
+    void citeAndJumpToGrimoire(Nav& nav, const std::string& quote, const std::string& note, const std::string& pageLabel);
     void closeMenus(Nav&);
     bool menusOpen() const { return menus_ != nullptr; }
     ReaderMenus* menus() { return menus_.get(); }

@@ -31,6 +31,7 @@ public:
     const SortSheet* sortSheet() const { return sort_ ? &*sort_ : nullptr; }
     const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
 
+    static Rect grimoireButtonRect();
     static Rect filterButtonRect();
     static Rect sortButtonRect();
     static Rect segmentRect(int index);  // 0 All, 1 Downloaded
