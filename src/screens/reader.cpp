@@ -720,19 +720,46 @@ void ReaderScreen::applyBridgeJump() {
     if (!worker_) return;
     auto jump = std::move(pendingBridgeJump_);
     if (!jump) return;
-    if (jump->page1 > 0) {
-        int page = jump->page1;
-        if (pageCount_ > 0 && page > pageCount_) page = pageCount_;
-        turnTo(page - 1);  // turnTo counts views from 0
-    }
+
+    int page1 = jump->page1;
+    std::string engineLocator;
     if (!jump->locator.empty()) {
-        std::string value = jump->locator;
-        const bool digits = std::all_of(value.begin(), value.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
-        if (digits) value = "p:" + value;  // a PDF's native position is 1-based
+        std::string trimmed = jump->locator;
+        while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.front()))) trimmed.erase(trimmed.begin());
+        while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back()))) trimmed.pop_back();
+        std::string digits = trimmed;
+        if (digits.rfind("p. ", 0) == 0) digits = digits.substr(3);
+        const bool isPageLabel = !digits.empty() &&
+            std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
+        if (isPageLabel) {
+            try {
+                const int parsed = std::stoi(digits);
+                if (page1 <= 0 && parsed > 0) page1 = parsed;
+            } catch (...) {
+            }
+        } else if (!trimmed.empty()) {
+            engineLocator = trimmed;
+        }
+    }
+
+    if (!engineLocator.empty()) {
         markJumpOrigin();
         commitInk();
         turning_ = true;
-        worker_->showPosition(DocPosition{value});
+        worker_->showPosition(DocPosition{engineLocator});
+        return;
+    }
+    if (page1 > 0) {
+        if (type_ == DocType::Pdf) {
+            markJumpOrigin();
+            commitInk();
+            turning_ = true;
+            worker_->showPosition(DocPosition{"p:" + std::to_string(page1 - 1)});  // PdfEngine's p:N is 0-based
+        } else {
+            int page = page1;
+            if (pageCount_ > 0 && page > pageCount_) page = pageCount_;
+            turnTo(page - 1);  // turnTo counts views from 0
+        }
     }
 }
 
@@ -1264,7 +1291,10 @@ void ReaderScreen::citeAndJumpToGrimoire(Nav& nav, const std::string& quote, con
     }
     if (citePage == 0) citePage = pageNum;
 
-    const std::string locator = !pageLabel.empty() ? pageLabel : (citePage > 0 ? "p. " + std::to_string(citePage) : "");
+    const std::string locator = !pageLabel.empty()
+        ? pageLabel
+        : (type_ != DocType::Pdf && !position_.value.empty() ? position_.value
+                                                            : (citePage > 0 ? std::to_string(citePage) : ""));
 
     auto item = nav.library().item(row_.key);
     const std::string title = item && !item->title.empty() ? item->title : row_.title;
