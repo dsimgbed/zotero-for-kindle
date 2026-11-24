@@ -2141,6 +2141,25 @@ std::string Library::createAnnotation(AnnotationRecord a) {
     return a.key;
 }
 
+std::string Library::createAnnotationWithKey(AnnotationRecord a) {
+    if (!isZoteroKey(a.key)) return {};
+    if (annotation(a.key) || objectVersion(a.key) > 0 || libraryOf(a.key).has_value()) return {};
+    // In its file's library; in a group, made by this user.
+    if (auto file = attachment(a.parentKey)) a.lib = file->lib;
+    if (a.lib != kMyLibrary) {
+        a.authorId = userId();
+        a.authorName = userName();
+    }
+    a.version = 0;
+    a.createdHere = true;
+    a.dirty = true;
+    a.conflict = a.deletedHere = false;
+    a.conflictOf.clear();
+    a.dateModified = nowUtc();
+    upsertAnnotation(a);
+    return a.key;
+}
+
 bool Library::editAnnotation(const AnnotationRecord& edited) {
     auto old = annotation(edited.key);
     if (!old || old->deletedHere) return false;

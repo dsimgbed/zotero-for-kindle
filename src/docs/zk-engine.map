@@ -1,4 +1,4 @@
 {
-  global: zk_*_engine_create; zk_*_doc_cache_close;
+  global: zk_*_engine_create; zk_*_doc_cache_close; zk_pdf_inspect_pages;
   local: *;
 };

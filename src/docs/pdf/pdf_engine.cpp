@@ -1,6 +1,7 @@
 #include "docs/pdf/pdf_engine.h"
 
 #include "docs/annotation_text.h"
+#include "docs/pdf_geometry.h"
 
 extern "C" {
 #include <mupdf/fitz.h>
@@ -1151,3 +1152,154 @@ std::optional<InkPlacement> PdfEngine::placeBox(int page, Rect r, std::optional<
 }
 
 }  // namespace zk
+
+namespace {
+
+void copyPdfErr(char* errBuf, size_t errCap, const char* msg) {
+    if (errBuf && errCap > 0) std::snprintf(errBuf, errCap, "%s", msg ? msg : "unknown error");
+}
+
+double cleanRound2(double v) {
+    const double r = std::round(v * 100.0) / 100.0;
+    return r == 0.0 ? 0.0 : r;
+}
+
+fz_document* openPdfDocSafe(fz_context* fz, const char* path, char* errBuf, size_t errCap) {
+    fz_document* volatile doc = nullptr;
+    fz_try(fz) { doc = fz_open_document(fz, path); }
+    fz_catch(fz) {
+        copyPdfErr(errBuf, errCap, fz_caught_message(fz));
+        doc = nullptr;
+    }
+    return doc;
+}
+
+int needsPasswordSafe(fz_context* fz, fz_document* doc) {
+    volatile int needs = 0;
+    fz_try(fz) { needs = fz_needs_password(fz, doc); }
+    fz_catch(fz) { needs = 0; }
+    return needs;
+}
+
+int countPagesSafe(fz_context* fz, fz_document* doc) {
+    volatile int pages = 0;
+    fz_try(fz) { pages = fz_count_pages(fz, doc); }
+    fz_catch(fz) { pages = 0; }
+    return pages;
+}
+
+bool inspectSinglePdfPage(fz_context* fz, fz_document* doc, int pageIndex, ZkPdfPageMetrics* out,
+                          char* errBuf, size_t errCap) {
+    ZkPdfPageMetrics m{};
+    m.pageIndex = pageIndex;
+    fz_page* p = nullptr;
+    fz_var(p);
+    fz_rect bound = fz_empty_rect;
+    fz_rect media = fz_empty_rect;
+    fz_matrix userToPage = fz_identity;
+    volatile int rot = 0;
+    volatile bool ok = true;
+    char label[128] = "";
+
+    fz_try(fz) {
+        p = fz_load_page(fz, doc, pageIndex);
+        bound = fz_bound_page(fz, p);
+        media = bound;
+        if (pdf_page* pp = pdf_page_from_fz_page(fz, p)) {
+            pdf_page_transform(fz, pp, &media, &userToPage);
+            if (pdf_obj* rotObj = pdf_dict_get_inheritable(fz, pp->obj, PDF_NAME(Rotate)))
+                rot = pdf_to_int(fz, rotObj);
+        }
+        fz_page_label(fz, p, label, sizeof label);
+    }
+    fz_always(fz) { fz_drop_page(fz, p); }
+    fz_catch(fz) {
+        copyPdfErr(errBuf, errCap, fz_caught_message(fz));
+        ok = false;
+    }
+    if (!ok) return false;
+
+    int r = rot;
+    r = ((r % 360) + 360) % 360;
+    r = ((r + 45) / 90) % 4 * 90;
+
+    m.widthPt = cleanRound2(static_cast<double>(bound.x1) - static_cast<double>(bound.x0));
+    m.heightPt = cleanRound2(static_cast<double>(bound.y1) - static_cast<double>(bound.y0));
+    m.rotation = r;
+    if (label[0]) std::snprintf(m.pageLabel, sizeof m.pageLabel, "%s", label);
+    else std::snprintf(m.pageLabel, sizeof m.pageLabel, "%d", pageIndex + 1);
+    m.cropBox[0] = cleanRound2(static_cast<double>(media.x0));
+    m.cropBox[1] = cleanRound2(static_cast<double>(media.y0));
+    m.cropBox[2] = cleanRound2(static_cast<double>(media.x1));
+    m.cropBox[3] = cleanRound2(static_cast<double>(media.y1));
+    m.userToPage[0] = cleanRound2(static_cast<double>(userToPage.a));
+    m.userToPage[1] = cleanRound2(static_cast<double>(userToPage.b));
+    m.userToPage[2] = cleanRound2(static_cast<double>(userToPage.c));
+    m.userToPage[3] = cleanRound2(static_cast<double>(userToPage.d));
+    m.userToPage[4] = cleanRound2(static_cast<double>(userToPage.e));
+    m.userToPage[5] = cleanRound2(static_cast<double>(userToPage.f));
+    *out = m;
+    return true;
+}
+
+}  // namespace
+
+extern "C" __attribute__((visibility("default"))) bool zk_pdf_inspect_pages(const char* path, ZkPdfInspectCb cb,
+                                                                            void* ctx, char* errBuf, size_t errCap) {
+    if (errBuf && errCap > 0) errBuf[0] = '\0';
+    try {
+        if (!path || !*path) {
+            copyPdfErr(errBuf, errCap, "empty PDF path");
+            return false;
+        }
+        if (::access(path, R_OK) != 0) {
+            copyPdfErr(errBuf, errCap, "PDF file is missing or unreadable");
+            return false;
+        }
+        fz_context* fz = fz_new_context(nullptr, nullptr, zk::PdfEngine::kTextStoreBytes);
+        if (!fz) {
+            copyPdfErr(errBuf, errCap, "no MuPDF context");
+            return false;
+        }
+        fz_register_document_handlers(fz);
+
+        fz_document* doc = openPdfDocSafe(fz, path, errBuf, errCap);
+        if (!doc) {
+            fz_drop_context(fz);
+            return false;
+        }
+
+        if (needsPasswordSafe(fz, doc)) {
+            fz_drop_document(fz, doc);
+            fz_drop_context(fz);
+            copyPdfErr(errBuf, errCap, "PDF is password-protected");
+            return false;
+        }
+
+        const int pages = countPagesSafe(fz, doc);
+        if (pages <= 0) {
+            fz_drop_document(fz, doc);
+            fz_drop_context(fz);
+            copyPdfErr(errBuf, errCap, "PDF has no pages");
+            return false;
+        }
+
+        bool ok = true;
+        for (int i = 0; i < pages; ++i) {
+            ZkPdfPageMetrics m{};
+            if (!inspectSinglePdfPage(fz, doc, i, &m, errBuf, errCap)) {
+                ok = false;
+                break;
+            }
+            if (cb) cb(&m, ctx);
+        }
+
+        fz_drop_document(fz, doc);
+        fz_drop_context(fz);
+        return ok;
+    } catch (...) {
+        copyPdfErr(errBuf, errCap, "unexpected PDF inspection error");
+        return false;
+    }
+}
+

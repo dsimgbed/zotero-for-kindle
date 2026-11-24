@@ -326,6 +326,9 @@ public:
     // Annotation changes made on the Kindle (spec §7.4), pushed by SyncEngine::push.
     // Stores a new annotation under a fresh key (createdHere, dirty, version 0); returns the key.
     std::string createAnnotation(AnnotationRecord);
+    // Stores a new annotation under a caller-supplied 8-char Zotero key (createdHere, dirty,
+    // version 0). Returns "" without modifying the database if the key is invalid or already used.
+    std::string createAnnotationWithKey(AnnotationRecord);
     // Saves an edit; `version` stays the server version the edit is based on. False (nothing
     // changed) for an annotation the Kindle may not edit (annotationEditable: another member's in a
     // group, or any in a read-only group).

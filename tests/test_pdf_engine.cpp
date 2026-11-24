@@ -94,8 +94,9 @@ TEST_CASE("pdf engine: the module exports only its factory") {
         if (line.find(" T ") != std::string::npos || line.find(" D ") != std::string::npos ||
             line.find(" S ") != std::string::npos || line.find(" B ") != std::string::npos)
             ++defined;
-    CHECK(defined == 1);
+    CHECK(defined == 2);
     CHECK(ss.str().find("zk_pdf_engine_create") != std::string::npos);
+    CHECK(ss.str().find("zk_pdf_inspect_pages") != std::string::npos);
 }
 
 namespace {

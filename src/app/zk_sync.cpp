@@ -29,6 +29,7 @@
 #include "store/db.h"
 #include "store/library.h"
 #include "app/accounts.h"
+#include "app/zk_sync_json.h"
 #include "sync/config.h"
 #include "sync/libraries.h"
 #include "sync/sync_engine.h"
@@ -72,16 +73,49 @@ constexpr const char* kTestComment = "[zk-test] made by zk-sync annotate-test";
 
 int usage() {
     std::fprintf(stderr,
-                 "usage: zk-sync [--account USERID] [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND\n"
+                 "usage: zk-sync [--account USERID] [--config DIR | --env FILE] [--db PATH] [--files-dir DIR] [--ca FILE] COMMAND\n"
                  "  pull | status | groups | search <words> | collections | annotations <attachmentKey>\n"
                  "  | fetch <attachmentKey> <dir> | highlights-offline on|off\n"
                  "  | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>\n"
-                 "  | annotate-test-cleanup\n");
+                 "  | annotate-test-cleanup\n"
+                 "  | export-index <outPath>\n"
+                 "  | pdf-info <attachmentKey> [--fetch]\n"
+                 "  | ink-pull <attachmentKey> [--local-only]\n"
+                 "  | ink-upsert <attachmentKey> <inputJsonPath>\n");
     return 2;
 }
 
 void printError(const UserError& e) {
     std::printf("error: %s\n  details: %s\n", e.message.c_str(), e.details.c_str());
+}
+
+std::string scrubSecrets(std::string s, const std::optional<Config>& cfg) {
+    if (!cfg) return s;
+    auto scrub = [&](const std::string& secret) {
+        if (secret.empty()) return;
+        size_t pos = 0;
+        while ((pos = s.find(secret, pos)) != std::string::npos) {
+            s.replace(pos, secret.size(), "[REDACTED]");
+            pos += 10;
+        }
+    };
+    scrub(cfg->apiKey);
+    scrub(cfg->webdavPassword);
+    scrub(cfg->webdavUser);
+    scrub(cfg->webdavUrl);
+    return s;
+}
+
+void printJsonError(const std::string& msg, const std::optional<Config>& cfg) {
+    const std::string clean = scrubSecrets(msg, cfg);
+    std::fprintf(stderr, "error: %s\n", clean.c_str());
+}
+
+void writeJsonStdout(const nlohmann::json& j) {
+    const std::string s = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    std::fwrite(s.data(), 1, s.size(), stdout);
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
 }
 
 long peakRssKb() {
@@ -124,44 +158,120 @@ void printCollections(const std::vector<CollectionRecord>& all, const std::strin
 
 int main(int argc, char** argv) {
     Paths paths = defaultPaths();
-    std::string envFile, dbPath, ca = kDefaultCa;
+    std::string envFile, dbFlagPath, filesDirFlag, ca = kDefaultCa;
     int64_t account = 0;
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string{}; };
-        if (a == "--config") paths.configDir = next();
-        else if (a == "--env") envFile = next();
-        else if (a == "--db") dbPath = next();
-        else if (a == "--ca") ca = next();
-        else if (a == "--account") {
-            account = std::atoll(next().c_str());
+        auto next = [&]() -> std::optional<std::string> {
+            if (i + 1 >= argc) return std::nullopt;
+            return std::string(argv[++i]);
+        };
+        if (a == "--config") {
+            auto v = next();
+            if (!v) return usage();
+            paths.configDir = *v;
+        } else if (a == "--env") {
+            auto v = next();
+            if (!v) return usage();
+            envFile = *v;
+        } else if (a == "--db") {
+            auto v = next();
+            if (!v) return usage();
+            dbFlagPath = *v;
+        } else if (a == "--files-dir") {
+            auto v = next();
+            if (!v) return usage();
+            filesDirFlag = *v;
+        } else if (a == "--ca") {
+            auto v = next();
+            if (!v) return usage();
+            ca = *v;
+        } else if (a == "--account") {
+            auto v = next();
+            if (!v) return usage();
+            account = std::atoll(v->c_str());
             if (account <= 0) return usage();
-        } else args.push_back(a);
+        } else {
+            args.push_back(a);
+        }
     }
     if (args.empty()) return usage();
     const std::string cmd = args[0];
 
+    const bool isJsonCmd = (cmd == "export-index" || cmd == "pdf-info" || cmd == "ink-pull" || cmd == "ink-upsert");
+    bool pdfInfoFetch = false;
+    bool inkPullLocalOnly = false;
+    if (cmd == "export-index") {
+        if (args.size() != 2 || args[1].empty()) return usage();
+    } else if (cmd == "pdf-info") {
+        if (args.size() == 2 && !args[1].empty()) {
+            pdfInfoFetch = false;
+        } else if (args.size() == 3 && !args[1].empty() && args[2] == "--fetch") {
+            pdfInfoFetch = true;
+        } else {
+            return usage();
+        }
+    } else if (cmd == "ink-pull") {
+        if (args.size() == 2 && !args[1].empty()) {
+            inkPullLocalOnly = false;
+        } else if (args.size() == 3 && !args[1].empty() && args[2] == "--local-only") {
+            inkPullLocalOnly = true;
+        } else {
+            return usage();
+        }
+    } else if (cmd == "ink-upsert") {
+        if (args.size() != 3 || args[1].empty() || args[2].empty()) return usage();
+    }
+
+    std::string dbPath = dbFlagPath;
     // Without --env or --db, the account's own key and library; nothing of another's.
     AccountTarget target;
     if (envFile.empty() || dbPath.empty()) target = accountTarget(paths, account);
     std::optional<Config> cfg = envFile.empty() ? target.config : configFromEnvFile(envFile);
     if (dbPath.empty()) dbPath = target.dbPath;
-    if (!cfg || cfg->userId <= 0 || cfg->apiKey.empty() || dbPath.empty()) {
-        std::printf("error: No Zotero account configured.\n  details: %s\n",
-                    !envFile.empty() && !cfg ? ("no key in " + envFile).c_str()
-                    : !target.error.empty()  ? (target.error + (envFile.empty() ? "; or pass --env FILE" : "")).c_str()
-                                             : "no key or library");
+    const bool hasCreds = cfg && cfg->userId > 0 && !cfg->apiKey.empty();
+
+    const bool allowNoCreds = (cmd == "export-index") ||
+                              (cmd == "pdf-info") ||  // --fetch only requires creds if PDF is not already cached
+                              (cmd == "ink-upsert") ||
+                              (cmd == "ink-pull" && (inkPullLocalOnly || !dbFlagPath.empty()));
+
+    if (dbPath.empty()) {
+        if (isJsonCmd) {
+            printJsonError(!target.error.empty() ? target.error : "no library database configured", cfg);
+        } else {
+            std::printf("error: No Zotero account configured.\n  details: %s\n",
+                        !target.error.empty() ? target.error.c_str() : "no library");
+        }
         return 1;
     }
-    if (!envFile.empty() && target.userId > 0 && cfg->userId != target.userId) {  // never one account's key on another's library
-        std::printf("error: %s is user %lld's key, not account %lld's.\n  details: pass --account %lld, or --db\n",
-                    envFile.c_str(), static_cast<long long>(cfg->userId), static_cast<long long>(target.userId),
-                    static_cast<long long>(cfg->userId));
+    if (!allowNoCreds && !hasCreds) {
+        const std::string detail = !envFile.empty() && !cfg ? ("no key in " + envFile)
+                                   : !target.error.empty()  ? (target.error + (envFile.empty() ? "; or pass --env FILE" : ""))
+                                                            : "no key or library";
+        if (isJsonCmd) {
+            printJsonError("No Zotero account configured: " + detail, cfg);
+        } else {
+            std::printf("error: No Zotero account configured.\n  details: %s\n", detail.c_str());
+        }
         return 1;
     }
-    // crengine's cache: the account's own (the app's place for it), else the old one.
+    if (!envFile.empty() && target.userId > 0 && cfg && cfg->userId != target.userId) {  // never one account's key on another's library
+        if (isJsonCmd) {
+            printJsonError("credentials user does not match selected account library", cfg);
+        } else {
+            std::printf("error: %s is user %lld's key, not account %lld's.\n  details: pass --account %lld, or --db\n",
+                        envFile.c_str(), static_cast<long long>(cfg->userId), static_cast<long long>(target.userId),
+                        static_cast<long long>(cfg->userId));
+        }
+        return 1;
+    }
+    // crengine's cache and filesDir: the account's own (the app's place for it), else the legacy paths.
     const bool inAccount = target.userId > 0 && dbPath == accountPaths(paths, target.userId).dbPath;
+    const std::string filesDir = !filesDirFlag.empty() ? filesDirFlag
+                                 : inAccount           ? accountPaths(paths, target.userId).filesDir
+                                                       : paths.filesDir;
     const EngineEnv kEngineEnv{kCrengineData, readingFontDirs(),
                                inAccount ? accountPaths(paths, target.userId).creDir : paths.cacheDir + "/cre"};
 
@@ -169,10 +279,116 @@ int main(int argc, char** argv) {
     try {
         db.emplace(Db::open(dbPath));
     } catch (const DbError& e) {
-        printError({ErrorKind::Other, "Can't open the library database.", e.what()});
+        if (isJsonCmd) printJsonError(std::string("Can't open the library database: ") + e.what(), cfg);
+        else printError({ErrorKind::Other, "Can't open the library database.", e.what()});
         return 1;
     }
     Library lib(*db);
+
+    if (isJsonCmd) {
+        try {
+            nlohmann::json out;
+            std::string err;
+            if (cmd == "export-index") {
+                if (!exportIndexJson(lib, args[1], out, &err)) {
+                    printJsonError(err, cfg);
+                    return 1;
+                }
+                writeJsonStdout(out);
+                return 0;
+            }
+            if (cmd == "pdf-info") {
+                PdfFetcher fetcher;
+                if (pdfInfoFetch) {
+                    fetcher = [&](const AttachmentRecord& att, std::string& localPathOut, std::string* ferr) -> bool {
+                        if (!hasCreds) {
+                            if (ferr) *ferr = "No Zotero account configured for --fetch";
+                            return false;
+                        }
+                        CurlHttp curl(ca);
+                        WriteGuard http(
+                            curl, [&](const std::string& key) { return lib.annotation(key).has_value(); },
+                            [&](const std::string& key) { return lib.attachment(key).has_value(); },
+                            [&](const std::string& key) -> std::optional<std::vector<std::string>> {
+                                if (auto item = lib.zoteroItem(key)) return item->tags;
+                                return std::nullopt;
+                            },
+                            pluginChangeShapes(lib));
+                        http.setLibraries([&](const std::string& key) { return lib.libraryOf(key); },
+                                          [&](int64_t group) { return lib.libraryEditable(group); },
+                                          [&](const std::string& key) { return lib.annotationEditable(key); });
+                        auto files = makeFileStore(http, *cfg);
+                        UserError uerr;
+                        if (!files->download(att, filesDir, &uerr)) {
+                            if (ferr) *ferr = uerr.message + (uerr.details.empty() ? "" : ": " + uerr.details);
+                            return false;
+                        }
+                        localPathOut = filesDir + "/" + att.key + "/" + localFileName(att);
+                        return true;
+                    };
+                }
+                if (!pdfInfoJson(lib, args[1], kEngineEnv, pdfInfoFetch, fetcher, out, &err)) {
+                    printJsonError(err, cfg);
+                    return 1;
+                }
+                writeJsonStdout(out);
+                return 0;
+            }
+            if (cmd == "ink-pull") {
+                bool synced = false;
+                if (!inkPullLocalOnly && hasCreds) {
+                    auto att = lib.attachment(args[1]);
+                    if (!att) {
+                        printJsonError("attachment not found: " + args[1], cfg);
+                        return 1;
+                    }
+                    CurlHttp curl(ca);
+                    WriteGuard http(
+                        curl, [&](const std::string& key) { return lib.annotation(key).has_value(); },
+                        [&](const std::string& key) { return lib.attachment(key).has_value(); },
+                        [&](const std::string& key) -> std::optional<std::vector<std::string>> {
+                            if (auto item = lib.zoteroItem(key)) return item->tags;
+                            return std::nullopt;
+                        },
+                        pluginChangeShapes(lib));
+                    http.setLibraries([&](const std::string& key) { return lib.libraryOf(key); },
+                                      [&](int64_t group) { return lib.libraryEditable(group); },
+                                      [&](const std::string& key) { return lib.annotationEditable(key); });
+                    if (lib.userId() == 0) lib.setUser(cfg->userId, "");
+                    ZoteroApi api(http, cfg->userId, cfg->apiKey);
+                    api.setOnWait([](const UserError& e) { std::fprintf(stderr, "%s\n", e.message.c_str()); });
+                    SyncReport rep = SyncEngine(api, lib, att->lib).pullAnnotationsFor(args[1], nullptr);
+                    if (rep.error) {
+                        printJsonError(rep.error->message + (rep.error->details.empty() ? "" : ": " + rep.error->details), cfg);
+                        return 1;
+                    }
+                    synced = true;
+                }
+                if (!inkPullJson(lib, args[1], synced, out, &err)) {
+                    printJsonError(err, cfg);
+                    return 1;
+                }
+                writeJsonStdout(out);
+                return 0;
+            }
+            if (cmd == "ink-upsert") {
+                if (!inkUpsertJson(lib, args[1], args[2], kEngineEnv, out, &err)) {
+                    printJsonError(err, cfg);
+                    return 1;
+                }
+                writeJsonStdout(out);
+                return 0;
+            }
+        } catch (const DbError& e) {
+            const UserError le = lib.lastError();
+            printJsonError(le.kind == ErrorKind::None ? (std::string("Database error: ") + e.what())
+                                                      : (le.message + (le.details.empty() ? "" : ": " + le.details)),
+                           cfg);
+            return 1;
+        }
+        return 1;
+    }
+
     CurlHttp curl(ca);
     WriteGuard http(
         curl, [&](const std::string& key) { return lib.annotation(key).has_value(); },

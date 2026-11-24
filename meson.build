@@ -189,7 +189,8 @@ cxx = meson.get_compiler('cpp')
 deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
 docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
   'src/docs/annotation_text.cpp', 'src/plugins/fulltext.cpp',
-  include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [core_dep, cxx.find_library('dl', required : false)])
 docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, dependency('threads'), cxx.find_library('dl', required : false)])
 
 # Plugin runtime (JavaScript): grows file by file as the plugin tasks land.
@@ -321,9 +322,11 @@ endif
 # copies that pango uses (spike README). The app links neither engine.
 module_link_args = []
 epub_link_args = []  # (the version script exports it on Linux)
+pdf_link_args = []
 if host_machine.system() == 'darwin'
   module_link_args += ['-Wl,-exported_symbol,_zk_*_engine_create']
   epub_link_args = ['-Wl,-exported_symbol,_zk_epub_doc_cache_close']  # the account session closes crengine's cache
+  pdf_link_args = ['-Wl,-exported_symbol,_zk_pdf_inspect_pages']
 else
   module_link_args += ['-Wl,-Bsymbolic', '-Wl,--version-script=' + meson.project_source_root() / 'src/docs/zk-engine.map']
 endif
@@ -383,7 +386,7 @@ if fs.exists(deps_prefix / 'lib' / 'libmupdf.a')
                            include_directories('build-deps' / backend / 'prefix/include', is_system : true)],
     cpp_args : ['-fvisibility=hidden'],
     dependencies : mupdf_libs,
-    link_args : module_link_args + (backend == 'kindle' ? ['-lm', '-lpthread'] : []),
+    link_args : module_link_args + pdf_link_args + (backend == 'kindle' ? ['-lm', '-lpthread'] : []),
     install : true, install_dir : 'lib')
 endif
 
@@ -393,9 +396,17 @@ if is_variable('platform_dep')
     install : true)
 endif
 
+sync_json_lib = static_library('zk-sync-json',
+  'src/app/zk_sync_json.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [sync_dep, docs_dep, bridge_dep])
+sync_json_dep = declare_dependency(link_with : sync_json_lib,
+  dependencies : [sync_dep, docs_dep, bridge_dep],
+  include_directories : [inc, include_directories('third_party', is_system : true)])
+
 executable('zk-sync', 'src/app/zk_sync.cpp',
   include_directories : include_directories('third_party', is_system : true),
-  dependencies : [sync_dep, docs_dep],
+  dependencies : [sync_json_dep],
   install : true)
 
 executable('zk-sign', 'tools/zk_sign.cpp',
