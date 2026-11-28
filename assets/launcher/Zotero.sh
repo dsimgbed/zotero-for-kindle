@@ -47,6 +47,18 @@ running_pid() {
     fi
     echo "$pid"
 }
+# Bridge copy tapped directly in the Kindle Library: route through the Grimoire x Zotero
+# trampoline so exit-43 ("Return to Grimoire") switches apps instead of returning Home.
+GZ_TRAMPOLINE=${GZ_TRAMPOLINE:-/mnt/us/documents/Grimoire x Zotero.sh}
+if [ "$ZK_HOME" = /mnt/us/zotero-bridge ] && [ "${GZ_UNDER_TRAMPOLINE:-0}" != 1 ] \
+    && [ -z "$1" ] && [ -f "$GZ_TRAMPOLINE" ]; then
+    if pid=$(running_pid); then
+        kill -WINCH "$pid" 2>/dev/null
+        note "already running (pid $pid): brought to the front, no second copy"
+        exit 0
+    fi
+    exec sh "$GZ_TRAMPOLINE" --start zotero
+fi
 # One launcher at a time, for its whole loop: between two runs of the app (a restart, a rollback)
 # there is no app pid to find, and a second launcher there would start a second copy over a
 # half-restored install. The lock is a symlink naming the holder's pid and file name, made in one

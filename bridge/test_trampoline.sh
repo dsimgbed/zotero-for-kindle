@@ -263,6 +263,40 @@ else
     fail "Test6 lock (second did not fail: rc2=$rc2)"
 fi
 
+# --- Test 7: GZ_UNDER_TRAMPOLINE propagation + --handoff only for target=zotero ---
+run_test "Test7 under-trampoline & handoff gating"
+T=$(make_tmp)
+BRIDGE="$T/bridge"; mkdir -p "$BRIDGE"
+STATE="$T/state"; mkdir -p "$STATE"
+MOCKBIN="$T/bin"; mkdir -p "$MOCKBIN"
+cat > "$MOCKBIN/grimoire" <<'EOF'
+#!/bin/sh
+echo "g:$GZ_UNDER_TRAMPOLINE" >> "$MOCK_STATE/env.log"
+exit 0
+EOF
+chmod +x "$MOCKBIN/grimoire"
+cat > "$MOCKBIN/zotero" <<'EOF'
+#!/bin/sh
+echo "z:$GZ_UNDER_TRAMPOLINE:$*" >> "$MOCK_STATE/env.log"
+exit 43
+EOF
+chmod +x "$MOCKBIN/zotero"
+
+# Stale handoff targeting grimoire must NOT pass --handoff to zotero when --start zotero is used.
+printf '{"schema_version":1,"target":"grimoire","action":"return_essay"}\n' > "$BRIDGE/handoff.json"
+run_tramp --start zotero >/tmp/opencode/t7.log 2>&1
+rc=$?
+if [ "$rc" = 0 ] \
+    && grep -q '^z:1:$' "$STATE/env.log" \
+    && grep -q '^g:1$' "$STATE/env.log" \
+    && grep -q 'handoff zotero -> grimoire' "$BRIDGE/bridge.log"; then
+    ok "Test7 under-trampoline & handoff gating (rc=$rc)"
+else
+    fail "Test7 under-trampoline & handoff gating (rc=$rc)"
+    cat "$STATE/env.log" 2>/dev/null
+    cat "$BRIDGE/bridge.log" 2>/dev/null
+fi
+
 echo "=============================="
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]

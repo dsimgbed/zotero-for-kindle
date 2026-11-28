@@ -86,6 +86,12 @@ if [ -z "${GZ_ZOTERO_CMD:-}" ]; then
     done
     [ -z "${GZ_ZOTERO_CMD:-}" ] && GZ_ZOTERO_CMD=/mnt/us/documents/Zotero.sh
 fi
+if [ -f /mnt/us/zotero-bridge/bin/zk-sync ] && [ ! -L /mnt/us/zotero-bridge/bin/zk-sync ]; then
+    [ -z "${GRIMOIRE_ZK_SYNC_BIN:-}" ] && GRIMOIRE_ZK_SYNC_BIN=/mnt/us/zotero-bridge/bin/zk-sync
+    [ -z "${ZK_HOME:-}" ] && ZK_HOME=/mnt/us/zotero-bridge
+    [ -z "${ZK_CONFIG_DIR:-}" ] && ZK_CONFIG_DIR=/var/local/zotero-bridge
+    export GRIMOIRE_ZK_SYNC_BIN ZK_HOME ZK_CONFIG_DIR
+fi
 
 # --- helpers ---
 log() {
@@ -260,6 +266,11 @@ trip_circuit_breaker() {
     exit 1
 }
 
+# Tell child launchers (Grimoire (Bridge).sh / Zotero (Bridge).sh) they are already
+# supervised by the trampoline so they never re-exec Grimoire x Zotero.sh recursively.
+GZ_UNDER_TRAMPOLINE=1
+export GZ_UNDER_TRAMPOLINE
+
 # initial sanitize
 sanitize_handoff >/dev/null 2>&1 || true
 
@@ -270,10 +281,7 @@ while :; do
         rc=$?
     else
         wait_for_x || true
-        if [ -f "$GZ_BRIDGE_DIR/handoff.json" ]; then
-            sanitize_handoff >/dev/null 2>&1 || true
-        fi
-        if [ -f "$GZ_BRIDGE_DIR/handoff.json" ]; then
+        if handoff_targets_zotero; then
             run_app "$GZ_ZOTERO_CMD" --handoff
         else
             run_app "$GZ_ZOTERO_CMD"
@@ -291,6 +299,7 @@ while :; do
             ;;
         42)
             # expected from grimoire
+            log "handoff grimoire -> zotero duration=${elapsed}s"
             crash_streak=0
             if [ "$elapsed" -lt "$GZ_RAPID_THRESHOLD_SEC" ]; then
                 rapid_bounces=$((rapid_bounces + 1))
@@ -307,6 +316,7 @@ while :; do
             continue
             ;;
         43)
+            log "handoff zotero -> grimoire duration=${elapsed}s"
             crash_streak=0
             if [ "$elapsed" -lt "$GZ_RAPID_THRESHOLD_SEC" ]; then
                 rapid_bounces=$((rapid_bounces + 1))
